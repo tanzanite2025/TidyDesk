@@ -81,12 +81,15 @@ function createStickerService({ app, electronDir }) {
   }
 
   function createSnipWindow() {
+    console.log('[STICKER] createSnipWindow called');
     if (snipWindow && !snipWindow.isDestroyed()) {
+      console.log('[STICKER] Snip window already exists, focusing');
       snipWindow.focus();
       return;
     }
 
     const display = screen.getPrimaryDisplay();
+    console.log('[STICKER] Display bounds:', display.bounds);
     snipWindow = new BrowserWindow({
       ...display.bounds,
       frame: false,
@@ -107,14 +110,18 @@ function createStickerService({ app, electronDir }) {
       }
     });
 
+    console.log('[STICKER] Snip window created');
     snipWindow.setAlwaysOnTop(true, 'screen-saver');
     loadRenderer(snipWindow, 'snip');
+    console.log('[STICKER] Snip window renderer loaded');
     snipWindow.on('closed', () => {
+      console.log('[STICKER] Snip window closed');
       snipWindow = null;
     });
   }
 
   function startScreenshot() {
+    console.log('[STICKER] startScreenshot called');
     createSnipWindow();
   }
 
@@ -145,56 +152,77 @@ function createStickerService({ app, electronDir }) {
   }
 
   async function captureSelection(rectPayload) {
-    const rect = normalizeRect(rectPayload);
-    const display = screen.getPrimaryDisplay();
-    const scaleFactor = display.scaleFactor || 1;
+    console.log('[STICKER] captureSelection called:', rectPayload);
+    try {
+      const rect = normalizeRect(rectPayload);
+      console.log('[STICKER] Normalized rect:', rect);
+      const display = screen.getPrimaryDisplay();
+      const scaleFactor = display.scaleFactor || 1;
+      console.log('[STICKER] Scale factor:', scaleFactor);
 
-    if (snipWindow && !snipWindow.isDestroyed()) {
-      snipWindow.hide();
-    }
+      if (snipWindow && !snipWindow.isDestroyed()) {
+        console.log('[STICKER] Hiding snip window');
+        snipWindow.hide();
+      }
 
-    await new Promise(resolve => setTimeout(resolve, 140));
+      await new Promise(resolve => setTimeout(resolve, 140));
 
-    const captureSize = {
-      width: Math.round(display.bounds.width * scaleFactor),
-      height: Math.round(display.bounds.height * scaleFactor)
-    };
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      thumbnailSize: captureSize
-    });
+      const captureSize = {
+        width: Math.round(display.bounds.width * scaleFactor),
+        height: Math.round(display.bounds.height * scaleFactor)
+      };
+      console.log('[STICKER] Capture size:', captureSize);
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: captureSize
+      });
+      console.log('[STICKER] Got', sources.length, 'sources');
 
-    const source = sources.find(item => item.display_id === String(display.id)) || sources[0];
-    if (!source || source.thumbnail.isEmpty()) {
+      const source = sources.find(item => item.display_id === String(display.id)) || sources[0];
+      if (!source || source.thumbnail.isEmpty()) {
+        console.error('[STICKER] No valid source found');
+        closeSnipWindow();
+        throw new Error('Unable to capture screen');
+      }
+      console.log('[STICKER] Using source:', source.name);
+
+      const cropped = source.thumbnail.crop({
+        x: Math.max(0, Math.round(rect.x * scaleFactor)),
+        y: Math.max(0, Math.round(rect.y * scaleFactor)),
+        width: Math.max(1, Math.round(rect.width * scaleFactor)),
+        height: Math.max(1, Math.round(rect.height * scaleFactor))
+      });
+      console.log('[STICKER] Image cropped');
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const imagePath = path.join(getImageRoot(), `${id}.png`);
+      console.log('[STICKER] Saving to:', imagePath);
+      fs.writeFileSync(imagePath, cropped.toPNG());
+      console.log('[STICKER] Image saved, size:', fs.statSync(imagePath).size);
+
+      const stickerBounds = getInitialStickerBounds(rect, display);
+      console.log('[STICKER] Sticker bounds:', stickerBounds);
+      const sticker = {
+        id,
+        imagePath,
+        bounds: stickerBounds,
+        alwaysOnTop: false,  // 默认不置顶，避免挡住其他窗口
+        createdAt: new Date().toISOString()
+      };
+
+      updateStickerRecord(sticker);
+      console.log('[STICKER] Sticker record updated');
+      createStickerWindow(sticker);
+      console.log('[STICKER] Sticker window created');
       closeSnipWindow();
-      throw new Error('Unable to capture screen');
+      console.log('[STICKER] Snip window closed');
+
+      return { success: true, stickerId: id };
+    } catch (error) {
+      console.error('[STICKER] captureSelection error:', error);
+      closeSnipWindow();
+      throw error;
     }
-
-    const cropped = source.thumbnail.crop({
-      x: Math.max(0, Math.round(rect.x * scaleFactor)),
-      y: Math.max(0, Math.round(rect.y * scaleFactor)),
-      width: Math.max(1, Math.round(rect.width * scaleFactor)),
-      height: Math.max(1, Math.round(rect.height * scaleFactor))
-    });
-
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const imagePath = path.join(getImageRoot(), `${id}.png`);
-    fs.writeFileSync(imagePath, cropped.toPNG());
-
-    const stickerBounds = getInitialStickerBounds(rect, display);
-    const sticker = {
-      id,
-      imagePath,
-      bounds: stickerBounds,
-      alwaysOnTop: true,
-      createdAt: new Date().toISOString()
-    };
-
-    updateStickerRecord(sticker);
-    createStickerWindow(sticker);
-    closeSnipWindow();
-
-    return { success: true, stickerId: id };
   }
 
   function getInitialStickerBounds(rect, display) {
@@ -246,7 +274,7 @@ function createStickerService({ app, electronDir }) {
     });
 
     if (sticker.alwaysOnTop) {
-      win.setAlwaysOnTop(true, 'floating');
+      win.setAlwaysOnTop(true, 'normal');  // 使用 normal 级别，不会挡住所有窗口
     }
 
     loadRenderer(win, 'sticker', { id: sticker.id });
@@ -307,7 +335,7 @@ function createStickerService({ app, electronDir }) {
 
     const win = stickerWindows.get(stickerId);
     if (win && !win.isDestroyed()) {
-      win.setAlwaysOnTop(sticker.alwaysOnTop, sticker.alwaysOnTop ? 'floating' : 'normal');
+      win.setAlwaysOnTop(sticker.alwaysOnTop, sticker.alwaysOnTop ? 'normal' : 'normal');  // 使用 normal 级别
       win.webContents.send('sticker-updated', {
         id: stickerId,
         alwaysOnTop: sticker.alwaysOnTop
