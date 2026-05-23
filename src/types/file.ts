@@ -15,6 +15,7 @@ export interface TidyFile {
   // Shortcut validation
   isValid?: boolean;        // 快捷方式是否有效（目标文件存在）
   targetPath?: string;      // 快捷方式指向的目标路径
+  icon?: string;            // 文件图标（Base64 Data URL）
 }
 
 export interface TidyFolder {

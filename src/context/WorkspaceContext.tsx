@@ -14,6 +14,7 @@ type TidyDeskApi = {
   windowControl: (action: WindowAction) => void;
   validateAllShortcuts: () => Promise<{ total: number; valid: number; invalid: number; repaired: number }>;
   repairShortcut: (payload: { shortcutPath: string; targetPath: string }) => Promise<{ repaired: boolean; newPath: string | null }>;
+  restoreToDesktop: (payload: { shortcutPath: string }) => Promise<{ success: boolean; restoredPath: string }>;
   onTargetFileDeleted: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
   onTargetFileRestored: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
   onShortcutsValidated: (callback: (stats: { total: number; valid: number; invalid: number; repaired: number }) => void) => () => void;
@@ -35,7 +36,7 @@ interface WorkspaceContextType {
   deleteItem: (id: string, type: 'file' | 'folder') => Promise<void>;
   renameItem: (id: string, type: 'file' | 'folder', newName: string) => Promise<void>;
   moveFileToDrawer: (fileId: string, folderId: string | null) => Promise<void>;
-  executeSmartTidy: (rule: 'category' | 'date' | 'temp') => Promise<void>;
+  executeSmartTidy: (rule: 'category' | 'date' | 'temp') => Promise<{success: number; failed: number; errors: string[]}>;
   importExternalFiles: (filePaths: string[], folderId: string | null) => Promise<void>;
   openFile: (filePath: string) => Promise<void>;
   clearError: () => void;
@@ -43,6 +44,7 @@ interface WorkspaceContextType {
   cleanupInvalidShortcuts: () => Promise<number>;
   validateAllShortcuts: () => Promise<{ total: number; valid: number; invalid: number; repaired: number }>;
   repairShortcut: (fileId: string) => Promise<boolean>;
+  restoreToDesktop: (fileId: string) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -115,6 +117,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
         unsubscribeValidated?.();
       };
     }
+    return undefined;
   }, [refreshDesktop]);
 
   const healthInfo = useMemo(
@@ -160,7 +163,17 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (tidyDeskApi) {
       try {
         const parentFolder = item.parentId ? drawerNameFromId(folders, item.parentId) : null;
-        await tidyDeskApi.deleteItem({ name: item.name, parentFolder });
+        
+        // 对于文件，使用完整的文件名（包含扩展名）
+        let itemName = item.name;
+        if (type === 'file' && item.extension) {
+          // 如果 name 中没有扩展名，添加它
+          if (!itemName.endsWith(item.extension)) {
+            itemName = `${itemName}${item.extension}`;
+          }
+        }
+        
+        await tidyDeskApi.deleteItem({ name: itemName, parentFolder });
         await refreshDesktop();
       } catch (err: unknown) {
         setError(`[CRITICAL] 删除抽屉入口失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -354,6 +367,28 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
+  const restoreToDesktop = async (fileId: string): Promise<boolean> => {
+    const file = files.find(f => f.id === fileId);
+    if (!file || !tidyDeskApi?.restoreToDesktop) {
+      return false;
+    }
+
+    try {
+      const result = await tidyDeskApi.restoreToDesktop({
+        shortcutPath: file.path
+      });
+
+      if (result.success) {
+        await refreshDesktop();
+      }
+
+      return result.success;
+    } catch (err: unknown) {
+      setError(`还原失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
   return (
     <WorkspaceContext.Provider value={{
       files,
@@ -375,7 +410,8 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
       windowControl,
       cleanupInvalidShortcuts,
       validateAllShortcuts,
-      repairShortcut
+      repairShortcut,
+      restoreToDesktop
     }}>
       {children}
     </WorkspaceContext.Provider>

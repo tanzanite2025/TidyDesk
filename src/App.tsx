@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SettingsPanel } from './components/SettingsPanel';
+import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
+import { RailApp } from './modules/rail/RailApp';
+import { TodoPanelApp } from './modules/todos/TodoPanel';
 import { FileCategory, TidyFile } from './types/file';
 import {
   AlertTriangle,
@@ -17,10 +20,12 @@ import {
   FolderInput,
   PackageOpen,
   Pencil,
+  Plus,
   RefreshCw,
   Search,
   Settings,
   Trash2,
+  Undo2,
   X,
   Wrench
 } from 'lucide-react';
@@ -80,7 +85,13 @@ function categoryTone(category: FileCategory): string {
   return tones[category];
 }
 
-function FileTile({ file, onOpen, onDelete, onRepair }: { file: TidyFile; onOpen: () => void; onDelete: () => void; onRepair?: () => void }) {
+function FileTile({ file, onOpen, onDelete, onRepair, onRestore }: { 
+  file: TidyFile; 
+  onOpen: () => void; 
+  onDelete: () => void; 
+  onRepair?: () => void;
+  onRestore?: () => void;
+}) {
   const isInvalid = file.isValid === false;
   
   return (
@@ -96,8 +107,12 @@ function FileTile({ file, onOpen, onDelete, onRepair }: { file: TidyFile; onOpen
         disabled={isInvalid}
         title={isInvalid ? `目标文件不存在: ${file.targetPath || '未知'}` : file.name}
       >
-        <div className={`grid h-10 w-10 place-items-center rounded-lg ${categoryTone(file.category)} ${isInvalid ? 'opacity-50' : ''}`}>
-          {categoryIcon(file.category)}
+        <div className={`grid h-10 w-10 place-items-center rounded-lg ${file.icon ? '' : categoryTone(file.category)} ${isInvalid ? 'opacity-50' : ''}`}>
+          {file.icon ? (
+            <img src={file.icon} alt={file.name} className="h-8 w-8" />
+          ) : (
+            categoryIcon(file.category)
+          )}
         </div>
         <div className="mt-3 truncate text-[12px] font-semibold text-slate-100" title={file.name}>
           {file.name}
@@ -127,6 +142,19 @@ function FileTile({ file, onOpen, onDelete, onRepair }: { file: TidyFile; onOpen
             <Wrench size={13} />
           </button>
         )}
+        {!isInvalid && onRestore && (
+          <button
+            type="button"
+            onClick={event => {
+              event.stopPropagation();
+              onRestore();
+            }}
+            className="rounded-md p-1 text-slate-500 hover:bg-emerald-500/15 hover:text-emerald-200"
+            title="还原到桌面"
+          >
+            <Undo2 size={13} />
+          </button>
+        )}
         <button
           type="button"
           onClick={event => {
@@ -149,7 +177,6 @@ const DrawerApp: React.FC = () => {
     folders,
     healthInfo,
     isLoading,
-    error,
     refreshDesktop,
     createDrawer,
     renameItem,
@@ -160,13 +187,14 @@ const DrawerApp: React.FC = () => {
     windowControl,
     cleanupInvalidShortcuts,
     validateAllShortcuts,
-    repairShortcut
+    repairShortcut,
+    restoreToDesktop
   } = useWorkspace();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [draggingOverDrawerId, setDraggingOverDrawerId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isDrawerExpanded, setIsDrawerExpanded] = useState(false);
   const [renamingDrawerId, setRenamingDrawerId] = useState<string | null>(null);
   const [draftDrawerName, setDraftDrawerName] = useState('');
@@ -248,6 +276,11 @@ const DrawerApp: React.FC = () => {
 
     if (filePaths.length === 0) return;
 
+    // 触发用户首次交互事件（用于优化开机自启询问时机）
+    if (window.tidyDesk?.send) {
+      window.tidyDesk.send('file-dropped');
+    }
+
     await importExternalFiles(filePaths, drawerId);
     setNotice('已加入抽屉。这里只创建快捷入口，原桌面文件没有移动。');
   }
@@ -314,6 +347,37 @@ const DrawerApp: React.FC = () => {
       }
     } catch (err) {
       setError(`修复失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function handleRestoreToDesktop(fileId: string, fileName: string) {
+    if (!confirm(`将 "${fileName}" 还原到桌面？\n\n文件将从抽屉移回桌面，快捷方式将被删除。`)) {
+      return;
+    }
+
+    try {
+      const restored = await restoreToDesktop(fileId);
+      if (restored) {
+        setNotice(`已还原到桌面: ${fileName}`);
+      } else {
+        setError(`无法还原: ${fileName}。此文件不是由 TidyDesk 管理的。`);
+      }
+    } catch (err) {
+      setError(`还原失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function openAppPicker(folderName: string) {
+    try {
+      const tidyDeskApi = (window as any).tidyDesk;
+      if (!tidyDeskApi?.openAppPicker) {
+        setError('打开应用选择器功能不可用');
+        return;
+      }
+
+      await tidyDeskApi.openAppPicker({ targetFolder: folderName });
+    } catch (err) {
+      setError(`打开应用选择器失败: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -541,6 +605,14 @@ const DrawerApp: React.FC = () => {
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
+                          onClick={() => openAppPicker(drawer.name)}
+                          className="rounded-md p-1.5 text-slate-500 hover:bg-emerald-500/15 hover:text-emerald-200"
+                          title="添加应用"
+                        >
+                          <Plus size={13} />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => {
                             setDraftDrawerName(drawer.name);
                             setRenamingDrawerId(drawer.id);
@@ -580,6 +652,7 @@ const DrawerApp: React.FC = () => {
                             if (confirm(`删除快捷入口 "${file.name}"？原文件不会被删除。`)) deleteItem(file.id, 'file');
                           }}
                           onRepair={file.isValid === false ? () => handleRepairShortcut(file.id, file.name) : undefined}
+                          onRestore={file.isValid !== false && file.targetPath?.includes('storage') ? () => handleRestoreToDesktop(file.id, file.name) : undefined}
                         />
                       ))}
                     </div>
@@ -617,12 +690,28 @@ const DrawerApp: React.FC = () => {
   );
 };
 
-const App: React.FC = () => (
-  <ErrorBoundary>
-    <WorkspaceProvider>
-      <DrawerApp />
-    </WorkspaceProvider>
-  </ErrorBoundary>
-);
+const App: React.FC = () => {
+  let content: React.ReactNode;
+
+  if (windowMode === 'rail' || windowMode === 'handle') {
+    content = <RailApp />;
+  } else if (windowMode === 'todos') {
+    content = <TodoPanelApp />;
+  } else if (windowMode === 'capture') {
+    content = <QuickCaptureApp />;
+  } else {
+    content = (
+      <WorkspaceProvider>
+        <DrawerApp />
+      </WorkspaceProvider>
+    );
+  }
+
+  return (
+    <ErrorBoundary>
+      {content}
+    </ErrorBoundary>
+  );
+};
 
 export default App;

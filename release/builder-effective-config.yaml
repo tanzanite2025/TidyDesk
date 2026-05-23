@@ -1,0 +1,29 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.tidydesk.app
+productName: TidyDesk
+files:
+  - filter:
+      - dist/**/*
+      - electron/**/*
+      - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: ${productName}-${version}-Setup.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: TidyDesk
+publish:
+  provider: github
+  owner: tanzanite2025
+  repo: TidyDesk
+  releaseType: release
+electronVersion: 30.5.1
