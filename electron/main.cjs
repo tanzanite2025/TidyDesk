@@ -133,6 +133,32 @@ app.whenReady().then(() => {
   setTimeout(() => {
     updateService.checkForUpdates();
   }, 3000);
+  
+  // 后台扫描应用（延迟 10 秒，避免影响启动性能）
+  setTimeout(async () => {
+    console.log('[TIDYDESK] Background app scan started');
+    try {
+      const startTime = Date.now();
+      await appService.refreshApps();
+      const duration = Date.now() - startTime;
+      console.log(`[TIDYDESK] Background app scan completed in ${duration}ms`);
+    } catch (err) {
+      console.error('[TIDYDESK] Background app scan failed:', err);
+    }
+  }, 10000);
+  
+  // 定期更新应用缓存（每小时）
+  setInterval(async () => {
+    console.log('[TIDYDESK] Periodic app scan started');
+    try {
+      const startTime = Date.now();
+      await appService.refreshApps();
+      const duration = Date.now() - startTime;
+      console.log(`[TIDYDESK] Periodic app scan completed in ${duration}ms`);
+    } catch (err) {
+      console.error('[TIDYDESK] Periodic app scan failed:', err);
+    }
+  }, 60 * 60 * 1000); // 每小时
 
   app.on('activate', () => {
     if (!windowService.hasWindows()) windowService.createWindows();
