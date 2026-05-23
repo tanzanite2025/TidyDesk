@@ -1,8 +1,8 @@
 version: 3.2.4
 files:
   - url: TidyDesk-3.2.4-Setup.exe
-    sha512: 66hbQYwCUs09sWkELr2yL7FfuO+x+acaEREmjiTYw2tico8vEPWGKz80KgJvR/AK4Zu8BR/mDc4Ef+4DlWLiPA==
-    size: 79510980
+    sha512: Nqubrra2MOubB9I8YS/i3ve945Y09OEd7aFgvlORncR/dNwMEzyLap0JIWc4jqtOnh8HaKd9a358fbeeFtxzwA==
+    size: 79517176
 path: TidyDesk-3.2.4-Setup.exe
-sha512: 66hbQYwCUs09sWkELr2yL7FfuO+x+acaEREmjiTYw2tico8vEPWGKz80KgJvR/AK4Zu8BR/mDc4Ef+4DlWLiPA==
-releaseDate: '2026-05-23T21:11:29.914Z'
+sha512: Nqubrra2MOubB9I8YS/i3ve945Y09OEd7aFgvlORncR/dNwMEzyLap0JIWc4jqtOnh8HaKd9a358fbeeFtxzwA==
+releaseDate: '2026-05-23T21:47:45.996Z'

@@ -40,7 +40,7 @@ module.exports = {
     MIN_WIDTH: 48,
     MIN_HEIGHT: 120,
     HANDLE_WIDTH: 56,
-    HANDLE_HEIGHT: 288,
+    HANDLE_HEIGHT: 232,
     DRAWER_WIDTH_RATIO: 0.3,          // 抽屉宽度占屏幕比例
     DRAWER_MIN_WIDTH: 360,
     DRAWER_MAX_WIDTH: 560,

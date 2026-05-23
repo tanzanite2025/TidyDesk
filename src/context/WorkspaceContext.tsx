@@ -166,7 +166,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
         
         // 对于文件，使用完整的文件名（包含扩展名）
         let itemName = item.name;
-        if (type === 'file' && item.extension) {
+        if (type === 'file' && 'extension' in item && item.extension) {
           // 如果 name 中没有扩展名，添加它
           if (!itemName.endsWith(item.extension)) {
             itemName = `${itemName}${item.extension}`;

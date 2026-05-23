@@ -2,7 +2,6 @@
   "name": "tidydesk",
   "private": true,
   "version": "3.2.4",
-  "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",

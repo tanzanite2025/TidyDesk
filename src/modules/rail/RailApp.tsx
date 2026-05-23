@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ListTodo, PackageOpen, PencilLine } from 'lucide-react';
+import { ListTodo, PackageOpen, PencilLine, Scissors } from 'lucide-react';
 import { TodoCounts } from '../../types/todo';
 
 type RailModule = 'files' | 'todos' | 'capture' | null;
@@ -59,6 +59,12 @@ export const RailApp: React.FC = () => {
       title: '快速记录',
       action: 'open-capture',
       icon: <PencilLine size={19} />
+    },
+    {
+      id: 'screenshot' as const,
+      title: '截图贴纸',
+      action: 'start-screenshot',
+      icon: <Scissors size={19} />
     }
   ];
 
@@ -95,10 +101,6 @@ export const RailApp: React.FC = () => {
             </button>
           );
         })}
-      </div>
-
-      <div className="mt-4 [writing-mode:vertical-rl] text-[9px] font-black tracking-[0.22em] text-slate-500" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        TIDYDESK
       </div>
     </div>
   );

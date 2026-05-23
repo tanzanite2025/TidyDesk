@@ -9,6 +9,7 @@ const validWindowActions = new Set([
   'open-files',
   'open-todos',
   'open-capture',
+  'start-screenshot',
   'close-panel'
 ]);
 
@@ -215,6 +216,54 @@ contextBridge.exposeInMainWorld('tidyDesk', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('capture-opened', listener);
     return () => ipcRenderer.removeListener('capture-opened', listener);
+  },
+
+  // 截图贴纸 API
+  completeSnipSelection: (rect) => {
+    if (!rect || typeof rect !== 'object') {
+      return Promise.reject(new Error('Invalid snip rectangle'));
+    }
+    const { x, y, width, height } = rect;
+    if (![x, y, width, height].every(value => typeof value === 'number' && Number.isFinite(value))) {
+      return Promise.reject(new Error('Invalid snip rectangle values'));
+    }
+    return ipcRenderer.invoke('snip-complete-selection', rect);
+  },
+  cancelSnip: () => ipcRenderer.invoke('snip-cancel'),
+  getSticker: (stickerId) => {
+    if (typeof stickerId !== 'string' || stickerId.length === 0) {
+      return Promise.reject(new Error('Invalid sticker id'));
+    }
+    return ipcRenderer.invoke('sticker-get', stickerId);
+  },
+  toggleStickerPin: (stickerId) => {
+    if (typeof stickerId !== 'string' || stickerId.length === 0) {
+      return Promise.reject(new Error('Invalid sticker id'));
+    }
+    return ipcRenderer.invoke('sticker-toggle-pin', stickerId);
+  },
+  copySticker: (stickerId) => {
+    if (typeof stickerId !== 'string' || stickerId.length === 0) {
+      return Promise.reject(new Error('Invalid sticker id'));
+    }
+    return ipcRenderer.invoke('sticker-copy', stickerId);
+  },
+  saveStickerAs: (stickerId) => {
+    if (typeof stickerId !== 'string' || stickerId.length === 0) {
+      return Promise.reject(new Error('Invalid sticker id'));
+    }
+    return ipcRenderer.invoke('sticker-save-as', stickerId);
+  },
+  closeSticker: (stickerId) => {
+    if (typeof stickerId !== 'string' || stickerId.length === 0) {
+      return Promise.reject(new Error('Invalid sticker id'));
+    }
+    return ipcRenderer.invoke('sticker-close', stickerId);
+  },
+  onStickerUpdated: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('sticker-updated', listener);
+    return () => ipcRenderer.removeListener('sticker-updated', listener);
   },
   
   // 自动更新 API

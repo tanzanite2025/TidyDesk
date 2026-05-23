@@ -218,10 +218,6 @@ function updateTrayMemoryUsage() {
     console.debug('[TIDYDESK] Failed to update memory usage:', err.message);
   }
 }
-  } catch (err) {
-    console.warn('[TIDYDESK] Failed to update memory usage:', err);
-  }
-}
 
 /**
  * 设置单实例锁

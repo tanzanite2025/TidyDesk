@@ -5,6 +5,7 @@ const resident = require('./resident.cjs');
 const createDrawerService = require('./services/drawers.cjs');
 const createAppCacheService = require('./services/app-cache.cjs');
 const createAppService = require('./services/apps.cjs');
+const createStickerService = require('./services/stickers.cjs');
 const createTodoService = require('./services/todos.cjs');
 const createUpdateService = require('./services/updates.cjs');
 const createWindowService = require('./services/windows.cjs');
@@ -29,6 +30,11 @@ const appService = createAppService({
   getDesktopPath: drawerService.getDesktopPath,
   appCache
 });
+const stickerService = createStickerService({
+  app,
+  electronDir: __dirname
+});
+stickerService.registerIpcHandlers(ipcMain);
 const updateService = createUpdateService({
   app,
   notifyUpdate: (payload) => {
@@ -63,6 +69,7 @@ windowService = createWindowService({
 function prepareStorage() {
   drawerService.prepareStorage();
   todoService.ensureStorage();
+  stickerService.ensureStorage();
 }
 
 function registerGlobalShortcuts() {
@@ -70,6 +77,7 @@ function registerGlobalShortcuts() {
     ['CommandOrControl+Alt+D', () => windowService.toggleFiles()],
     ['CommandOrControl+Alt+K', () => windowService.openTodoPanel()],
     ['CommandOrControl+Alt+N', () => windowService.openCapturePanel()],
+    ['CommandOrControl+Alt+S', () => stickerService.startScreenshot()],
     ['CommandOrControl+Alt+Q', () => {
       // 强制退出快捷键
       console.log('[TIDYDESK] Force quit requested via shortcut');
@@ -107,6 +115,7 @@ app.whenReady().then(() => {
   drawerService.startPeriodicValidation();
   
   windowService.createWindows();
+  stickerService.restoreStickers();
   registerGlobalShortcuts();
   
   // 初始化常驻机制（必须在创建窗口之后）
@@ -145,6 +154,7 @@ app.on('before-quit', () => {
   console.log('[TIDYDESK] App is quitting, cleaning up resources...');
   
   drawerService.cleanup();
+  stickerService.cleanup();
   globalShortcut.unregisterAll();
   
   // 清理常驻机制
@@ -308,6 +318,7 @@ ipcMain.on('window-control', (_event, action) => {
   if (action === 'open-files') windowService.toggleFiles();
   if (action === 'open-todos') windowService.openTodoPanel();
   if (action === 'open-capture') windowService.openCapturePanel();
+  if (action === 'start-screenshot') stickerService.startScreenshot();
   if (action === 'close-panel') windowService.closeActiveModule();
 });
 

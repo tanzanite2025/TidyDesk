@@ -37,6 +37,14 @@ interface TidyDeskAPI {
   onTodoCountsUpdated: (callback: (payload: any) => void) => () => void;
   onCaptureOpened: (callback: (payload: any) => void) => () => void;
   onModuleState: (callback: (payload: any) => void) => () => void;
+  completeSnipSelection: (rect: { x: number; y: number; width: number; height: number }) => Promise<any>;
+  cancelSnip: () => Promise<any>;
+  getSticker: (stickerId: string) => Promise<any>;
+  toggleStickerPin: (stickerId: string) => Promise<any>;
+  copySticker: (stickerId: string) => Promise<any>;
+  saveStickerAs: (stickerId: string) => Promise<any>;
+  closeSticker: (stickerId: string) => Promise<any>;
+  onStickerUpdated: (callback: (payload: any) => void) => () => void;
   getAppVersion: () => Promise<string>;
   checkForUpdates: () => Promise<any>;
   downloadUpdate: () => Promise<any>;

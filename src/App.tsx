@@ -4,6 +4,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { SettingsPanel } from './components/SettingsPanel';
 import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
 import { RailApp } from './modules/rail/RailApp';
+import { SnipOverlayApp } from './modules/stickers/SnipOverlayApp';
+import { StickerApp } from './modules/stickers/StickerApp';
 import { TodoPanelApp } from './modules/todos/TodoPanel';
 import { FileCategory, TidyFile } from './types/file';
 import {
@@ -699,6 +701,10 @@ const App: React.FC = () => {
     content = <TodoPanelApp />;
   } else if (windowMode === 'capture') {
     content = <QuickCaptureApp />;
+  } else if (windowMode === 'snip') {
+    content = <SnipOverlayApp />;
+  } else if (windowMode === 'sticker') {
+    content = <StickerApp />;
   } else {
     content = (
       <WorkspaceProvider>
