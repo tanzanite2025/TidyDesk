@@ -9,10 +9,12 @@ const createStickerService = require('./services/stickers.cjs');
 const createTodoService = require('./services/todos.cjs');
 const createUpdateService = require('./services/updates.cjs');
 const createWindowService = require('./services/windows.cjs');
+const RegistryWatcher = require('./services/registry-watcher.cjs');
 
 app.setName('TidyDesk');
 
 let windowService;
+let registryWatcher = null;
 const todoService = createTodoService({ app });
 const drawerService = createDrawerService({
   app,
@@ -147,18 +149,45 @@ app.whenReady().then(() => {
     }
   }, 10000);
   
-  // 定期更新应用缓存（每小时）
+  // 启动注册表监听（延迟 15 秒，在后台扫描完成后）
+  if (process.platform === 'win32') {
+    setTimeout(async () => {
+      try {
+        registryWatcher = new RegistryWatcher();
+        
+        // 监听应用安装事件
+        registryWatcher.on('app-installed', async (appInfo) => {
+          console.log(`[TIDYDESK] Detected app installation: ${appInfo.appName}`);
+          await appService.updateSingleApp(appInfo);
+        });
+        
+        // 监听应用卸载事件
+        registryWatcher.on('app-uninstalled', async (appInfo) => {
+          console.log(`[TIDYDESK] Detected app uninstallation: ${appInfo.appName}`);
+          await appService.removeSingleApp(appInfo);
+        });
+        
+        await registryWatcher.start();
+      } catch (err) {
+        console.error('[TIDYDESK] Failed to start registry watcher:', err);
+      }
+    }, 15000);
+  } else {
+    console.log('[TIDYDESK] Registry watcher is only available on Windows');
+  }
+  
+  // 定期更新应用缓存（每 24 小时，作为兜底）
   setInterval(async () => {
-    console.log('[TIDYDESK] Periodic app scan started');
+    console.log('[TIDYDESK] Daily full scan started');
     try {
       const startTime = Date.now();
       await appService.refreshApps();
       const duration = Date.now() - startTime;
-      console.log(`[TIDYDESK] Periodic app scan completed in ${duration}ms`);
+      console.log(`[TIDYDESK] Daily full scan completed in ${duration}ms`);
     } catch (err) {
-      console.error('[TIDYDESK] Periodic app scan failed:', err);
+      console.error('[TIDYDESK] Daily full scan failed:', err);
     }
-  }, 60 * 60 * 1000); // 每小时
+  }, 24 * 60 * 60 * 1000); // 每 24 小时
 
   app.on('activate', () => {
     if (!windowService.hasWindows()) windowService.createWindows();
@@ -178,6 +207,11 @@ app.on('before-quit', () => {
   }
   
   console.log('[TIDYDESK] App is quitting, cleaning up resources...');
+  
+  // 停止注册表监听
+  if (registryWatcher) {
+    registryWatcher.stop();
+  }
   
   drawerService.cleanup();
   stickerService.cleanup();

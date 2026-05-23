@@ -133,3 +133,31 @@ public
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# ============================================
+# TidyDesk Specific
+# ============================================
+
+# Temporary documentation files (root directory only)
+/*_TEMP.md
+/*_DRAFT.md
+/*_WIP.md
+/*_READY.md
+/*_PUBLISHED.md
+/*_COMPLETE.md
+/*_SUMMARY.md
+/NEXT_*.md
+/PUBLISH_*.md
+/PUSH_*.md
+/RELEASE_SUCCESS.md
+/RELEASE_COMPLETE.md
+
+# Temporary documentation folder
+/docs/temp/
+
+# Release artifacts (keep in release/ folder, not root)
+/*.exe
+/*.blockmap
+/*.yml
+!/.github/**/*.yml
+
