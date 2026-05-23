@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-05-23T22:51:24.818Z",
+  "issues": [
+    "❌ preload.cjs 未启用 contextIsolation"
+  ],
+  "warnings": [
+    "⚠️ electron/services/windows.cjs 注册了事件监听器但可能未清理",
+    "⚠️ electron/services/stickers.cjs 注册了事件监听器但可能未清理",
+    "⚠️ electron/main.cjs 注册了事件监听器但可能未清理",
+    "⚠️ electron/services/windows.cjs 使用了定时器但可能未清理",
+    "⚠️ electron/main.cjs 使用了定时器但可能未清理",
+    "⚠️ apps.cjs 可能存在竞态条件（多次同时调用 refreshApps）",
+    "⚠️ 注册表监听可能没有防抖，可能导致频繁触发",
+    "⚠️ 缓存机制可能不完整"
+  ],
+  "suggestions": [
+    "💡 main.cjs 包含 6 个大数字，建议使用常量",
+    "💡 发现 1 个可能过长的函数，建议拆分",
+    "💡 考虑为敏感数据添加加密"
+  ],
+  "summary": {
+    "issueCount": 1,
+    "warningCount": 8,
+    "suggestionCount": 3,
+    "status": "FAIL"
+  }
+}

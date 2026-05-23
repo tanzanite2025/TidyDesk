@@ -3,32 +3,52 @@ const path = require('path');
 const os = require('os');
 
 function createAppService({ app, shell, config, getDesktopPath, appCache }) {
+  // 防止竞态条件的锁机制
+  let isScanning = false;
+  let scanningPromise = null;
+
   /**
-   * 扫描已安装的应用（带缓存）
+   * 扫描已安装的应用（带缓存和竞态条件保护）
    */
   async function scanInstalledApps(forceRefresh = false) {
-    // 如果不是强制刷新，尝试使用缓存
-    if (!forceRefresh) {
-      const cache = await appCache.loadCache();
-      if (cache && appCache.isCacheValid(cache)) {
-        console.log('[TIDYDESK] Using cached apps (fast path)');
-        return cache.apps;
-      }
+    // 如果正在扫描，返回现有的 Promise
+    if (isScanning && scanningPromise) {
+      console.log('[TIDYDESK] Scan already in progress, waiting...');
+      return scanningPromise;
     }
 
-    // 缓存无效或强制刷新，执行完整扫描
-    console.log('[TIDYDESK] Scanning installed apps (slow path)...');
-    const startTime = Date.now();
-    
-    const apps = await scanInstalledAppsInternal();
-    
-    const elapsed = Date.now() - startTime;
-    console.log(`[TIDYDESK] Scan completed in ${elapsed}ms, found ${apps.length} apps`);
-    
-    // 保存到缓存
-    await appCache.saveCache(apps);
-    
-    return apps;
+    isScanning = true;
+    scanningPromise = (async () => {
+      try {
+        // 如果不是强制刷新，尝试使用缓存
+        if (!forceRefresh) {
+          const cache = await appCache.loadCache();
+          if (cache && appCache.isCacheValid(cache)) {
+            console.log('[TIDYDESK] Using cached apps (fast path)');
+            return cache.apps;
+          }
+        }
+
+        // 缓存无效或强制刷新，执行完整扫描
+        console.log('[TIDYDESK] Scanning installed apps (slow path)...');
+        const startTime = Date.now();
+        
+        const apps = await scanInstalledAppsInternal();
+        
+        const elapsed = Date.now() - startTime;
+        console.log(`[TIDYDESK] Scan completed in ${elapsed}ms, found ${apps.length} apps`);
+        
+        // 保存到缓存
+        await appCache.saveCache(apps);
+        
+        return apps;
+      } finally {
+        isScanning = false;
+        scanningPromise = null;
+      }
+    })();
+
+    return scanningPromise;
   }
 
   /**
