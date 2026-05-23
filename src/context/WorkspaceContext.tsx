@@ -12,6 +12,11 @@ type TidyDeskApi = {
   importExternalFiles: (payload: { filePaths: string[]; targetFolder: string | null }) => Promise<unknown>;
   openFile: (filePath: string) => Promise<unknown>;
   windowControl: (action: WindowAction) => void;
+  validateAllShortcuts: () => Promise<{ total: number; valid: number; invalid: number; repaired: number }>;
+  repairShortcut: (payload: { shortcutPath: string; targetPath: string }) => Promise<{ repaired: boolean; newPath: string | null }>;
+  onTargetFileDeleted: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
+  onTargetFileRestored: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
+  onShortcutsValidated: (callback: (stats: { total: number; valid: number; invalid: number; repaired: number }) => void) => () => void;
 };
 
 const tidyDeskApi: TidyDeskApi | null = (window as any).tidyDesk || null;
@@ -35,6 +40,9 @@ interface WorkspaceContextType {
   openFile: (filePath: string) => Promise<void>;
   clearError: () => void;
   windowControl: (action: WindowAction) => void;
+  cleanupInvalidShortcuts: () => Promise<number>;
+  validateAllShortcuts: () => Promise<{ total: number; valid: number; invalid: number; repaired: number }>;
+  repairShortcut: (fileId: string) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -79,6 +87,34 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   useEffect(() => {
     refreshDesktop();
+    
+    // 监听文件监控事件
+    if (tidyDeskApi) {
+      const unsubscribeDeleted = tidyDeskApi.onTargetFileDeleted?.((payload) => {
+        console.log(`[TIDYDESK] Target file deleted: ${payload.targetPath} (${payload.shortcutCount} shortcuts affected)`);
+        setError(`检测到 ${payload.shortcutCount} 个快捷方式的目标文件被删除`);
+        refreshDesktop();
+      });
+      
+      const unsubscribeRestored = tidyDeskApi.onTargetFileRestored?.((payload) => {
+        console.log(`[TIDYDESK] Target file restored: ${payload.targetPath}`);
+        refreshDesktop();
+      });
+      
+      const unsubscribeValidated = tidyDeskApi.onShortcutsValidated?.((stats) => {
+        console.log(`[TIDYDESK] Periodic validation: ${stats.valid}/${stats.total} valid, ${stats.repaired} repaired`);
+        if (stats.repaired > 0) {
+          setError(`自动修复了 ${stats.repaired} 个快捷方式`);
+        }
+        refreshDesktop();
+      });
+      
+      return () => {
+        unsubscribeDeleted?.();
+        unsubscribeRestored?.();
+        unsubscribeValidated?.();
+      };
+    }
   }, [refreshDesktop]);
 
   const healthInfo = useMemo(
@@ -254,6 +290,70 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
+  const cleanupInvalidShortcuts = async (): Promise<number> => {
+    const invalidFiles = files.filter(file => file.parentId && file.isValid === false);
+    
+    if (invalidFiles.length === 0) {
+      return 0;
+    }
+
+    let cleanedCount = 0;
+    for (const file of invalidFiles) {
+      try {
+        await deleteItem(file.id, 'file');
+        cleanedCount++;
+      } catch (err) {
+        console.error(`[TIDYDESK] Failed to delete invalid shortcut: ${file.name}`, err);
+      }
+    }
+
+    if (cleanedCount > 0) {
+      await refreshDesktop();
+    }
+
+    return cleanedCount;
+  };
+
+  const validateAllShortcuts = async () => {
+    if (!tidyDeskApi?.validateAllShortcuts) {
+      return { total: 0, valid: 0, invalid: 0, repaired: 0 };
+    }
+
+    try {
+      const stats = await tidyDeskApi.validateAllShortcuts();
+      if (stats.repaired > 0 || stats.invalid > 0) {
+        await refreshDesktop();
+      }
+      return stats;
+    } catch (err: unknown) {
+      setError(`验证失败: ${err instanceof Error ? err.message : String(err)}`);
+      return { total: 0, valid: 0, invalid: 0, repaired: 0 };
+    }
+  };
+
+  const repairShortcut = async (fileId: string): Promise<boolean> => {
+    const file = files.find(f => f.id === fileId);
+    if (!file || !file.targetPath || !tidyDeskApi?.repairShortcut) {
+      return false;
+    }
+
+    try {
+      const result = await tidyDeskApi.repairShortcut({
+        shortcutPath: file.path,
+        targetPath: file.targetPath
+      });
+
+      if (result.repaired) {
+        await refreshDesktop();
+      }
+
+      return result.repaired;
+    } catch (err: unknown) {
+      setError(`修复失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  };
+
   return (
     <WorkspaceContext.Provider value={{
       files,
@@ -272,7 +372,10 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
       importExternalFiles,
       openFile,
       clearError,
-      windowControl
+      windowControl,
+      cleanupInvalidShortcuts,
+      validateAllShortcuts,
+      repairShortcut
     }}>
       {children}
     </WorkspaceContext.Provider>

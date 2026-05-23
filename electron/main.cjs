@@ -1,7 +1,9 @@
 const { app, BrowserWindow, ipcMain, shell, screen } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const chokidar = require('chokidar');
 
 app.setName('TidyDesk');
 
@@ -9,6 +11,21 @@ let handleWindow;
 let drawerWindow;
 let isDrawerExpanded = false;
 const defaultDrawerName = '收纳抽屉';
+
+// 文件监控器
+let fileWatcher = null;
+const watchedTargets = new Map(); // targetPath -> Set<shortcutPath>
+
+// 定期验证定时器
+let validationInterval = null;
+
+// 自动更新配置
+autoUpdater.autoDownload = false; // 不自动下载，让用户确认
+autoUpdater.autoInstallOnAppQuit = true; // 退出时自动安装
+
+// 配置更新日志
+autoUpdater.logger = require('electron-log');
+autoUpdater.logger.transports.file.level = 'info';
 
 // Windows 版本检测
 const isWindows11 = () => {
@@ -176,6 +193,281 @@ async function createDrawerShortcut(sourcePath, targetDir) {
 
   if (!ok) throw new Error(`Failed to create shortcut for "${sourcePath}"`);
   return shortcutPath;
+}
+
+/**
+ * 解析快捷方式的目标路径
+ * @param {string} shortcutPath - .lnk 文件路径
+ * @returns {string|null} 目标路径，如果无法解析则返回 null
+ */
+function resolveShortcutTarget(shortcutPath) {
+  try {
+    if (!fs.existsSync(shortcutPath)) return null;
+    
+    const ext = path.extname(shortcutPath).toLowerCase();
+    if (ext !== '.lnk') return null;
+    
+    const shortcutDetails = shell.readShortcutLink(shortcutPath);
+    return shortcutDetails?.target || null;
+  } catch (err) {
+    console.warn(`[TIDYDESK] Failed to resolve shortcut: ${shortcutPath}`, err.message);
+    return null;
+  }
+}
+
+/**
+ * 验证快捷方式是否有效（目标文件是否存在）
+ * @param {string} shortcutPath - .lnk 文件路径
+ * @returns {Object} { isValid: boolean, targetPath: string|null }
+ */
+function validateShortcut(shortcutPath) {
+  const targetPath = resolveShortcutTarget(shortcutPath);
+  
+  if (!targetPath) {
+    return { isValid: false, targetPath: null };
+  }
+  
+  const isValid = fs.existsSync(targetPath);
+  return { isValid, targetPath };
+}
+
+/**
+ * 智能修复快捷方式 - 尝试在常见位置搜索文件
+ * @param {string} shortcutPath - .lnk 文件路径
+ * @param {string} targetPath - 原目标路径
+ * @returns {Promise<Object>} { repaired: boolean, newPath: string|null }
+ */
+async function attemptShortcutRepair(shortcutPath, targetPath) {
+  if (!targetPath) {
+    return { repaired: false, newPath: null };
+  }
+
+  const fileName = path.basename(targetPath);
+  const searchPaths = [
+    path.join(os.homedir(), 'Desktop'),
+    path.join(os.homedir(), 'Documents'),
+    path.join(os.homedir(), 'Downloads'),
+    path.join(os.homedir(), 'Pictures'),
+    path.join(os.homedir(), 'Videos')
+  ];
+
+  for (const searchPath of searchPaths) {
+    try {
+      const possiblePath = path.join(searchPath, fileName);
+      if (fs.existsSync(possiblePath)) {
+        // 找到了文件，更新快捷方式
+        const stats = await fs.promises.stat(possiblePath);
+        const ok = shell.writeShortcutLink(shortcutPath, 'update', {
+          target: possiblePath,
+          cwd: stats.isDirectory() ? possiblePath : path.dirname(possiblePath),
+          description: `TidyDesk shortcut for ${fileName} (auto-repaired)`
+        });
+
+        if (ok) {
+          console.log(`[TIDYDESK] Auto-repaired shortcut: ${fileName} -> ${possiblePath}`);
+          return { repaired: true, newPath: possiblePath };
+        }
+      }
+    } catch (err) {
+      console.warn(`[TIDYDESK] Failed to search in ${searchPath}`, err.message);
+    }
+  }
+
+  return { repaired: false, newPath: null };
+}
+
+/**
+ * 初始化文件监控器
+ */
+function initializeFileWatcher() {
+  if (fileWatcher) {
+    fileWatcher.close();
+  }
+
+  fileWatcher = chokidar.watch([], {
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 2000,
+      pollInterval: 100
+    }
+  });
+
+  fileWatcher
+    .on('unlink', (filePath) => {
+      // 原文件被删除
+      console.warn(`[TIDYDESK] Target file deleted: ${filePath}`);
+      handleTargetFileDeleted(filePath);
+    })
+    .on('add', (filePath) => {
+      // 文件被创建（可能是恢复）
+      console.log(`[TIDYDESK] Target file appeared: ${filePath}`);
+      handleTargetFileRestored(filePath);
+    })
+    .on('error', (error) => {
+      console.error(`[TIDYDESK] File watcher error:`, error);
+    });
+
+  console.log('[TIDYDESK] File watcher initialized');
+}
+
+/**
+ * 添加文件到监控列表
+ * @param {string} targetPath - 目标文件路径
+ * @param {string} shortcutPath - 快捷方式路径
+ */
+function addFileToWatch(targetPath, shortcutPath) {
+  if (!targetPath || !fs.existsSync(targetPath)) return;
+
+  if (!watchedTargets.has(targetPath)) {
+    watchedTargets.set(targetPath, new Set());
+    fileWatcher.add(targetPath);
+    console.log(`[TIDYDESK] Now watching: ${targetPath}`);
+  }
+
+  watchedTargets.get(targetPath).add(shortcutPath);
+}
+
+/**
+ * 从监控列表移除文件
+ * @param {string} targetPath - 目标文件路径
+ * @param {string} shortcutPath - 快捷方式路径
+ */
+function removeFileFromWatch(targetPath, shortcutPath) {
+  if (!watchedTargets.has(targetPath)) return;
+
+  const shortcuts = watchedTargets.get(targetPath);
+  shortcuts.delete(shortcutPath);
+
+  if (shortcuts.size === 0) {
+    watchedTargets.delete(targetPath);
+    fileWatcher.unwatch(targetPath);
+    console.log(`[TIDYDESK] Stopped watching: ${targetPath}`);
+  }
+}
+
+/**
+ * 处理目标文件被删除
+ * @param {string} targetPath - 被删除的文件路径
+ */
+function handleTargetFileDeleted(targetPath) {
+  const shortcuts = watchedTargets.get(targetPath);
+  if (!shortcuts) return;
+
+  // 通知前端刷新
+  if (drawerWindow && !drawerWindow.isDestroyed()) {
+    drawerWindow.webContents.send('target-file-deleted', {
+      targetPath,
+      shortcutCount: shortcuts.size
+    });
+  }
+}
+
+/**
+ * 处理目标文件被恢复
+ * @param {string} targetPath - 恢复的文件路径
+ */
+function handleTargetFileRestored(targetPath) {
+  const shortcuts = watchedTargets.get(targetPath);
+  if (!shortcuts) return;
+
+  // 通知前端刷新
+  if (drawerWindow && !drawerWindow.isDestroyed()) {
+    drawerWindow.webContents.send('target-file-restored', {
+      targetPath,
+      shortcutCount: shortcuts.size
+    });
+  }
+}
+
+/**
+ * 验证所有快捷方式
+ * @returns {Promise<Object>} { total: number, valid: number, invalid: number, repaired: number }
+ */
+async function validateAllShortcuts() {
+  const drawerRoot = getDrawerRoot();
+  const stats = { total: 0, valid: 0, invalid: 0, repaired: 0 };
+
+  try {
+    const drawerItems = await fs.promises.readdir(drawerRoot, { withFileTypes: true });
+    
+    for (const item of drawerItems) {
+      if (!item.isDirectory()) continue;
+
+      const drawerPath = path.join(drawerRoot, item.name);
+      const entries = await fs.promises.readdir(drawerPath, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+
+        const ext = path.extname(entry.name).toLowerCase();
+        if (ext !== '.lnk') continue;
+
+        const shortcutPath = path.join(drawerPath, entry.name);
+        stats.total++;
+
+        const validation = validateShortcut(shortcutPath);
+        
+        if (validation.isValid) {
+          stats.valid++;
+        } else if (validation.targetPath) {
+          // 尝试智能修复
+          const repair = await attemptShortcutRepair(shortcutPath, validation.targetPath);
+          if (repair.repaired) {
+            stats.repaired++;
+            stats.valid++;
+          } else {
+            stats.invalid++;
+          }
+        } else {
+          stats.invalid++;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[TIDYDESK] Failed to validate shortcuts:', err);
+  }
+
+  return stats;
+}
+
+/**
+ * 启动定期验证
+ */
+function startPeriodicValidation() {
+  // 每30分钟验证一次
+  const VALIDATION_INTERVAL = 30 * 60 * 1000;
+
+  if (validationInterval) {
+    clearInterval(validationInterval);
+  }
+
+  validationInterval = setInterval(async () => {
+    console.log('[TIDYDESK] Running periodic validation...');
+    const stats = await validateAllShortcuts();
+    
+    console.log(`[TIDYDESK] Validation complete: ${stats.valid}/${stats.total} valid, ${stats.repaired} repaired, ${stats.invalid} invalid`);
+    
+    // 如果有修复或失效，通知前端刷新
+    if (stats.repaired > 0 || stats.invalid > 0) {
+      if (drawerWindow && !drawerWindow.isDestroyed()) {
+        drawerWindow.webContents.send('shortcuts-validated', stats);
+      }
+    }
+  }, VALIDATION_INTERVAL);
+
+  console.log('[TIDYDESK] Periodic validation started (every 30 minutes)');
+}
+
+/**
+ * 停止定期验证
+ */
+function stopPeriodicValidation() {
+  if (validationInterval) {
+    clearInterval(validationInterval);
+    validationInterval = null;
+    console.log('[TIDYDESK] Periodic validation stopped');
+  }
 }
 
 function getContentWidth() {
@@ -474,7 +766,18 @@ app.whenReady().then(() => {
   const display = screen.getPrimaryDisplay();
   console.log(`[TIDYDESK] Display: ${display.size.width}x${display.size.height}, Scale: ${display.scaleFactor}`);
   
+  // 初始化文件监控
+  initializeFileWatcher();
+  
+  // 启动定期验证
+  startPeriodicValidation();
+  
   createWindows();
+  
+  // 检查更新（延迟 3 秒，避免启动时卡顿）
+  setTimeout(() => {
+    checkForUpdates();
+  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindows();
@@ -482,7 +785,21 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // 清理资源
+  if (fileWatcher) {
+    fileWatcher.close();
+  }
+  stopPeriodicValidation();
+  
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  // 应用退出前清理
+  if (fileWatcher) {
+    fileWatcher.close();
+  }
+  stopPeriodicValidation();
 });
 
 // 全局错误处理
@@ -557,6 +874,21 @@ ipcMain.handle('read-desktop-files', async () => {
       const entryPath = path.join(drawerPath, entry.name);
       const entryStats = await fs.promises.stat(entryPath);
       const ext = path.extname(entry.name);
+      
+      // 验证快捷方式
+      let isValid = true;
+      let targetPath = null;
+      if (ext.toLowerCase() === '.lnk') {
+        const validation = validateShortcut(entryPath);
+        isValid = validation.isValid;
+        targetPath = validation.targetPath;
+        
+        // 添加到文件监控
+        if (targetPath) {
+          addFileToWatch(targetPath, entryPath);
+        }
+      }
+      
       filesList.push({
         id: `drawer-file-${++fileCounter}-${entryStats.ino}`,
         name: entry.name,
@@ -566,7 +898,9 @@ ipcMain.handle('read-desktop-files', async () => {
         extension: ext,
         modifiedAt: entryStats.mtime.toISOString(),
         isSimulated: false,
-        parentId: folderId
+        parentId: folderId,
+        isValid,
+        targetPath
       });
     }
   }
@@ -597,8 +931,23 @@ ipcMain.handle('rename-desktop-item', async (_event, { oldName, newName, parentF
 });
 
 ipcMain.handle('delete-desktop-item', async (_event, { name, parentFolder }) => {
+  // 删除抽屉本身（parentFolder 为 null）
+  if (!parentFolder && name) {
+    const drawerPath = resolveDrawerPath(name);
+    const drawerRoot = getDrawerRoot();
+    
+    if (!isPathInside(drawerPath, drawerRoot)) {
+      throw new Error('Unsafe delete path');
+    }
+    
+    // 递归删除抽屉及其内容
+    await fs.promises.rm(drawerPath, { recursive: true, force: true });
+    return { success: true };
+  }
+  
+  // 删除抽屉内的文件
   if (!name || !parentFolder) {
-    throw new Error('Delete is only allowed for drawer shortcuts.');
+    throw new Error('Delete requires name and parentFolder.');
   }
 
   const drawerPath = resolveDrawerPath(parentFolder);
@@ -607,10 +956,12 @@ ipcMain.handle('delete-desktop-item', async (_event, { name, parentFolder }) => 
 
   const stats = await fs.promises.stat(targetPath);
   if (stats.isDirectory()) {
-    throw new Error('Deleting folders from the drawer is not enabled yet.');
+    // 递归删除子文件夹
+    await fs.promises.rm(targetPath, { recursive: true, force: true });
+  } else {
+    await fs.promises.unlink(targetPath);
   }
 
-  await fs.promises.unlink(targetPath);
   return { success: true };
 });
 
@@ -684,4 +1035,161 @@ ipcMain.on('window-control', (_event, action) => {
   if (action === 'expand-drawer') applyDrawerBounds(true);
   if (action === 'collapse-drawer') applyDrawerBounds(false);
   if (action === 'toggle-drawer') applyDrawerBounds(!isDrawerExpanded);
+});
+
+// 手动触发验证所有快捷方式
+ipcMain.handle('validate-all-shortcuts', async () => {
+  console.log('[TIDYDESK] Manual validation triggered');
+  const stats = await validateAllShortcuts();
+  return stats;
+});
+
+// 尝试修复单个快捷方式
+ipcMain.handle('repair-shortcut', async (_event, { shortcutPath, targetPath }) => {
+  if (!shortcutPath || !targetPath) {
+    throw new Error('Missing shortcutPath or targetPath');
+  }
+
+  console.log(`[TIDYDESK] Attempting to repair: ${shortcutPath}`);
+  const result = await attemptShortcutRepair(shortcutPath, targetPath);
+  
+  if (result.repaired) {
+    console.log(`[TIDYDESK] Successfully repaired: ${shortcutPath} -> ${result.newPath}`);
+  } else {
+    console.log(`[TIDYDESK] Failed to repair: ${shortcutPath}`);
+  }
+  
+  return result;
+});
+
+// ==================== 自动更新功能 ====================
+
+/**
+ * 检查更新
+ */
+function checkForUpdates() {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[TIDYDESK] Skip update check in development mode');
+    return;
+  }
+
+  console.log('[TIDYDESK] Checking for updates...');
+  autoUpdater.checkForUpdates().catch(err => {
+    console.error('[TIDYDESK] Failed to check for updates:', err);
+  });
+}
+
+// 自动更新事件监听
+autoUpdater.on('checking-for-update', () => {
+  console.log('[TIDYDESK] Checking for update...');
+  sendUpdateStatus('checking');
+});
+
+autoUpdater.on('update-available', (info) => {
+  console.log('[TIDYDESK] Update available:', info.version);
+  sendUpdateStatus('available', {
+    version: info.version,
+    releaseDate: info.releaseDate,
+    releaseNotes: info.releaseNotes
+  });
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  console.log('[TIDYDESK] Update not available. Current version:', info.version);
+  sendUpdateStatus('not-available', { version: info.version });
+});
+
+autoUpdater.on('error', (err) => {
+  console.error('[TIDYDESK] Update error:', err);
+  sendUpdateStatus('error', { message: err.message });
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+  console.log(`[TIDYDESK] Download progress: ${progressObj.percent.toFixed(2)}%`);
+  sendUpdateStatus('downloading', {
+    percent: progressObj.percent,
+    transferred: progressObj.transferred,
+    total: progressObj.total,
+    bytesPerSecond: progressObj.bytesPerSecond
+  });
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('[TIDYDESK] Update downloaded:', info.version);
+  sendUpdateStatus('downloaded', {
+    version: info.version,
+    releaseNotes: info.releaseNotes
+  });
+});
+
+/**
+ * 发送更新状态到前端
+ */
+function sendUpdateStatus(status, data = {}) {
+  if (drawerWindow && !drawerWindow.isDestroyed()) {
+    drawerWindow.webContents.send('update-status', { status, ...data });
+  }
+}
+
+// IPC 处理器：检查更新
+ipcMain.handle('check-for-updates', async () => {
+  if (process.env.NODE_ENV === 'development') {
+    return { 
+      status: 'dev-mode', 
+      message: '开发模式下不检查更新',
+      currentVersion: app.getVersion()
+    };
+  }
+
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return {
+      status: 'success',
+      currentVersion: app.getVersion(),
+      updateInfo: result?.updateInfo || null
+    };
+  } catch (err) {
+    return {
+      status: 'error',
+      message: err.message,
+      currentVersion: app.getVersion()
+    };
+  }
+});
+
+// IPC 处理器：下载更新
+ipcMain.handle('download-update', async () => {
+  if (process.env.NODE_ENV === 'development') {
+    return { status: 'dev-mode', message: '开发模式下不下载更新' };
+  }
+
+  try {
+    await autoUpdater.downloadUpdate();
+    return { status: 'success', message: '开始下载更新' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+});
+
+// IPC 处理器：安装更新并重启
+ipcMain.handle('install-update', async () => {
+  if (process.env.NODE_ENV === 'development') {
+    return { status: 'dev-mode', message: '开发模式下不安装更新' };
+  }
+
+  try {
+    autoUpdater.quitAndInstall(false, true);
+    return { status: 'success', message: '正在安装更新...' };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
+});
+
+// IPC 处理器：获取当前版本
+ipcMain.handle('get-app-version', async () => {
+  return {
+    version: app.getVersion(),
+    name: app.getName(),
+    isPackaged: app.isPackaged
+  };
 });

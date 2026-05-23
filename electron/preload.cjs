@@ -71,5 +71,48 @@ contextBridge.exposeInMainWorld('tidyDesk', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('drawer-state', listener);
     return () => ipcRenderer.removeListener('drawer-state', listener);
+  },
+  
+  // 文件监控事件
+  onTargetFileDeleted: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('target-file-deleted', listener);
+    return () => ipcRenderer.removeListener('target-file-deleted', listener);
+  },
+  
+  onTargetFileRestored: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('target-file-restored', listener);
+    return () => ipcRenderer.removeListener('target-file-restored', listener);
+  },
+  
+  onShortcutsValidated: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('shortcuts-validated', listener);
+    return () => ipcRenderer.removeListener('shortcuts-validated', listener);
+  },
+  
+  // 验证和修复 API
+  validateAllShortcuts: () => ipcRenderer.invoke('validate-all-shortcuts'),
+  
+  repairShortcut: (payload) => {
+    if (!payload || typeof payload !== 'object') {
+      return Promise.reject(new Error('Invalid payload: must be an object'));
+    }
+    if (typeof payload.shortcutPath !== 'string' || typeof payload.targetPath !== 'string') {
+      return Promise.reject(new Error('Invalid parameters: shortcutPath and targetPath must be strings'));
+    }
+    return ipcRenderer.invoke('repair-shortcut', payload);
+  },
+  
+  // 自动更新 API
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('update-status', listener);
+    return () => ipcRenderer.removeListener('update-status', listener);
   }
 });

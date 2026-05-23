@@ -12,6 +12,9 @@ export interface TidyFile {
   parentId: string | null; // null represents the Desktop root
   // Web File System Access API Handle, if in real mode
   realHandle?: FileSystemFileHandle;
+  // Shortcut validation
+  isValid?: boolean;        // 快捷方式是否有效（目标文件存在）
+  targetPath?: string;      // 快捷方式指向的目标路径
 }
 
 export interface TidyFolder {
