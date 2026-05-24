@@ -1,4 +1,4 @@
-# TidyDesk 🗂️
+# TidyDesk 
 
 > 一个优雅的 Windows 桌面文件整理工具
 
@@ -8,44 +8,44 @@
 
 ## ✨ 特性
 
-### 🗂️ 多抽屉管理
+###  多抽屉管理
 - 创建多个抽屉分类管理桌面文件
 - 拖拽文件到抽屉，自动创建快捷方式
 - 重命名、删除抽屉
 - 卡片式展示，一目了然
 
-### 🔍 智能验证
+###  智能验证
 - 自动检测失效的快捷方式
 - 实时监控目标文件变化
 - 失效快捷方式自动标记（红色边框 + 警告图标）
 - 批量清理失效快捷方式
 
-### 🔧 智能修复
+###  智能修复
 - 自动搜索移动的文件（桌面、文档、下载、图片、视频）
 - 一键修复失效快捷方式
 - 修复成功率高达 90%+
 
-### ⏰ 自动维护
+###  自动维护
 - 每 30 分钟自动验证所有快捷方式
 - 后台静默运行，不打扰工作
 - 发现问题自动通知
 
-### 🔄 应用内更新
+###  应用内更新
 - 启动时自动检查更新
 - 一键下载并安装新版本
 - 无需手动下载，无缝更新体验
 
-### 🎨 精美 UI
+###  精美 UI
 - 深色主题，护眼舒适
 - 平滑动画，流畅体验
 - Windows 11 圆角适配
 - 响应式布局
 
-## 📸 截图
+##  截图
 
 > 待添加截图
 
-## 🚀 快速开始
+##  快速开始
 
 ### 下载安装
 
@@ -129,7 +129,7 @@ TidyDesk/
 └── package.json
 ```
 
-## 📚 技术栈
+##  技术栈
 
 - **框架**: Electron 30.0.8
 - **前端**: React 18.3.1 + TypeScript
@@ -140,7 +140,7 @@ TidyDesk/
 - **监控**: chokidar 3.6.0
 - **图标**: lucide-react 0.378.0
 
-## 🔒 安全性
+##  安全性
 
 ### 非破坏性设计
 - 只创建快捷方式，不移动原文件
@@ -200,13 +200,6 @@ TidyDesk/
 - [chokidar](https://github.com/paulmillr/chokidar) - 文件监控
 - [electron-updater](https://www.electron.build/auto-update) - 自动更新
 
-## 📞 联系方式
-
-- GitHub: [@your-github-username](https://github.com/your-github-username)
-- Email: your-email@example.com
-
----
-
 **⭐ 如果这个项目对你有帮助，请给个 Star！**
 
-Made with ❤️ by [Your Name]
+Made with ❤️ by [who-am-i]
