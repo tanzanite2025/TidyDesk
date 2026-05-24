@@ -1,4 +1,4 @@
-# 上传 TidyDesk v3.4.1 到 GitHub Release
+# 上传 TidyDesk v3.0.1 到 GitHub Release
 
 **快速指南** - 5 分钟完成
 
@@ -6,8 +6,8 @@
 
 ## 📦 安装包信息
 
-- **文件**: `release/TidyDesk-3.4.1-Setup.exe`
-- **大小**: ~76 MB
+- **文件**: `release/TidyDesk-3.0.1-Setup.exe`
+- **大小**: ~78 MB
 - **状态**: ✅ 已生成
 
 ---
@@ -18,17 +18,17 @@
 
 1. **打开 Release 页面**
    ```
-   https://github.com/tanzanite2025/TidyDesk/releases/tag/v3.4.1
+   https://github.com/tanzanite2025/TidyDesk/releases/tag/v3.0.1
    ```
 
 2. **点击 "Edit release"**
 
 3. **上传文件**
-   - 拖拽 `release/TidyDesk-3.4.1-Setup.exe` 到上传区域
+   - 拖拽 `release/TidyDesk-3.0.1-Setup.exe` 到上传区域
    - 或点击 "Attach binaries" 选择文件
 
 4. **填写信息**
-   - **Title**: `v3.4.1 - 修复截图贴纸置顶问题`
+   - **Title**: `v3.0.1 - 应用扫描稳定性与 Sidecar 打包验证`
    - **Description**: 复制下面的发布说明
 
 5. **发布**
@@ -40,88 +40,90 @@
 ## 📝 发布说明（复制到 Release）
 
 ```markdown
-# TidyDesk v3.4.1 - 修复截图贴纸置顶问题
+# TidyDesk v3.0.1 - 应用扫描稳定性与 Sidecar 打包验证
 
-## 🐛 修复的问题
+## � 本次更新
 
-### 截图贴纸置顶问题
+### 应用扫描链路升级
 
-**严重程度**: 高
+- 应用扫描统一走 Go sidecar `tidydesk-apps-cache`
+- Electron 端启动时校验 sidecar 的 `ping` / `version` / `health`
+- AppPicker 继续支持扫描已安装应用并添加到抽屉
+- 移除旧的 JS 扫描回退路径，减少不同扫描实现带来的不一致
 
-**问题描述**:
-- 截图贴纸窗口一直置顶在所有窗口之上
-- 无法切换到其他应用
-- 贴纸挡住所有窗口，严重影响使用
+### 打包版本验证
 
-**修复内容**:
-1. ✅ 新贴纸默认不置顶
-2. ✅ 降低置顶级别从 `floating` 到 `normal`
-3. ✅ 提供修复脚本更新现有贴纸配置
+- Windows 安装包已内置 Go sidecar
+- sidecar 已打包到：
+  ```text
+  resources/sidecars/apps-cache/tidydesk-apps-cache.exe
+  ```
+- 已验证 packaged sidecar 可正常返回：
+  ```text
+  ping: tidydesk-apps-cache-sidecar
+  version: 0.1.0
+  protocolVersion: 1
+  health: ok
+  ```
 
----
+### 自动更新测试准备
 
-## 📊 修复效果对比
+- 生成 `latest.yml`
+- 生成 `TidyDesk-3.0.1-Setup.exe.blockmap`
+- 可用于从 `v3.0.0` 自动更新到 `v3.0.1`
 
-| 方面 | v3.4.0 | v3.4.1 |
-|------|--------|--------|
-| 默认行为 | 置顶，挡住所有窗口 ❌ | 不置顶，正常使用 ✅ |
-| 切换应用 | 无法切换 ❌ | 可以正常切换 ✅ |
-| 置顶功能 | 挡住所有窗口 ❌ | 只在应用内置顶 ✅ |
-| 用户体验 | 严重影响 ❌ | 正常使用 ✅ |
+### 内部迁移准备
 
----
-
-## 🔧 技术改进
-
-- 修复 apps.cjs 竞态条件
-- 添加详细的调试日志
-- 创建诊断工具（4个脚本）
-- 完善故障排查文档
+- 保留现有 Electron 正式入口
+- 新增 Tauri PoC 相关代码用于后续迁移验证
+- 当前正式安装包仍以 Electron 版本为准
 
 ---
 
 ## 📦 安装说明
 
 ### 新用户
-1. 下载 `TidyDesk-3.4.1-Setup.exe`
+1. 下载 `TidyDesk-3.0.1-Setup.exe`
 2. 运行安装程序
 3. 启动应用
 
-### 从 v3.4.0 升级
-1. 下载 `TidyDesk-3.4.1-Setup.exe`
+### 从 v3.0.0 升级
+1. 下载 `TidyDesk-3.0.1-Setup.exe`
 2. 运行安装程序（自动覆盖）
 3. 重启应用
 
-### 修复现有贴纸
-如果升级后现有贴纸仍然置顶，在项目目录运行：
-```bash
-node fix-existing-stickers.cjs
-```
+### 从 v3.0.0 自动更新
+1. 确保本机安装的是 `v3.0.0`
+2. 发布本次 `v3.0.1` Release
+3. 启动旧版本应用并触发更新检查
+4. 下载并安装更新
+5. 重启后确认版本为 `v3.0.1`
 
 ---
 
 ## 🧪 测试验证
 
-### 测试新贴纸
-1. 按 `Ctrl+Alt+S` 或点击截图按钮
-2. 拖选区域创建贴纸
-3. 验证贴纸默认不置顶 ✅
-4. 可以点击贴纸后面的窗口 ✅
-5. 可以正常切换应用 ✅
+### 测试应用扫描
+1. 打开 TidyDesk
+2. 打开应用选择器
+3. 验证已安装应用列表可以正常加载
+4. 选择一个应用添加到抽屉
+5. 验证快捷方式可以正常打开目标应用
 
-### 测试置顶功能
-1. 鼠标悬停在贴纸上
-2. 点击右上角的置顶按钮
-3. 验证贴纸置顶（在应用内）✅
-4. 切换到其他应用，验证不会被挡住 ✅
+### 测试 packaged sidecar
+1. 安装 `TidyDesk-3.0.1-Setup.exe`
+2. 启动应用
+3. 验证应用扫描功能可用
+4. 确认没有 sidecar 缺失或启动失败提示
 
 ---
 
 ## ⚠️ 注意事项
 
-- 注册表监听仅支持 Windows
-- 非 Windows 系统自动禁用此功能
-- 某些绿色软件可能不会被检测到
+- 当前安装包仍是 Electron 正式版本
+- Tauri 相关内容仍是 PoC，不替代 Electron 正式入口
+- 如果本机已经安装 `v3.0.1`，自动更新不会触发
+- 某些绿色软件或非标准快捷方式可能不会被扫描到
 
 ---
 
@@ -133,11 +135,11 @@ node fix-existing-stickers.cjs
 
 ## 🙏 致谢
 
-感谢用户及时反馈此问题，让我们能够快速修复！
+感谢持续测试应用扫描、打包和自动更新链路。
 
 ---
 
-**立即升级，享受正常的截图贴纸体验！** 🚀
+**建议从 v3.0.0 升级到 v3.0.1，验证应用扫描与自动更新链路。** 🚀
 ```
 
 ---
@@ -146,7 +148,7 @@ node fix-existing-stickers.cjs
 
 1. **检查文件**
    - ✅ 安装包已显示
-   - ✅ 文件大小正确（~76 MB）
+   - ✅ 文件大小正确（~78 MB）
    - ✅ 下载链接可用
 
 2. **检查信息**
@@ -157,7 +159,7 @@ node fix-existing-stickers.cjs
 3. **测试下载**
    - ✅ 下载安装包
    - ✅ 运行安装程序
-   - ✅ 测试截图功能
+   - ✅ 测试应用扫描和添加到抽屉
 
 ---
 
@@ -166,7 +168,7 @@ node fix-existing-stickers.cjs
 上传完成后，删除本文件：
 ```bash
 rm UPLOAD_GUIDE.md
-rm RELEASE_v3.4.1_FINAL.md
+rm RELEASE_v3.0.1_FINAL.md
 rm AUDIT_SUMMARY.md
 ```
 

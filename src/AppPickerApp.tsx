@@ -15,7 +15,9 @@ export const AppPickerApp: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
   const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
+  const isTauriAppPickerPoc = cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
   const isTauriMetadataOnly = cacheInfo?.source === 'tauri-sidecar-metadata';
+  const isTauriTargetAware = cacheInfo?.source === 'tauri-sidecar-target-aware';
 
   useEffect(() => {
     loadTargetFolder();
@@ -144,7 +146,7 @@ export const AppPickerApp: React.FC = () => {
   const handleSelectApp = async (app: InstalledApp) => {
     try {
       if (isTauriMetadataOnly) {
-        setNotice(`Tauri PoC 当前只验证 metadata 列表，暂不添加应用: ${app.name}`);
+        setNotice(`Tauri PoC 当前只验证应用扫描与 target 解析，暂不添加应用: ${app.name}`);
         setTimeout(() => setNotice(''), 3000);
         return;
       }
@@ -231,10 +233,10 @@ export const AppPickerApp: React.FC = () => {
       {/* 头部 */}
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <h2 className="text-lg font-semibold text-slate-100">{isTauriMetadataOnly ? 'AppPicker Tauri PoC' : '添加应用'}</h2>
+          <h2 className="text-lg font-semibold text-slate-100">{isTauriAppPickerPoc ? 'AppPicker Tauri PoC' : '添加应用'}</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {isTauriMetadataOnly
-              ? '只读验证 Go sidecar metadata 扫描结果，暂不解析 target/icon，也不添加到抽屉'
+            {isTauriAppPickerPoc
+              ? '验证 Go sidecar 扫描、Tauri target 解析与添加到抽屉，暂不提取 icon'
               : `选择要添加到 "${targetFolder || '...'}" 的应用`}
           </p>
         </div>
@@ -247,9 +249,11 @@ export const AppPickerApp: React.FC = () => {
         </button>
       </div>
 
-      {isTauriMetadataOnly && (
+      {isTauriAppPickerPoc && (
         <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-6 py-3 text-xs text-cyan-100">
-          Tauri metadata-only PoC：列表来自 Go sidecar `apps.scanMetadata`，点击条目不会执行添加动作。
+          {isTauriTargetAware
+            ? `Tauri add-to-drawer PoC：targetPath 由 Rust 解析，点击条目会复制快捷方式到 "${targetFolder || '收纳抽屉'}"。`
+            : 'Tauri metadata-only PoC：列表来自 Go sidecar `apps.scanMetadata`，点击条目不会执行添加动作。'}
         </div>
       )}
 

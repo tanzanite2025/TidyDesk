@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 # 配置
 $owner = "tanzanite2025"
 $repo = "TidyDesk"
-$tag = "v3.2.4"
+$tag = "v3.0.1"
 
 # 读取 Token
 $token = (Get-Content .env | Select-String "GH_TOKEN" | ForEach-Object { $_ -replace "GH_TOKEN=", "" }).ToString().Trim()
@@ -72,8 +72,8 @@ function Upload-Asset {
 
 # 上传文件
 $files = @(
-    "release\TidyDesk-3.2.4-Setup.exe",
-    "release\TidyDesk-3.2.4-Setup.exe.blockmap",
+    "release\TidyDesk-3.0.1-Setup.exe",
+    "release\TidyDesk-3.0.1-Setup.exe.blockmap",
     "release\latest.yml"
 )
 

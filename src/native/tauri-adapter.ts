@@ -23,6 +23,12 @@ interface ScanMetadataResult {
   durationMs?: number;
 }
 
+interface ScanInstalledResult {
+  apps?: InstalledApp[];
+  metadata?: ScanMetadataResult;
+  skippedCount?: number;
+}
+
 export function isTauriRuntime(): boolean {
   if (typeof window === 'undefined') return false;
   const tauriWindow = window as TauriRuntimeWindow;
@@ -42,25 +48,12 @@ function unsupportedPromise(feature: string): Promise<never> {
   return Promise.reject(new Error(`Tauri NativeClient feature is not implemented yet: ${feature}`));
 }
 
-function mapMetadataToInstalledApps(metadata: ScanMetadataResult): InstalledApp[] {
-  const shortcuts = Array.isArray(metadata.shortcuts) ? metadata.shortcuts : [];
-  return shortcuts
-    .filter(item => item.shortcutPath && item.name)
-    .map(item => ({
-      name: String(item.name),
-      shortcutPath: String(item.shortcutPath),
-      targetPath: '',
-      icon: null,
-      category: String(item.category || 'other')
-    }));
-}
-
-async function scanInstalledAppsMetadataOnly(): Promise<InstalledAppsResult> {
+async function scanInstalledAppsWithTargets(): Promise<InstalledAppsResult> {
   try {
-    const metadata = await invoke<ScanMetadataResult>('apps_scan_metadata');
+    const result = await invoke<ScanInstalledResult>('apps_scan_installed');
     return {
       success: true,
-      apps: mapMetadataToInstalledApps(metadata)
+      apps: Array.isArray(result.apps) ? result.apps : []
     };
   } catch (err) {
     return {
@@ -102,21 +95,24 @@ export function createTauriNativeClient(): NativeClient {
       onCountsUpdated: () => undefined
     },
     apps: {
-      scanInstalled: scanInstalledAppsMetadataOnly,
-      refresh: scanInstalledAppsMetadataOnly,
+      scanInstalled: scanInstalledAppsWithTargets,
+      refresh: scanInstalledAppsWithTargets,
       getCacheInfo: async () => {
         try {
-          const metadata = await invoke<ScanMetadataResult>('apps_scan_metadata');
+          const result = await invoke<ScanInstalledResult>('apps_scan_installed');
+          const metadata = result.metadata ?? {};
           return {
             success: true,
             info: {
               exists: false,
               valid: false,
-              appCount: Array.isArray(metadata.shortcuts) ? metadata.shortcuts.length : 0,
+              appCount: Array.isArray(result.apps) ? result.apps.length : 0,
               lastScanTime: Date.now(),
-              source: 'tauri-sidecar-metadata',
+              source: 'tauri-sidecar-target-aware',
               durationMs: metadata.durationMs,
-              scannedPaths: metadata.scannedPaths
+              scannedPaths: metadata.scannedPaths,
+              shortcutCount: Array.isArray(metadata.shortcuts) ? metadata.shortcuts.length : 0,
+              skippedCount: result.skippedCount
             }
           };
         } catch (err) {
@@ -128,9 +124,9 @@ export function createTauriNativeClient(): NativeClient {
       },
       openPicker: () => invoke('open_app_picker_poc'),
       closePicker: () => invoke('close_app_picker_poc'),
-      getPickerTarget: async () => ({ targetFolder: null }),
+      getPickerTarget: async () => ({ targetFolder: '收纳抽屉' }),
       onSetTargetFolder: () => undefined,
-      addToDrawer: () => unsupportedPromise('apps.addToDrawer')
+      addToDrawer: payload => invoke('apps_add_to_drawer', { payload })
     },
     windows: {
       control: () => undefined,
