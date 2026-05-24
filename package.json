@@ -5,13 +5,20 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "desktop": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
+    "desktop": "npm run build:sidecar && concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "build:electron": "npm run build && electron-builder --win --publish never",
-    "build:publish": "npm run build && electron-builder --win --publish always"
+    "build:sidecar": "go -C sidecars/apps-cache build -o tidydesk-apps-cache.exe .",
+    "prepare:tauri-sidecar": "node scripts/prepare-tauri-sidecar.cjs",
+    "build:electron:dir": "npm run build:sidecar && npm run build && electron-builder --win --dir --publish never",
+    "build:electron": "npm run build:sidecar && npm run build && electron-builder --win --publish never",
+    "build:publish": "npm run build:sidecar && npm run build && electron-builder --win --publish always",
+    "verify:packaged-sidecar": "node scripts/verify-packaged-sidecar.cjs",
+    "tauri:poc:dev": "npx --yes @tauri-apps/cli@2 dev",
+    "tauri:poc:build": "npx --yes @tauri-apps/cli@2 build"
   },
   "dependencies": {
+    "@tauri-apps/api": "^2.11.0",
     "chokidar": "^3.6.0",
     "electron-log": "^5.1.0",
     "electron-updater": "^6.1.7",
@@ -44,6 +51,12 @@
       "dist/**/*",
       "electron/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "sidecars/apps-cache/tidydesk-apps-cache.exe",
+        "to": "sidecars/apps-cache/tidydesk-apps-cache.exe"
+      }
     ],
     "win": {
       "target": [

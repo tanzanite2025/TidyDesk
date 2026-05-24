@@ -1,16 +1,31 @@
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
-function createAppService({ app, shell, config, getDesktopPath, appCache }) {
+function createAppService({ app, shell, config, getDesktopPath, appCache, performanceCore = null, goAppsClient = null }) {
   // 防止竞态条件的锁机制
   let isScanning = false;
   let scanningPromise = null;
+  let lastScanDiagnostics = { failedShortcuts: [], skippedShortcuts: [], metadata: null };
 
   /**
    * 扫描已安装的应用（带缓存和竞态条件保护）
    */
   async function scanInstalledApps(forceRefresh = false) {
+    // 使用性能核心的互斥锁（如果可用）
+    if (performanceCore) {
+      return performanceCore.throttleManager.lock('app-scan', async () => {
+        return await scanInstalledAppsInternal(forceRefresh);
+      }, 60000); // 60 秒超时
+    } else {
+      // 降级：使用原有的锁机制
+      return await scanInstalledAppsInternal(forceRefresh);
+    }
+  }
+
+  /**
+   * 内部扫描函数（带原有的竞态条件保护）
+   */
+  async function scanInstalledAppsInternal(forceRefresh = false) {
     // 如果正在扫描，返回现有的 Promise
     if (isScanning && scanningPromise) {
       console.log('[TIDYDESK] Scan already in progress, waiting...');
@@ -33,7 +48,7 @@ function createAppService({ app, shell, config, getDesktopPath, appCache }) {
         console.log('[TIDYDESK] Scanning installed apps (slow path)...');
         const startTime = Date.now();
         
-        const apps = await scanInstalledAppsInternal();
+        const apps = await scanInstalledAppsRealInternal();
         
         const elapsed = Date.now() - startTime;
         console.log(`[TIDYDESK] Scan completed in ${elapsed}ms, found ${apps.length} apps`);
@@ -52,98 +67,110 @@ function createAppService({ app, shell, config, getDesktopPath, appCache }) {
   }
 
   /**
-   * 内部扫描函数（实际扫描逻辑）
+   * 真正的内部扫描函数（实际扫描逻辑）
    */
-  async function scanInstalledAppsInternal() {
+  async function scanInstalledAppsRealInternal() {
+    if (!goAppsClient) {
+      throw new Error('Go apps sidecar client is required for application scanning');
+    }
+    return scanInstalledAppsWithGoMetadata();
+  }
+
+  async function scanInstalledAppsWithGoMetadata() {
+    const metadataStart = Date.now();
+    const metadata = await goAppsClient.scanMetadata({
+      desktopPath: getDesktopPath(),
+      maxDepth: config.SCAN.MAX_RECURSION_DEPTH,
+      skipDirectories: config.SCAN.SKIP_DIRECTORIES
+    });
+    const metadataElapsed = Date.now() - metadataStart;
+    const shortcuts = Array.isArray(metadata?.shortcuts) ? metadata.shortcuts : [];
+    const metadataDuration = typeof metadata?.durationMs === 'number' ? metadata.durationMs : metadataElapsed;
+    const diagnostics = {
+      failedShortcuts: [],
+      skippedShortcuts: [],
+      metadata: {
+        durationMs: metadataDuration,
+        shortcutCount: shortcuts.length,
+        scannedPaths: Array.isArray(metadata?.scannedPaths) ? metadata.scannedPaths : []
+      }
+    };
+    console.log(`[TIDYDESK] Go metadata scan completed in ${metadataDuration}ms, found ${shortcuts.length} shortcuts`);
+
     const apps = [];
     const seenPaths = new Set();
-    const startMenuPaths = [
-      path.join(process.env.ProgramData || 'C:\\ProgramData', 'Microsoft\\Windows\\Start Menu\\Programs'),
-      path.join(os.homedir(), 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs')
-    ];
-
-    for (const startMenuPath of startMenuPaths) {
-      if (!fs.existsSync(startMenuPath)) continue;
-
-      try {
-        await scanDirectoryForApps(startMenuPath, apps, seenPaths);
-      } catch (err) {
-        console.warn(`[TIDYDESK] Failed to scan ${startMenuPath}`, err.message);
-      }
-    }
-
-    try {
-      await scanDirectoryForApps(getDesktopPath(), apps, seenPaths, false);
-    } catch (err) {
-      console.warn('[TIDYDESK] Failed to scan desktop', err.message);
+    for (const shortcut of shortcuts) {
+      await addShortcutApp(shortcut.shortcutPath, shortcut.name, apps, seenPaths, diagnostics);
     }
 
     apps.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-    console.log(`[TIDYDESK] Found ${apps.length} installed applications`);
+    lastScanDiagnostics = diagnostics;
+    if (diagnostics.failedShortcuts.length > 0 || diagnostics.skippedShortcuts.length > 0) {
+      console.log(`[TIDYDESK] Go scan diagnostics: failed=${diagnostics.failedShortcuts.length}, skipped=${diagnostics.skippedShortcuts.length}`);
+    }
+    console.log(`[TIDYDESK] Go metadata + Electron completion found ${apps.length} installed applications`);
     return apps;
   }
 
-  async function scanDirectoryForApps(dirPath, apps, seenPaths, recursive = true, depth = 0) {
-    if (depth > config.SCAN.MAX_RECURSION_DEPTH) return;
+  async function addShortcutApp(shortcutPath, shortcutName, apps, seenPaths, diagnostics) {
+    if (!shortcutPath || path.extname(shortcutPath).toLowerCase() !== '.lnk') {
+      diagnostics.skippedShortcuts.push({ shortcutPath, reason: 'invalid-shortcut-path' });
+      return;
+    }
+
+    const displayName = shortcutName || path.basename(shortcutPath, '.lnk');
+    const nameLower = displayName.toLowerCase();
+    if (
+      nameLower.includes('uninstall') ||
+      nameLower.includes('unins') ||
+      nameLower.includes('setup') ||
+      nameLower.includes('installer')
+    ) {
+      diagnostics.skippedShortcuts.push({ shortcutPath, name: displayName, reason: 'installer-or-uninstaller' });
+      return;
+    }
 
     try {
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      const shortcutDetails = shell.readShortcutLink(shortcutPath);
+      const targetPath = shortcutDetails?.target;
 
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-
-        if (entry.isDirectory() && recursive) {
-          if (!config.SCAN.SKIP_DIRECTORIES.includes(entry.name)) {
-            await scanDirectoryForApps(fullPath, apps, seenPaths, recursive, depth + 1);
-          }
-          continue;
-        }
-
-        if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.lnk') {
-          continue;
-        }
-
-        try {
-          const shortcutDetails = shell.readShortcutLink(fullPath);
-          const targetPath = shortcutDetails?.target;
-
-          if (!targetPath || seenPaths.has(targetPath)) continue;
-          if (!fs.existsSync(targetPath)) continue;
-          if (path.extname(targetPath).toLowerCase() !== '.exe') continue;
-
-          const nameLower = entry.name.toLowerCase();
-          if (
-            nameLower.includes('uninstall') ||
-            nameLower.includes('unins') ||
-            nameLower.includes('setup') ||
-            nameLower.includes('installer')
-          ) {
-            continue;
-          }
-
-          seenPaths.add(targetPath);
-
-          let icon = null;
-          try {
-            const iconImage = await app.getFileIcon(targetPath, { size: 'normal' });
-            icon = iconImage.toDataURL();
-          } catch (err) {
-            console.warn(`[TIDYDESK] Failed to get icon for ${targetPath}`);
-          }
-
-          apps.push({
-            name: entry.name.replace('.lnk', ''),
-            shortcutPath: fullPath,
-            targetPath,
-            icon,
-            category: categorizeApp(entry.name, targetPath)
-          });
-        } catch (err) {
-          console.warn(`[TIDYDESK] Failed to read shortcut ${fullPath}`, err.message);
-        }
+      if (!targetPath) {
+        diagnostics.skippedShortcuts.push({ shortcutPath, name: displayName, reason: 'missing-target' });
+        return;
       }
+      if (seenPaths.has(targetPath)) {
+        diagnostics.skippedShortcuts.push({ shortcutPath, name: displayName, targetPath, reason: 'duplicate-target' });
+        return;
+      }
+      if (!fs.existsSync(targetPath)) {
+        diagnostics.skippedShortcuts.push({ shortcutPath, name: displayName, targetPath, reason: 'target-not-found' });
+        return;
+      }
+      if (path.extname(targetPath).toLowerCase() !== '.exe') {
+        diagnostics.skippedShortcuts.push({ shortcutPath, name: displayName, targetPath, reason: 'target-not-executable' });
+        return;
+      }
+
+      seenPaths.add(targetPath);
+
+      let icon = null;
+      try {
+        const iconImage = await app.getFileIcon(targetPath, { size: 'normal' });
+        icon = iconImage.toDataURL();
+      } catch (err) {
+        console.warn(`[TIDYDESK] Failed to get icon for ${targetPath}`);
+      }
+
+      apps.push({
+        name: displayName,
+        shortcutPath,
+        targetPath,
+        icon,
+        category: categorizeApp(displayName, targetPath)
+      });
     } catch (err) {
-      console.warn(`[TIDYDESK] Failed to scan directory ${dirPath}`, err.message);
+      diagnostics.failedShortcuts.push({ shortcutPath, name: displayName, reason: err.message });
+      console.warn(`[TIDYDESK] Failed to complete shortcut ${shortcutPath}`, err.message);
     }
   }
 
@@ -208,50 +235,14 @@ function createAppService({ app, shell, config, getDesktopPath, appCache }) {
    */
   async function updateSingleApp({ appKey, appName, installLocation }) {
     console.log(`[TIDYDESK] Incremental update: ${appName}`);
-    
     try {
       const startTime = Date.now();
-      
-      // 1. 尝试在开始菜单中找到快捷方式
-      const app = await findAppShortcut(appName, installLocation);
-      
-      if (!app) {
-        console.log(`[TIDYDESK] Could not find shortcut for: ${appName}`);
-        return;
-      }
-      
-      // 2. 加载当前缓存
-      const cache = await appCache.loadCache();
-      if (!cache || !cache.apps) {
-        console.log('[TIDYDESK] No cache found, triggering full scan');
-        await scanInstalledApps(true);
-        return;
-      }
-      
-      // 3. 更新或添加到缓存
-      const existingIndex = cache.apps.findIndex(a => 
-        a.targetPath === app.targetPath || a.name === app.name
-      );
-      
-      if (existingIndex >= 0) {
-        cache.apps[existingIndex] = app;
-        console.log(`[TIDYDESK] Updated app: ${app.name}`);
-      } else {
-        cache.apps.push(app);
-        cache.apps.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-        console.log(`[TIDYDESK] Added new app: ${app.name}`);
-      }
-      
-      // 4. 保存缓存
-      await appCache.saveCache(cache.apps);
-      
+      await scanInstalledApps(true);
       const elapsed = Date.now() - startTime;
-      console.log(`[TIDYDESK] Incremental update completed in ${elapsed}ms`);
+      console.log(`[TIDYDESK] Incremental update handled by Go full scan in ${elapsed}ms`);
     } catch (err) {
       console.error('[TIDYDESK] Incremental update failed:', err);
-      // 失败时触发全量扫描
-      console.log('[TIDYDESK] Falling back to full scan');
-      await scanInstalledApps(true);
+      throw err;
     }
   }
 
@@ -293,91 +284,6 @@ function createAppService({ app, shell, config, getDesktopPath, appCache }) {
     } catch (err) {
       console.error('[TIDYDESK] Incremental removal failed:', err);
     }
-  }
-
-  /**
-   * 在开始菜单中查找应用快捷方式
-   */
-  async function findAppShortcut(appName, installLocation) {
-    const startMenuPaths = [
-      path.join(process.env.ProgramData || 'C:\\ProgramData', 'Microsoft\\Windows\\Start Menu\\Programs'),
-      path.join(os.homedir(), 'AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs')
-    ];
-
-    for (const startMenuPath of startMenuPaths) {
-      if (!fs.existsSync(startMenuPath)) continue;
-
-      try {
-        const app = await searchForShortcut(startMenuPath, appName, installLocation);
-        if (app) return app;
-      } catch (err) {
-        console.warn(`[TIDYDESK] Error searching ${startMenuPath}:`, err.message);
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * 递归搜索快捷方式
-   */
-  async function searchForShortcut(dirPath, appName, installLocation, depth = 0) {
-    if (depth > 3) return null;
-
-    try {
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
-
-        if (entry.isDirectory()) {
-          const result = await searchForShortcut(fullPath, appName, installLocation, depth + 1);
-          if (result) return result;
-          continue;
-        }
-
-        if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.lnk') {
-          continue;
-        }
-
-        // 检查文件名是否匹配
-        const fileName = entry.name.replace('.lnk', '');
-        if (!fileName.toLowerCase().includes(appName.toLowerCase())) {
-          continue;
-        }
-
-        try {
-          const shortcutDetails = shell.readShortcutLink(fullPath);
-          const targetPath = shortcutDetails?.target;
-
-          if (!targetPath || !fs.existsSync(targetPath)) continue;
-          if (path.extname(targetPath).toLowerCase() !== '.exe') continue;
-
-          // 获取图标
-          let icon = null;
-          try {
-            const iconImage = await app.getFileIcon(targetPath, { size: 'normal' });
-            icon = iconImage.toDataURL();
-          } catch (err) {
-            console.warn(`[TIDYDESK] Failed to get icon for ${targetPath}`);
-          }
-
-          return {
-            name: fileName,
-            shortcutPath: fullPath,
-            targetPath,
-            icon,
-            category: categorizeApp(fileName, targetPath)
-          };
-        } catch (err) {
-          console.warn(`[TIDYDESK] Failed to read shortcut ${fullPath}:`, err.message);
-        }
-      }
-    } catch (err) {
-      console.warn(`[TIDYDESK] Failed to search directory ${dirPath}:`, err.message);
-    }
-
-    return null;
   }
 
   return {

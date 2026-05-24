@@ -1,13 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Search, X, Loader2, AppWindow, Globe, Code, FileText, MessageSquare, Play, RefreshCw } from 'lucide-react';
+import { nativeClient } from './native/native-client';
+import type { AppCacheInfo, InstalledApp } from './types/tidydesk-api';
 
-interface InstalledApp {
-  name: string;
-  shortcutPath: string;
-  targetPath: string;
-  icon: string | null;
-  category: string;
-}
 
 export const AppPickerApp: React.FC = () => {
   const [apps, setApps] = useState<InstalledApp[]>([]);
@@ -19,7 +14,8 @@ export const AppPickerApp: React.FC = () => {
   const [targetFolder, setTargetFolder] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
-  const [cacheInfo, setCacheInfo] = useState<any>(null);
+  const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
+  const isTauriMetadataOnly = cacheInfo?.source === 'tauri-sidecar-metadata';
 
   useEffect(() => {
     loadTargetFolder();
@@ -33,24 +29,25 @@ export const AppPickerApp: React.FC = () => {
 
   // 监听目标文件夹设置
   useEffect(() => {
-    const tidyDeskApi = (window as any).tidyDesk;
-    if (tidyDeskApi?.onSetTargetFolder) {
-      const unsubscribe = tidyDeskApi.onSetTargetFolder((folder: string) => {
+    const nativeApi = nativeClient;
+    if (nativeApi.isAvailable()) {
+      const unsubscribe = nativeApi.apps.onSetTargetFolder((folder: string) => {
         setTargetFolder(folder);
       });
       return unsubscribe;
     }
+    return undefined;
   }, []);
 
   const loadTargetFolder = async () => {
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (!tidyDeskApi?.getAppPickerTarget) {
+      const nativeApi = nativeClient;
+      if (!nativeApi.isAvailable()) {
         console.error('[TIDYDESK] getAppPickerTarget API not available');
         return;
       }
 
-      const result = await tidyDeskApi.getAppPickerTarget();
+      const result = await nativeApi.apps.getPickerTarget();
       if (result.targetFolder) {
         setTargetFolder(result.targetFolder);
       }
@@ -61,11 +58,11 @@ export const AppPickerApp: React.FC = () => {
 
   const loadCacheInfo = async () => {
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (tidyDeskApi?.getCacheInfo) {
-        const result = await tidyDeskApi.getCacheInfo();
+      const nativeApi = nativeClient;
+      if (nativeApi.isAvailable()) {
+        const result = await nativeApi.apps.getCacheInfo();
         if (result.success) {
-          setCacheInfo(result.info);
+          setCacheInfo(result.info ?? null);
         }
       }
     } catch (err) {
@@ -76,13 +73,13 @@ export const AppPickerApp: React.FC = () => {
   const loadApps = async () => {
     setIsLoading(true);
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (!tidyDeskApi?.scanInstalledApps) {
+      const nativeApi = nativeClient;
+      if (!nativeApi.isAvailable()) {
         console.error('[TIDYDESK] scanInstalledApps API not available');
         return;
       }
 
-      const result = await tidyDeskApi.scanInstalledApps();
+      const result = await nativeApi.apps.scanInstalled();
       if (result.success) {
         setApps(result.apps);
         setFilteredApps(result.apps);
@@ -119,13 +116,13 @@ export const AppPickerApp: React.FC = () => {
     setIsRefreshing(true);
     setError('');
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (!tidyDeskApi?.refreshApps) {
+      const nativeApi = nativeClient;
+      if (!nativeApi.isAvailable()) {
         setError('刷新功能不可用');
         return;
       }
 
-      const result = await tidyDeskApi.refreshApps();
+      const result = await nativeApi.apps.refresh();
       if (result.success) {
         setApps(result.apps);
         setFilteredApps(result.apps);
@@ -146,13 +143,19 @@ export const AppPickerApp: React.FC = () => {
 
   const handleSelectApp = async (app: InstalledApp) => {
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (!tidyDeskApi?.addAppToDrawer) {
+      if (isTauriMetadataOnly) {
+        setNotice(`Tauri PoC 当前只验证 metadata 列表，暂不添加应用: ${app.name}`);
+        setTimeout(() => setNotice(''), 3000);
+        return;
+      }
+
+      const nativeApi = nativeClient;
+      if (!nativeApi.isAvailable()) {
         setError('添加应用功能不可用');
         return;
       }
 
-      await tidyDeskApi.addAppToDrawer({
+      await nativeApi.apps.addToDrawer({
         shortcutPath: app.shortcutPath,
         targetFolder: targetFolder
       });
@@ -170,9 +173,9 @@ export const AppPickerApp: React.FC = () => {
 
   const handleClose = async () => {
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (tidyDeskApi?.closeAppPicker) {
-        await tidyDeskApi.closeAppPicker();
+      const nativeApi = nativeClient;
+      if (nativeApi.isAvailable()) {
+        await nativeApi.apps.closePicker();
       }
     } catch (err) {
       console.error('[TIDYDESK] Failed to close app picker:', err);
@@ -228,9 +231,11 @@ export const AppPickerApp: React.FC = () => {
       {/* 头部 */}
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <h2 className="text-lg font-semibold text-slate-100">添加应用</h2>
+          <h2 className="text-lg font-semibold text-slate-100">{isTauriMetadataOnly ? 'AppPicker Tauri PoC' : '添加应用'}</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            选择要添加到 "{targetFolder || '...'}" 的应用
+            {isTauriMetadataOnly
+              ? '只读验证 Go sidecar metadata 扫描结果，暂不解析 target/icon，也不添加到抽屉'
+              : `选择要添加到 "${targetFolder || '...'}" 的应用`}
           </p>
         </div>
         <button
@@ -241,6 +246,12 @@ export const AppPickerApp: React.FC = () => {
           <X size={20} />
         </button>
       </div>
+
+      {isTauriMetadataOnly && (
+        <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-6 py-3 text-xs text-cyan-100">
+          Tauri metadata-only PoC：列表来自 Go sidecar `apps.scanMetadata`，点击条目不会执行添加动作。
+        </div>
+      )}
 
       {/* 搜索栏和刷新按钮 */}
       <div className="px-6 py-4 border-b border-white/10 flex gap-3">
@@ -323,7 +334,7 @@ export const AppPickerApp: React.FC = () => {
                     {app.name}
                   </div>
                   <div className="text-xs text-slate-500 truncate mt-0.5">
-                    {app.targetPath}
+                    {app.targetPath || app.shortcutPath}
                   </div>
                 </div>
 

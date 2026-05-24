@@ -1,26 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useState, useMemo, ReactNode } from 'react';
+import { nativeClient } from '../native/native-client';
 import { TidyFile, TidyFolder, DesktopHealthInfo } from '../types/file';
+import type { WindowAction } from '../types/tidydesk-api';
 import { calculateDesktopHealth, generateSimulatedFiles, proposeTidyActions } from '../utils/tidyEngine';
 
-type WindowAction = 'close' | 'minimize' | 'expand-drawer' | 'collapse-drawer' | 'toggle-drawer';
-
-type TidyDeskApi = {
-  readDesktopFiles: () => Promise<{ files: TidyFile[]; folders: TidyFolder[] }>;
-  createDrawer: (name: string) => Promise<unknown>;
-  renameItem: (payload: { oldName: string; newName: string; parentFolder: string | null }) => Promise<unknown>;
-  deleteItem: (payload: { name: string; parentFolder: string | null }) => Promise<unknown>;
-  importExternalFiles: (payload: { filePaths: string[]; targetFolder: string | null }) => Promise<unknown>;
-  openFile: (filePath: string) => Promise<unknown>;
-  windowControl: (action: WindowAction) => void;
-  validateAllShortcuts: () => Promise<{ total: number; valid: number; invalid: number; repaired: number }>;
-  repairShortcut: (payload: { shortcutPath: string; targetPath: string }) => Promise<{ repaired: boolean; newPath: string | null }>;
-  restoreToDesktop: (payload: { shortcutPath: string }) => Promise<{ success: boolean; restoredPath: string }>;
-  onTargetFileDeleted: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
-  onTargetFileRestored: (callback: (payload: { targetPath: string; shortcutCount: number }) => void) => () => void;
-  onShortcutsValidated: (callback: (stats: { total: number; valid: number; invalid: number; repaired: number }) => void) => () => void;
-};
-
-const tidyDeskApi: TidyDeskApi | null = (window as any).tidyDesk || null;
+const nativeApi = nativeClient;
 
 interface WorkspaceContextType {
   files: TidyFile[];
@@ -65,9 +49,9 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     setIsLoading(true);
     setError(null);
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
-        const data = await tidyDeskApi.readDesktopFiles();
+        const data = await nativeApi.files.readDesktopFiles();
         setFiles(data.files || []);
         setFolders(data.folders || []);
         setSelectedFileId(null);
@@ -91,19 +75,19 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     refreshDesktop();
     
     // 监听文件监控事件
-    if (tidyDeskApi) {
-      const unsubscribeDeleted = tidyDeskApi.onTargetFileDeleted?.((payload) => {
+    if (nativeApi.isAvailable()) {
+      const unsubscribeDeleted = nativeApi.shortcuts.onTargetFileDeleted((payload) => {
         console.log(`[TIDYDESK] Target file deleted: ${payload.targetPath} (${payload.shortcutCount} shortcuts affected)`);
         setError(`检测到 ${payload.shortcutCount} 个快捷方式的目标文件被删除`);
         refreshDesktop();
       });
       
-      const unsubscribeRestored = tidyDeskApi.onTargetFileRestored?.((payload) => {
+      const unsubscribeRestored = nativeApi.shortcuts.onTargetFileRestored((payload) => {
         console.log(`[TIDYDESK] Target file restored: ${payload.targetPath}`);
         refreshDesktop();
       });
       
-      const unsubscribeValidated = tidyDeskApi.onShortcutsValidated?.((stats) => {
+      const unsubscribeValidated = nativeApi.shortcuts.onValidated((stats) => {
         console.log(`[TIDYDESK] Periodic validation: ${stats.valid}/${stats.total} valid, ${stats.repaired} repaired`);
         if (stats.repaired > 0) {
           setError(`自动修复了 ${stats.repaired} 个快捷方式`);
@@ -128,16 +112,16 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   const clearError = () => setError(null);
 
   const windowControl = (action: WindowAction) => {
-    tidyDeskApi?.windowControl(action);
+    if (nativeApi.isAvailable()) nativeApi.windows.control(action);
   };
 
   const createDrawer = async (name: string) => {
     const nextName = name.trim();
     if (!nextName) return;
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
-        await tidyDeskApi.createDrawer(nextName);
+        await nativeApi.drawers.create(nextName);
         await refreshDesktop();
       } catch (err: unknown) {
         setError(`[CRITICAL] 创建抽屉失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -160,7 +144,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     const item = type === 'file' ? files.find(file => file.id === id) : folders.find(folder => folder.id === id);
     if (!item) return;
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
         const parentFolder = item.parentId ? drawerNameFromId(folders, item.parentId) : null;
         
@@ -173,7 +157,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
         }
         
-        await tidyDeskApi.deleteItem({ name: itemName, parentFolder });
+        await nativeApi.drawers.deleteItem({ name: itemName, parentFolder });
         await refreshDesktop();
       } catch (err: unknown) {
         setError(`[CRITICAL] 删除抽屉入口失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -189,7 +173,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     const item = type === 'file' ? files.find(file => file.id === id) : folders.find(folder => folder.id === id);
     if (!item || !newName.trim()) return;
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
         const parentFolder = item.parentId ? drawerNameFromId(folders, item.parentId) : null;
         
@@ -216,7 +200,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
         }
         
-        await tidyDeskApi.renameItem({
+        await nativeApi.drawers.renameItem({
           oldName: item.name,
           newName: finalName,
           parentFolder
@@ -235,9 +219,9 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   const importExternalFiles = async (filePaths: string[], folderId: string | null) => {
     if (filePaths.length === 0) return;
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
-        await tidyDeskApi.importExternalFiles({
+        await nativeApi.files.importExternalFiles({
           filePaths,
           targetFolder: drawerNameFromId(folders, folderId)
         });
@@ -294,9 +278,9 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   const openFile = async (filePath: string) => {
     if (!filePath) return;
 
-    if (tidyDeskApi) {
+    if (nativeApi.isAvailable()) {
       try {
-        await tidyDeskApi.openFile(filePath);
+        await nativeApi.files.open(filePath);
       } catch (err: unknown) {
         setError(`[CRITICAL] 打开抽屉入口失败: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -328,12 +312,12 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const validateAllShortcuts = async () => {
-    if (!tidyDeskApi?.validateAllShortcuts) {
+    if (!nativeApi.isAvailable()) {
       return { total: 0, valid: 0, invalid: 0, repaired: 0 };
     }
 
     try {
-      const stats = await tidyDeskApi.validateAllShortcuts();
+      const stats = await nativeApi.shortcuts.validateAll();
       if (stats.repaired > 0 || stats.invalid > 0) {
         await refreshDesktop();
       }
@@ -346,12 +330,12 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const repairShortcut = async (fileId: string): Promise<boolean> => {
     const file = files.find(f => f.id === fileId);
-    if (!file || !file.targetPath || !tidyDeskApi?.repairShortcut) {
+    if (!file || !file.targetPath || !nativeApi.isAvailable()) {
       return false;
     }
 
     try {
-      const result = await tidyDeskApi.repairShortcut({
+      const result = await nativeApi.shortcuts.repair({
         shortcutPath: file.path,
         targetPath: file.targetPath
       });
@@ -369,12 +353,12 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const restoreToDesktop = async (fileId: string): Promise<boolean> => {
     const file = files.find(f => f.id === fileId);
-    if (!file || !tidyDeskApi?.restoreToDesktop) {
+    if (!file || !nativeApi.isAvailable()) {
       return false;
     }
 
     try {
-      const result = await tidyDeskApi.restoreToDesktop({
+      const result = await nativeApi.files.restoreToDesktop({
         shortcutPath: file.path
       });
 

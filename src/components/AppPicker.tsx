@@ -1,13 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Search, X, Loader2, AppWindow, Globe, Code, FileText, MessageSquare, Play } from 'lucide-react';
+import { nativeClient } from '../native/native-client';
+import type { InstalledApp } from '../types/tidydesk-api';
 
-interface InstalledApp {
-  name: string;
-  shortcutPath: string;
-  targetPath: string;
-  icon: string | null;
-  category: string;
-}
 
 interface AppPickerProps {
   isOpen: boolean;
@@ -36,13 +31,13 @@ export const AppPicker: React.FC<AppPickerProps> = ({ isOpen, onClose, onSelectA
   const loadApps = async () => {
     setIsLoading(true);
     try {
-      const tidyDeskApi = (window as any).tidyDesk;
-      if (!tidyDeskApi?.scanInstalledApps) {
+      const nativeApi = nativeClient;
+      if (!nativeApi.isAvailable()) {
         console.error('[TIDYDESK] scanInstalledApps API not available');
         return;
       }
 
-      const result = await tidyDeskApi.scanInstalledApps();
+      const result = await nativeApi.apps.scanInstalled();
       if (result.success) {
         setApps(result.apps);
         setFilteredApps(result.apps);

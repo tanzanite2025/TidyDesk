@@ -1,189 +1,313 @@
 /**
- * 截图功能诊断脚本
- * 运行: node diagnose-screenshot.cjs
+ * 截屏功能诊断工具
+ * 用于测试 Electron 透明窗口是否正常工作
  */
 
-const fs = require('fs');
+const { app, BrowserWindow, screen } = require('electron');
 const path = require('path');
 
-console.log('=== TidyDesk 截图功能诊断 ===\n');
+console.log('[DIAGNOSE] Starting screenshot diagnostics...');
+console.log('[DIAGNOSE] Electron version:', process.versions.electron);
+console.log('[DIAGNOSE] Chrome version:', process.versions.chrome);
+console.log('[DIAGNOSE] Node version:', process.versions.node);
+console.log('[DIAGNOSE] Platform:', process.platform);
 
-// 1. 检查关键文件是否存在
-console.log('1. 检查关键文件...');
-const files = [
-  'electron/services/stickers.cjs',
-  'electron/preload.cjs',
-  'electron/main.cjs',
-  'src/modules/stickers/SnipOverlayApp.tsx',
-  'src/modules/stickers/StickerApp.tsx',
-  'src/modules/rail/RailApp.tsx'
-];
+app.whenReady().then(() => {
+  console.log('[DIAGNOSE] App ready');
 
-let allFilesExist = true;
-for (const file of files) {
-  const exists = fs.existsSync(file);
-  console.log(`  ${exists ? '✅' : '❌'} ${file}`);
-  if (!exists) allFilesExist = false;
-}
+  // 获取显示器信息
+  const display = screen.getPrimaryDisplay();
+  console.log('[DIAGNOSE] Display info:', {
+    id: display.id,
+    bounds: display.bounds,
+    workArea: display.workArea,
+    scaleFactor: display.scaleFactor,
+    rotation: display.rotation,
+    internal: display.internal
+  });
 
-if (!allFilesExist) {
-  console.log('\n❌ 部分关键文件缺失！');
-  process.exit(1);
-}
-
-console.log('\n2. 检查 stickers.cjs 中的关键函数...');
-const stickersContent = fs.readFileSync('electron/services/stickers.cjs', 'utf8');
-const requiredFunctions = [
-  'startScreenshot',
-  'createSnipWindow',
-  'captureSelection',
-  'createStickerWindow',
-  'registerIpcHandlers'
-];
-
-for (const func of requiredFunctions) {
-  const exists = stickersContent.includes(`function ${func}`) || stickersContent.includes(`${func}:`);
-  console.log(`  ${exists ? '✅' : '❌'} ${func}`);
-}
-
-console.log('\n3. 检查 preload.cjs 中的 API 暴露...');
-const preloadContent = fs.readFileSync('electron/preload.cjs', 'utf8');
-const requiredApis = [
-  'completeSnipSelection',
-  'cancelSnip',
-  'getSticker',
-  'toggleStickerPin',
-  'copySticker',
-  'saveStickerAs',
-  'closeSticker',
-  'onStickerUpdated'
-];
-
-for (const api of requiredApis) {
-  const exists = preloadContent.includes(api);
-  console.log(`  ${exists ? '✅' : '❌'} ${api}`);
-}
-
-console.log('\n4. 检查 main.cjs 中的事件监听...');
-const mainContent = fs.readFileSync('electron/main.cjs', 'utf8');
-const requiredListeners = [
-  'start-screenshot',
-  'startScreenshot',
-  'stickerService'
-];
-
-for (const listener of requiredListeners) {
-  const exists = mainContent.includes(listener);
-  console.log(`  ${exists ? '✅' : '❌'} ${listener}`);
-}
-
-console.log('\n5. 检查 IPC 处理器注册...');
-const ipcHandlers = [
-  'snip-complete-selection',
-  'snip-cancel',
-  'sticker-get',
-  'sticker-toggle-pin',
-  'sticker-copy',
-  'sticker-save-as',
-  'sticker-close'
-];
-
-for (const handler of ipcHandlers) {
-  const exists = stickersContent.includes(`'${handler}'`) || stickersContent.includes(`"${handler}"`);
-  console.log(`  ${exists ? '✅' : '❌'} ${handler}`);
-}
-
-console.log('\n6. 检查 package.json 依赖...');
-const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-const electronVersion = packageJson.devDependencies?.electron || packageJson.dependencies?.electron;
-console.log(`  Electron 版本: ${electronVersion || '未找到'}`);
-
-if (!electronVersion) {
-  console.log('  ❌ Electron 未安装！');
-} else {
-  console.log('  ✅ Electron 已安装');
-}
-
-console.log('\n7. 检查存储目录结构...');
-const userDataPath = process.env.APPDATA || process.env.HOME;
-if (userDataPath) {
-  const stickerPath = path.join(userDataPath, 'TidyDesk', 'stickers');
-  const imagePath = path.join(stickerPath, 'images');
-  const statePath = path.join(stickerPath, 'stickers.json');
-  
-  console.log(`  存储路径: ${stickerPath}`);
-  console.log(`  ${fs.existsSync(stickerPath) ? '✅' : '⚠️'} stickers/ 目录 ${fs.existsSync(stickerPath) ? '存在' : '不存在（首次运行时会自动创建）'}`);
-  console.log(`  ${fs.existsSync(imagePath) ? '✅' : '⚠️'} images/ 目录 ${fs.existsSync(imagePath) ? '存在' : '不存在（首次运行时会自动创建）'}`);
-  console.log(`  ${fs.existsSync(statePath) ? '✅' : '⚠️'} stickers.json ${fs.existsSync(statePath) ? '存在' : '不存在（首次运行时会自动创建）'}`);
-  
-  if (fs.existsSync(statePath)) {
+  // 检查系统是否支持透明窗口
+  if (process.platform === 'win32') {
     try {
-      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      console.log(`  📊 当前贴纸数量: ${state.stickers?.length || 0}`);
+      const { systemPreferences } = require('electron');
+      if (systemPreferences.isAeroGlassEnabled) {
+        const isAeroEnabled = systemPreferences.isAeroGlassEnabled();
+        console.log('[DIAGNOSE] Windows Aero Glass enabled:', isAeroEnabled);
+      }
     } catch (err) {
-      console.log(`  ❌ stickers.json 格式错误: ${err.message}`);
+      console.log('[DIAGNOSE] Cannot check Aero Glass:', err.message);
     }
   }
-} else {
-  console.log('  ⚠️ 无法确定用户数据目录');
-}
 
-console.log('\n8. 检查 SnipOverlayApp 组件...');
-const snipContent = fs.readFileSync('src/modules/stickers/SnipOverlayApp.tsx', 'utf8');
-const snipChecks = [
-  'completeSnipSelection',
-  'cancelSnip',
-  'onMouseDown',
-  'onMouseMove',
-  'onMouseUp',
-  'Escape'
-];
+  // 创建测试窗口 1: 完全透明背景 + HTML 半透明覆盖层（模拟实际截屏窗口）
+  console.log('\n[DIAGNOSE] Creating test window 1: Transparent window with semi-transparent overlay...');
+  const testWindow1 = new BrowserWindow({
+    x: display.bounds.x + 100,
+    y: display.bounds.y + 100,
+    width: 800,
+    height: 600,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false
+    }
+  });
 
-for (const check of snipChecks) {
-  const exists = snipContent.includes(check);
-  console.log(`  ${exists ? '✅' : '❌'} ${check}`);
-}
+  testWindow1.setBackgroundColor('#00000000');
+  testWindow1.setOpacity(1.0);
 
-console.log('\n9. 检查 StickerApp 组件...');
-const stickerAppContent = fs.readFileSync('src/modules/stickers/StickerApp.tsx', 'utf8');
-const stickerAppChecks = [
-  'getSticker',
-  'toggleStickerPin',
-  'copySticker',
-  'saveStickerAs',
-  'closeSticker',
-  'onStickerUpdated'
-];
+  console.log('[DIAGNOSE] Test window 1 properties:', {
+    opacity: testWindow1.getOpacity(),
+    backgroundColor: testWindow1.getBackgroundColor(),
+    bounds: testWindow1.getBounds()
+  });
 
-for (const check of stickerAppChecks) {
-  const exists = stickerAppContent.includes(check);
-  console.log(`  ${exists ? '✅' : '❌'} ${check}`);
-}
+  // 加载测试 HTML（模拟 SnipOverlayApp）
+  const testHtml1 = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+          width: 100vw;
+          height: 100vh;
+          background-color: rgba(0, 0, 0, 0.18);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          font-family: system-ui, -apple-system, sans-serif;
+          color: white;
+          cursor: crosshair;
+          overflow: hidden;
+        }
+        .info {
+          background: rgba(0, 0, 0, 0.8);
+          padding: 20px 30px;
+          border-radius: 12px;
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          text-align: center;
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        h1 {
+          font-size: 24px;
+          margin-bottom: 10px;
+          font-weight: 600;
+        }
+        p {
+          font-size: 14px;
+          opacity: 0.9;
+          margin: 5px 0;
+        }
+        .success {
+          color: #4ade80;
+          font-weight: 600;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="info">
+        <h1>🎯 截屏窗口测试 1</h1>
+        <p>如果你能看到桌面内容（半透明黑色覆盖层）</p>
+        <p class="success">✅ 透明窗口工作正常</p>
+        <p style="margin-top: 15px; font-size: 12px; opacity: 0.7;">
+          背景色: rgba(0, 0, 0, 0.18)<br>
+          窗口透明: true<br>
+          按 Esc 关闭
+        </p>
+      </div>
+      <script>
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            window.close();
+          }
+        });
+        console.log('[TEST1] Window loaded');
+        console.log('[TEST1] Body background:', window.getComputedStyle(document.body).backgroundColor);
+      </script>
+    </body>
+    </html>
+  `;
 
-console.log('\n10. 检查 RailApp 中的截图按钮...');
-const railContent = fs.readFileSync('src/modules/rail/RailApp.tsx', 'utf8');
-const railChecks = [
-  'start-screenshot',
-  'Scissors',
-  'screenshot'
-];
+  testWindow1.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(testHtml1)}`);
 
-for (const check of railChecks) {
-  const exists = railContent.includes(check);
-  console.log(`  ${exists ? '✅' : '❌'} ${check}`);
-}
+  testWindow1.webContents.on('did-finish-load', () => {
+    console.log('[DIAGNOSE] Test window 1 loaded successfully');
+  });
 
-console.log('\n=== 诊断完成 ===\n');
+  testWindow1.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('[DIAGNOSE] Test window 1 failed to load:', errorCode, errorDescription);
+  });
 
-// 总结
-console.log('📋 诊断总结:');
-console.log('  - 如果所有检查都通过（✅），说明代码结构正常');
-console.log('  - 如果有失败项（❌），请检查对应的文件');
-console.log('  - 如果代码正常但功能不工作，请：');
-console.log('    1. 运行 npm run dev 并查看控制台日志');
-console.log('    2. 按 Ctrl+Alt+S 或点击截图按钮');
-console.log('    3. 查看是否有错误信息');
-console.log('    4. 参考 docs/development/SCREENSHOT_TROUBLESHOOTING.md');
-console.log('\n💡 提示: 如果是权限问题（macOS），需要授予屏幕录制权限');
-console.log('💡 提示: 如果是 Windows，通常不需要特殊权限');
-console.log('\n');
+  // 创建测试窗口 2: 使用 ARGB 背景色（备选方案）
+  setTimeout(() => {
+    console.log('\n[DIAGNOSE] Creating test window 2: ARGB background color...');
+    const testWindow2 = new BrowserWindow({
+      x: display.bounds.x + 150,
+      y: display.bounds.y + 150,
+      width: 800,
+      height: 600,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#2E000000',  // ARGB: 2E = 18% opacity
+      hasShadow: false,
+      alwaysOnTop: true,
+      skipTaskbar: true
+    });
+
+    console.log('[DIAGNOSE] Test window 2 properties:', {
+      opacity: testWindow2.getOpacity(),
+      backgroundColor: testWindow2.getBackgroundColor(),
+      bounds: testWindow2.getBounds()
+    });
+
+    const testHtml2 = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          * { margin: 0; padding: 0; }
+          body {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: system-ui;
+            color: white;
+          }
+          .info {
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px 30px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            text-align: center;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="info">
+          <h1>🎯 截屏窗口测试 2</h1>
+          <p>使用 ARGB 背景色</p>
+          <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">
+            backgroundColor: #2E000000<br>
+            按 Esc 关闭
+          </p>
+        </div>
+        <script>
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') window.close();
+          });
+        </script>
+      </body>
+      </html>
+    `;
+
+    testWindow2.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(testHtml2)}`);
+  }, 2000);
+
+  // 创建测试窗口 3: 使用 Canvas 渲染（备选方案）
+  setTimeout(() => {
+    console.log('\n[DIAGNOSE] Creating test window 3: Canvas rendering...');
+    const testWindow3 = new BrowserWindow({
+      x: display.bounds.x + 200,
+      y: display.bounds.y + 200,
+      width: 800,
+      height: 600,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      alwaysOnTop: true,
+      skipTaskbar: true
+    });
+
+    const testHtml3 = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          * { margin: 0; padding: 0; }
+          body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: transparent;
+          }
+          canvas {
+            display: block;
+            cursor: crosshair;
+          }
+          .info {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px 30px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            text-align: center;
+            font-family: system-ui;
+            pointer-events: none;
+          }
+        </style>
+      </head>
+      <body>
+        <canvas id="canvas"></canvas>
+        <div class="info">
+          <h1>🎯 截屏窗口测试 3</h1>
+          <p>使用 Canvas 渲染</p>
+          <p style="margin-top: 10px; font-size: 12px; opacity: 0.7;">
+            Canvas fillStyle: rgba(0, 0, 0, 0.18)<br>
+            按 Esc 关闭
+          </p>
+        </div>
+        <script>
+          const canvas = document.getElementById('canvas');
+          const ctx = canvas.getContext('2d');
+          
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          
+          // 绘制半透明黑色覆盖层
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          console.log('[TEST3] Canvas rendered');
+          
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') window.close();
+          });
+        </script>
+      </body>
+      </html>
+    `;
+
+    testWindow3.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(testHtml3)}`);
+  }, 4000);
+
+  console.log('\n[DIAGNOSE] All test windows created');
+  console.log('[DIAGNOSE] Instructions:');
+  console.log('  1. 检查是否能看到桌面内容（半透明覆盖层）');
+  console.log('  2. 如果看到全黑屏幕，说明透明窗口有问题');
+  console.log('  3. 按 Esc 关闭测试窗口');
+  console.log('  4. 按 Ctrl+C 退出诊断工具');
+  console.log('\n[DIAGNOSE] Waiting for user interaction...');
+});
+
+app.on('window-all-closed', () => {
+  console.log('[DIAGNOSE] All windows closed');
+  console.log('[DIAGNOSE] Diagnostics complete. Press Ctrl+C to exit.');
+});

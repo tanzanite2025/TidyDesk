@@ -89,12 +89,18 @@ function createStickerService({ app, electronDir }) {
     }
 
     const display = screen.getPrimaryDisplay();
-    console.log('[STICKER] Display bounds:', display.bounds);
+    console.log('[STICKER] Display info:', {
+      id: display.id,
+      bounds: display.bounds,
+      workArea: display.workArea,
+      scaleFactor: display.scaleFactor
+    });
+
     snipWindow = new BrowserWindow({
       ...display.bounds,
       frame: false,
       transparent: true,
-      backgroundColor: '#00000000',
+      backgroundColor: '#2E000000',  // ARGB: 2E = 18% opacity (46/255)
       hasShadow: false,
       alwaysOnTop: true,
       skipTaskbar: true,
@@ -106,14 +112,36 @@ function createStickerService({ app, electronDir }) {
       webPreferences: {
         preload: path.join(electronDir, 'preload.cjs'),
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        backgroundThrottling: false,  // 防止后台节流影响渲染
+        offscreen: false  // 确保使用正常渲染模式
       }
     });
 
-    console.log('[STICKER] Snip window created');
+    console.log('[STICKER] Snip window created with ARGB background');
+    
+    // 使用 ARGB 背景色，不需要额外设置
     snipWindow.setAlwaysOnTop(true, 'screen-saver');
+    
+    // 添加调试信息
+    console.log('[STICKER] Window properties:', {
+      opacity: snipWindow.getOpacity(),
+      backgroundColor: snipWindow.getBackgroundColor(),
+      bounds: snipWindow.getBounds()
+    });
+
     loadRenderer(snipWindow, 'snip');
     console.log('[STICKER] Snip window renderer loaded');
+    
+    // 添加加载完成事件监听
+    snipWindow.webContents.on('did-finish-load', () => {
+      console.log('[STICKER] Snip window content loaded');
+    });
+    
+    snipWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+      console.error('[STICKER] Snip window failed to load:', errorCode, errorDescription);
+    });
+    
     snipWindow.on('closed', () => {
       console.log('[STICKER] Snip window closed');
       snipWindow = null;

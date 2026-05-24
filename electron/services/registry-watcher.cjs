@@ -7,11 +7,15 @@ const Registry = require('winreg');
 const EventEmitter = require('events');
 
 class RegistryWatcher extends EventEmitter {
-  constructor() {
+  constructor(performanceCore = null) {
     super();
+    this.performanceCore = performanceCore;
     this.watchers = [];
     this.knownApps = new Map(); // appKey -> appName
     this.isRunning = false;
+    this.pendingChanges = new Map(); // 防抖：appKey -> timeout
+    this.debounceDelay = 2000; // 2 秒防抖
+    this.baseInterval = 30000; // 基础轮询间隔 30 秒
   }
 
   /**
@@ -71,12 +75,32 @@ class RegistryWatcher extends EventEmitter {
 
       console.log(`[TIDYDESK] Watching ${label} apps: ${initialApps.length} found`);
 
-      // 定期检查变化（每 5 秒）
+      // 定期检查变化（使用自适应间隔）
       const interval = setInterval(() => {
-        this.checkChanges(regKey, label).catch(err => {
-          console.error(`[TIDYDESK] Error checking ${label} registry:`, err.message);
-        });
-      }, 5000);
+        const adaptiveInterval = this.getAdaptiveInterval();
+        
+        // 如果降级级别为 2（重度降级），跳过检查
+        if (adaptiveInterval === 0) {
+          console.log(`[TIDYDESK] Registry check skipped (${label}) - heavy degradation`);
+          return;
+        }
+        
+        // 使用性能核心的节流管理器（如果可用）
+        if (this.performanceCore) {
+          this.performanceCore.throttleManager.throttle(
+            `registry-${label}`,
+            () => this.checkChanges(regKey, label),
+            this.debounceDelay
+          ).catch(err => {
+            console.error(`[TIDYDESK] Error checking ${label} registry:`, err.message);
+          });
+        } else {
+          // 降级：直接调用
+          this.checkChanges(regKey, label).catch(err => {
+            console.error(`[TIDYDESK] Error checking ${label} registry:`, err.message);
+          });
+        }
+      }, this.baseInterval);
 
       this.watchers.push({ regKey, interval, label });
     } catch (err) {
@@ -85,7 +109,7 @@ class RegistryWatcher extends EventEmitter {
   }
 
   /**
-   * 检查变化
+   * 检查变化（带防抖）
    */
   async checkChanges(regKey, label) {
     try {
@@ -96,7 +120,7 @@ class RegistryWatcher extends EventEmitter {
       for (const [appKey, appName] of currentMap) {
         if (!this.knownApps.has(appKey)) {
           console.log(`[TIDYDESK] App installed (${label}): ${appName || appKey}`);
-          this.emit('app-installed', { appKey, appName, label });
+          this.emitWithDebounce('app-installed', { appKey, appName, label });
           this.knownApps.set(appKey, appName);
         }
       }
@@ -105,7 +129,7 @@ class RegistryWatcher extends EventEmitter {
       for (const [appKey, appName] of this.knownApps) {
         if (!currentMap.has(appKey)) {
           console.log(`[TIDYDESK] App uninstalled (${label}): ${appName || appKey}`);
-          this.emit('app-uninstalled', { appKey, appName, label });
+          this.emitWithDebounce('app-uninstalled', { appKey, appName, label });
           this.knownApps.delete(appKey);
         }
       }
@@ -115,6 +139,26 @@ class RegistryWatcher extends EventEmitter {
         console.debug(`[TIDYDESK] Registry check error (${label}):`, err.message);
       }
     }
+  }
+
+  /**
+   * 带防抖的事件发射
+   */
+  emitWithDebounce(event, data) {
+    const key = `${event}-${data.appKey}`;
+    
+    // 清除之前的定时器
+    if (this.pendingChanges.has(key)) {
+      clearTimeout(this.pendingChanges.get(key));
+    }
+    
+    // 设置新的定时器
+    const timer = setTimeout(() => {
+      this.emit(event, data);
+      this.pendingChanges.delete(key);
+    }, this.debounceDelay);
+    
+    this.pendingChanges.set(key, timer);
   }
 
   /**
@@ -169,6 +213,28 @@ class RegistryWatcher extends EventEmitter {
   }
 
   /**
+   * 获取自适应轮询间隔（根据降级级别）
+   */
+  getAdaptiveInterval() {
+    if (!this.performanceCore) {
+      return this.baseInterval; // 30 秒
+    }
+    
+    const level = this.performanceCore.degradationLevel;
+    
+    switch (level) {
+      case 0: // 正常模式
+        return this.baseInterval; // 30 秒
+      case 1: // 轻度降级
+        return 60000; // 60 秒
+      case 2: // 重度降级
+        return 0; // 暂停
+      default:
+        return this.baseInterval;
+    }
+  }
+
+  /**
    * 停止监听
    */
   stop() {
@@ -178,13 +244,20 @@ class RegistryWatcher extends EventEmitter {
 
     console.log('[TIDYDESK] Stopping registry watcher...');
 
+    // 清理所有定时器
     this.watchers.forEach(({ interval, label }) => {
       clearInterval(interval);
       console.log(`[TIDYDESK] Stopped watching ${label} apps`);
     });
 
+    // 清理所有防抖定时器
+    for (const timer of this.pendingChanges.values()) {
+      clearTimeout(timer);
+    }
+
     this.watchers = [];
     this.knownApps.clear();
+    this.pendingChanges.clear();
     this.isRunning = false;
 
     console.log('[TIDYDESK] Registry watcher stopped');

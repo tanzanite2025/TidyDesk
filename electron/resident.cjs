@@ -12,6 +12,7 @@ let tray = null;
 let isQuitting = false;
 let memoryCheckInterval = null;
 let cacheCleanupInterval = null;
+let trayUpdateInterval = null; // 新增：托盘更新定时器
 
 /**
  * 初始化常驻机制
@@ -178,7 +179,7 @@ function createTray(handleWindow, drawerWindow, auxiliaryWindows = []) {
     });
     
     // 定期更新内存使用显示
-    setInterval(() => {
+    trayUpdateInterval = setInterval(() => {
       updateTrayMemoryUsage();
     }, 30000); // 每 30 秒更新一次
     
@@ -462,6 +463,11 @@ function cleanupResident() {
   if (cacheCleanupInterval) {
     clearInterval(cacheCleanupInterval);
     cacheCleanupInterval = null;
+  }
+  
+  if (trayUpdateInterval) {
+    clearInterval(trayUpdateInterval);
+    trayUpdateInterval = null;
   }
   
   // 销毁托盘图标

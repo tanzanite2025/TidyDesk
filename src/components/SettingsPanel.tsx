@@ -1,42 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import { X, Download, RefreshCw, Check, AlertCircle } from 'lucide-react';
+import { nativeClient } from '../native/native-client';
+import type { UpdateStatus, UpdateStatusPayload } from '../types/tidydesk-api';
 
-type UpdateStatus = 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error' | 'dev-mode' | null;
-
-interface UpdateInfo {
-  version?: string;
-  releaseDate?: string;
-  releaseNotes?: string;
-  percent?: number;
-  message?: string;
-}
+type UpdateInfo = Partial<UpdateStatusPayload>;
 
 interface SettingsPanelProps {
   onClose: () => void;
 }
 
-const tidyDeskApi = (window as any).tidyDesk;
+const nativeApi = nativeClient;
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [appVersion, setAppVersion] = useState<string>('');
   const [isPackaged, setIsPackaged] = useState<boolean>(false);
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({});
   const [isChecking, setIsChecking] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     // 获取应用版本
-    if (tidyDeskApi?.getAppVersion) {
-      tidyDeskApi.getAppVersion().then((info: any) => {
+    if (nativeApi.isAvailable()) {
+      nativeApi.updates.getAppVersion().then(info => {
         setAppVersion(info.version);
         setIsPackaged(info.isPackaged);
       });
     }
 
     // 监听更新状态
-    if (tidyDeskApi?.onUpdateStatus) {
-      const unsubscribe = tidyDeskApi.onUpdateStatus((payload: any) => {
+    if (nativeApi.isAvailable()) {
+      const unsubscribe = nativeApi.updates.onStatus(payload => {
         setUpdateStatus(payload.status);
         setUpdateInfo(payload);
         
@@ -55,16 +49,17 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
       return unsubscribe;
     }
+    return undefined;
   }, []);
 
   const handleCheckForUpdates = async () => {
-    if (!tidyDeskApi?.checkForUpdates) return;
+    if (!nativeApi.isAvailable()) return;
 
     setIsChecking(true);
     setUpdateStatus('checking');
     
     try {
-      const result = await tidyDeskApi.checkForUpdates();
+      const result = await nativeApi.updates.checkForUpdates();
       
       if (result.status === 'dev-mode') {
         setUpdateStatus('dev-mode');
@@ -79,10 +74,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   };
 
   const handleDownloadUpdate = async () => {
-    if (!tidyDeskApi?.downloadUpdate) return;
+    if (!nativeApi.isAvailable()) return;
 
     try {
-      await tidyDeskApi.downloadUpdate();
+      await nativeApi.updates.downloadUpdate();
     } catch (err) {
       setUpdateStatus('error');
       setUpdateInfo({ message: err instanceof Error ? err.message : String(err) });
@@ -90,11 +85,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   };
 
   const handleInstallUpdate = async () => {
-    if (!tidyDeskApi?.installUpdate) return;
+    if (!nativeApi.isAvailable()) return;
 
     if (confirm('应用将重启以安装更新。是否继续？')) {
       try {
-        await tidyDeskApi.installUpdate();
+        await nativeApi.updates.installUpdate();
       } catch (err) {
         setUpdateStatus('error');
         setUpdateInfo({ message: err instanceof Error ? err.message : String(err) });

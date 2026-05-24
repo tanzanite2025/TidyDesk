@@ -45,12 +45,23 @@ function createAppCacheService({ app }) {
       return cache;
     } catch (err) {
       console.warn('[TIDYDESK] Failed to load cache:', err.message);
+      
+      // 自动删除损坏的缓存文件
+      try {
+        if (fs.existsSync(CACHE_FILE)) {
+          await fs.promises.unlink(CACHE_FILE);
+          console.log('[TIDYDESK] Corrupted cache file deleted');
+        }
+      } catch (deleteErr) {
+        console.error('[TIDYDESK] Failed to delete corrupted cache:', deleteErr.message);
+      }
+      
       return null;
     }
   }
 
   /**
-   * 保存缓存
+   * 保存缓存（使用原子写入）
    * @param {Array} apps - 应用列表
    */
   async function saveCache(apps) {
@@ -63,11 +74,24 @@ function createAppCacheService({ app }) {
         apps
       };
 
-      await fs.promises.writeFile(
-        CACHE_FILE,
-        JSON.stringify(cache, null, 2),
-        'utf8'
-      );
+      const data = JSON.stringify(cache, null, 2);
+      
+      // 原子写入：先写临时文件，再重命名
+      const tempFile = CACHE_FILE + '.tmp';
+      await fs.promises.writeFile(tempFile, data, 'utf8');
+      
+      // 验证写入的文件是否有效
+      try {
+        const testData = await fs.promises.readFile(tempFile, 'utf8');
+        JSON.parse(testData); // 验证 JSON 格式
+      } catch (verifyErr) {
+        console.error('[TIDYDESK] Cache verification failed:', verifyErr.message);
+        await fs.promises.unlink(tempFile);
+        throw new Error('Cache verification failed');
+      }
+      
+      // 重命名（原子操作）
+      await fs.promises.rename(tempFile, CACHE_FILE);
 
       console.log(`[TIDYDESK] Saved cache with ${apps.length} apps`);
     } catch (err) {

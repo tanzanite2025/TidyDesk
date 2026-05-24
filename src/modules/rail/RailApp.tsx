@@ -1,17 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ListTodo, PackageOpen, PencilLine, Scissors } from 'lucide-react';
+import { nativeClient } from '../../native/native-client';
 import { TodoCounts } from '../../types/todo';
+import type { RailModule, WindowAction } from '../../types/tidydesk-api';
 
-type RailModule = 'files' | 'todos' | 'capture' | null;
-
-type TidyDeskRailApi = {
-  windowControl: (action: string) => void;
-  getTodoCounts?: () => Promise<TodoCounts>;
-  onTodoCountsUpdated?: (callback: (counts: TodoCounts) => void) => () => void;
-  onModuleState?: (callback: (payload: { activeModule: RailModule }) => void) => () => void;
-};
-
-const tidyDeskApi: TidyDeskRailApi | null = (window as any).tidyDesk || null;
+const nativeApi = nativeClient;
 
 function formatBadge(count: number) {
   if (count <= 0) return '';
@@ -23,10 +16,12 @@ export const RailApp: React.FC = () => {
   const [todoCounts, setTodoCounts] = useState<TodoCounts>({ total: 0, open: 0, done: 0 });
 
   useEffect(() => {
-    tidyDeskApi?.getTodoCounts?.().then(setTodoCounts).catch(() => undefined);
+    (nativeApi.isAvailable() ? nativeApi.todos.getCounts() : Promise.resolve({ total: 0, open: 0, done: 0 }))
+      .then(setTodoCounts)
+      .catch(() => undefined);
 
-    const unsubscribeCounts = tidyDeskApi?.onTodoCountsUpdated?.(setTodoCounts);
-    const unsubscribeModule = tidyDeskApi?.onModuleState?.(payload => {
+    const unsubscribeCounts = nativeApi.todos.onCountsUpdated(setTodoCounts);
+    const unsubscribeModule = nativeApi.windows.onModuleState(payload => {
       setActiveModule(payload.activeModule || null);
     });
 
@@ -36,11 +31,17 @@ export const RailApp: React.FC = () => {
     };
   }, []);
 
-  const openModule = (action: string) => {
-    tidyDeskApi?.windowControl(action);
+  const openModule = (action: WindowAction) => {
+    nativeApi.windows.control(action);
   };
 
-  const items = [
+  const items: Array<{
+    id: Exclude<RailModule, null> | 'screenshot';
+    title: string;
+    action: WindowAction;
+    icon: React.ReactNode;
+    badge?: string;
+  }> = [
     {
       id: 'files' as const,
       title: '文件抽屉',

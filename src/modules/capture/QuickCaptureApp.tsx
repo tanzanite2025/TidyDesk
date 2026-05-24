@@ -1,15 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Clipboard, Loader2, X } from 'lucide-react';
-import { CreateTodoCardInput, TodoState } from '../../types/todo';
+import { nativeClient } from '../../native/native-client';
 
-type TidyDeskCaptureApi = {
-  windowControl: (action: string) => void;
-  getClipboardText?: () => Promise<string>;
-  createTodoCard?: (payload: CreateTodoCardInput) => Promise<TodoState>;
-  onCaptureOpened?: (callback: (payload: { clipboardText?: string }) => void) => () => void;
-};
-
-const tidyDeskApi: TidyDeskCaptureApi | null = (window as any).tidyDesk || null;
+const nativeApi = nativeClient;
 
 function titleFromContent(content: string) {
   return content
@@ -26,14 +19,14 @@ export const QuickCaptureApp: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    tidyDeskApi?.getClipboardText?.().then(text => {
+    (nativeApi.isAvailable() ? nativeApi.clipboard.readText() : Promise.resolve('')).then(text => {
       if (text.trim()) {
         setContent(text);
         setTitle(titleFromContent(text));
       }
     }).catch(() => undefined);
 
-    return tidyDeskApi?.onCaptureOpened?.(payload => {
+    return nativeApi.capture.onOpened(payload => {
       const text = payload.clipboardText || '';
       setContent(text);
       setTitle(titleFromContent(text));
@@ -43,15 +36,17 @@ export const QuickCaptureApp: React.FC = () => {
 
   const derivedTitle = useMemo(() => title.trim() || titleFromContent(content), [content, title]);
 
-  const close = () => tidyDeskApi?.windowControl('close-panel');
+  const close = () => {
+    if (nativeApi.isAvailable()) nativeApi.windows.control('close-panel');
+  };
 
   const save = async () => {
-    if (!tidyDeskApi?.createTodoCard || (!title.trim() && !content.trim())) return;
+    if (!nativeApi.isAvailable() || (!title.trim() && !content.trim())) return;
 
     setIsSaving(true);
     setNotice(null);
     try {
-      await tidyDeskApi.createTodoCard({
+      await nativeApi.todos.createCard({
         title: derivedTitle,
         content: content.trim() ? content : `# ${derivedTitle}`,
         columnId: 'todo'

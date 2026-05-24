@@ -375,10 +375,10 @@ function createWindowService({ app, config, electronDir, isWindows11, onTodoPane
   }
 
   function createWindows() {
-    createDrawerWindow();
-    createTodoWindow();
-    createCaptureWindow();
     createHandleWindow();
+    createDrawerWindow();
+    // todoWindow 和 captureWindow 延迟创建（首次打开时）
+    // 这样可以减少启动时的进程数量和内存占用
     applyDrawerBounds(false, false);
   }
 
@@ -517,6 +517,12 @@ function createWindowService({ app, config, electronDir, isWindows11, onTodoPane
     }
 
     activeModule = 'capture';
+    
+    // 延迟创建 captureWindow
+    if (!captureWindow || captureWindow.isDestroyed()) {
+      createCaptureWindow();
+    }
+    
     if (handleWindow && !handleWindow.isDestroyed()) {
       animateWindowBounds(handleWindow, getHandleBounds(false), config.VALIDATION.ANIMATION_DURATION);
       handleWindow.setAlwaysOnTop(true);

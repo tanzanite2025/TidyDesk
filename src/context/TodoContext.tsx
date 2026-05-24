@@ -1,16 +1,8 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { nativeClient } from '../native/native-client';
 import { CreateTodoCardInput, MoveTodoCardInput, TodoBoard, TodoCard, TodoCounts, TodoState, UpdateTodoCardInput } from '../types/todo';
 
-type TidyDeskTodoApi = {
-  readTodoState: () => Promise<TodoState>;
-  createTodoCard: (payload: CreateTodoCardInput) => Promise<TodoState>;
-  updateTodoCard: (payload: UpdateTodoCardInput) => Promise<TodoState>;
-  deleteTodoCard: (cardId: string) => Promise<TodoState>;
-  moveTodoCard: (payload: MoveTodoCardInput) => Promise<TodoState>;
-  onTodoCountsUpdated?: (callback: (counts: TodoCounts) => void) => () => void;
-};
-
-const tidyDeskApi: TidyDeskTodoApi | null = (window as any).tidyDesk || null;
+const nativeApi = nativeClient;
 
 interface TodoContextType {
   board: TodoBoard | null;
@@ -100,7 +92,7 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [error, setError] = useState<string | null>(null);
 
   const refreshTodos = useCallback(async () => {
-    if (!tidyDeskApi) {
+    if (!nativeApi.isAvailable()) {
       applyTodoState(simulatedTodoState, setBoard, setCards, setCounts);
       return;
     }
@@ -108,7 +100,7 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(true);
     setError(null);
     try {
-      const state = await tidyDeskApi.readTodoState();
+      const state = await nativeApi.todos.readState();
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`读取待办失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -120,8 +112,8 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     refreshTodos();
 
-    if (!tidyDeskApi?.onTodoCountsUpdated) return undefined;
-    return tidyDeskApi.onTodoCountsUpdated(nextCounts => {
+    if (!nativeApi.isAvailable()) return undefined;
+    return nativeApi.todos.onCountsUpdated(nextCounts => {
       setCounts(nextCounts);
     });
   }, [refreshTodos]);
@@ -145,10 +137,10 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [board, cards]);
 
   const createCard = async (payload: CreateTodoCardInput): Promise<TodoCard | null> => {
-    if (!tidyDeskApi) return null;
+    if (!nativeApi.isAvailable()) return null;
 
     try {
-      const state = await tidyDeskApi.createTodoCard(payload);
+      const state = await nativeApi.todos.createCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
       return state.cards[state.cards.length - 1] || null;
     } catch (err) {
@@ -158,10 +150,10 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateCard = async (payload: UpdateTodoCardInput) => {
-    if (!tidyDeskApi) return;
+    if (!nativeApi.isAvailable()) return;
 
     try {
-      const state = await tidyDeskApi.updateTodoCard(payload);
+      const state = await nativeApi.todos.updateCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`保存待办失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -169,10 +161,10 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const deleteCard = async (cardId: string) => {
-    if (!tidyDeskApi) return;
+    if (!nativeApi.isAvailable()) return;
 
     try {
-      const state = await tidyDeskApi.deleteTodoCard(cardId);
+      const state = await nativeApi.todos.deleteCard(cardId);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`删除待办失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -180,10 +172,10 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const moveCard = async (payload: MoveTodoCardInput) => {
-    if (!tidyDeskApi) return;
+    if (!nativeApi.isAvailable()) return;
 
     try {
-      const state = await tidyDeskApi.moveTodoCard(payload);
+      const state = await nativeApi.todos.moveCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`移动待办失败: ${err instanceof Error ? err.message : String(err)}`);
