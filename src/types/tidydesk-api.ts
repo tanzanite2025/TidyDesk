@@ -18,6 +18,8 @@ export type WindowAction =
   | 'open-files'
   | 'open-todos'
   | 'open-capture'
+  | 'show-files-tab'
+  | 'show-capture-tab'
   | 'start-screenshot'
   | 'close-panel';
 

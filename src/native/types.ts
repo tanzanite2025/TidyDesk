@@ -1,7 +1,6 @@
 import type {
   AddAppToDrawerPayload,
   AppPickerTargetResult,
-  AppVersionInfo,
   CacheInfoResult,
   CaptureOpenedPayload,
   DesktopFilesResult,
@@ -23,10 +22,15 @@ import type {
   StickerPinResult,
   StickerUpdatedPayload,
   TargetFileEventPayload,
-  UpdateStatusPayload,
   TidyDeskSendChannel,
   WindowAction
 } from '../types/tidydesk-api';
+import type { UpdateMetadata, UpdateSnapshot } from '../types/update';
+import type {
+  CreateQuickNoteInput,
+  QuickNotesState,
+  UpdateQuickNoteInput
+} from '../types/quick-note';
 import type {
   CreateTodoCardInput,
   MoveTodoCardInput,
@@ -66,6 +70,13 @@ export interface NativeTodosClient {
   onCountsUpdated: (callback: (payload: TodoCounts) => void) => (() => void) | undefined;
 }
 
+export interface NativeQuickNotesClient {
+  readState: () => Promise<QuickNotesState>;
+  createNote: (payload: CreateQuickNoteInput) => Promise<QuickNotesState>;
+  updateNote: (payload: UpdateQuickNoteInput) => Promise<QuickNotesState>;
+  deleteNote: (noteId: string) => Promise<QuickNotesState>;
+}
+
 export interface NativeAppsClient {
   scanInstalled: () => Promise<InstalledAppsResult>;
   refresh: () => Promise<InstalledAppsResult>;
@@ -82,6 +93,11 @@ export interface NativeWindowsClient {
   getPathForFile: (file: File) => string;
   onDrawerState: (callback: (payload: DrawerStatePayload) => void) => (() => void) | undefined;
   onModuleState: (callback: (payload: ModuleStatePayload) => void) => (() => void) | undefined;
+}
+
+export interface NativeToolWindowsClient {
+  openTodo: () => Promise<unknown>;
+  closeTodo: () => Promise<unknown>;
 }
 
 export interface NativeClipboardClient {
@@ -104,11 +120,12 @@ export interface NativeStickersClient {
 }
 
 export interface NativeUpdatesClient {
-  getAppVersion: () => Promise<AppVersionInfo>;
-  checkForUpdates: () => Promise<UpdateStatusPayload>;
-  downloadUpdate: () => Promise<unknown>;
-  installUpdate: () => Promise<unknown>;
-  onStatus: (callback: (payload: UpdateStatusPayload) => void) => (() => void) | undefined;
+  getMetadata: () => Promise<UpdateMetadata>;
+  getState: () => Promise<UpdateSnapshot>;
+  check: () => Promise<UpdateSnapshot>;
+  download: () => Promise<UpdateSnapshot>;
+  install: () => Promise<UpdateSnapshot>;
+  onChange: (callback: (payload: UpdateSnapshot) => void) => (() => void) | undefined;
 }
 
 export interface NativeEventsClient {
@@ -121,8 +138,10 @@ export interface NativeClient {
   drawers: NativeDrawersClient;
   shortcuts: NativeShortcutsClient;
   todos: NativeTodosClient;
+  quickNotes: NativeQuickNotesClient;
   apps: NativeAppsClient;
   windows: NativeWindowsClient;
+  toolWindows: NativeToolWindowsClient;
   clipboard: NativeClipboardClient;
   capture: NativeCaptureClient;
   stickers: NativeStickersClient;

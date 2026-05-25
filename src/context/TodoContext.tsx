@@ -1,8 +1,6 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { nativeClient } from '../native/native-client';
+import type { NativeClient } from '../native/types';
 import { CreateTodoCardInput, MoveTodoCardInput, TodoBoard, TodoCard, TodoCounts, TodoState, UpdateTodoCardInput } from '../types/todo';
-
-const nativeApi = nativeClient;
 
 interface TodoContextType {
   board: TodoBoard | null;
@@ -84,7 +82,8 @@ function applyTodoState(state: TodoState, setBoard: (board: TodoBoard | null) =>
   setCounts(state.counts || emptyCounts);
 }
 
-export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient }> = ({ children, client }) => {
+  const nativeApi = useMemo(() => client, [client]);
   const [board, setBoard] = useState<TodoBoard | null>(null);
   const [cards, setCards] = useState<TodoCard[]>([]);
   const [counts, setCounts] = useState<TodoCounts>(emptyCounts);
@@ -107,16 +106,24 @@ export const TodoProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [nativeApi]);
 
   useEffect(() => {
-    refreshTodos();
+    const timer = window.setTimeout(() => {
+      void refreshTodos();
+    }, 0);
 
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [refreshTodos]);
+
+  useEffect(() => {
     if (!nativeApi.isAvailable()) return undefined;
     return nativeApi.todos.onCountsUpdated(nextCounts => {
       setCounts(nextCounts);
     });
-  }, [refreshTodos]);
+  }, [nativeApi]);
 
   const cardsByColumn = useMemo(() => {
     if (!board) return {};

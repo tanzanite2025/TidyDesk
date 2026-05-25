@@ -1,99 +1,49 @@
-import React, { useEffect, useState } from 'react';
+﻿import React from 'react';
 import { X, Download, RefreshCw, Check, AlertCircle } from 'lucide-react';
-import { nativeClient } from '../native/native-client';
-import type { UpdateStatus, UpdateStatusPayload } from '../types/tidydesk-api';
-
-type UpdateInfo = Partial<UpdateStatusPayload>;
+import { useUpdateManager } from '../services/updates/use-update-manager';
+import type { UpdateSnapshot } from '../types/update';
 
 interface SettingsPanelProps {
   onClose: () => void;
 }
 
-const nativeApi = nativeClient;
+function updateStatusTone(snapshot: UpdateSnapshot | null) {
+  if (!snapshot) return 'border-white/[0.08] bg-white/[0.04] text-slate-300';
+  if (snapshot.state === 'available') return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
+  if (snapshot.state === 'up-to-date' || snapshot.state === 'ready-to-install') {
+    return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
+  }
+  if (snapshot.state === 'error' || snapshot.state === 'unsupported') {
+    return 'border-amber-400/20 bg-amber-500/10 text-amber-100';
+  }
+  return 'border-white/[0.08] bg-white/[0.04] text-slate-300';
+}
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
-  const [appVersion, setAppVersion] = useState<string>('');
-  const [isPackaged, setIsPackaged] = useState<boolean>(false);
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({});
-  const [isChecking, setIsChecking] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  useEffect(() => {
-    // 获取应用版本
-    if (nativeApi.isAvailable()) {
-      nativeApi.updates.getAppVersion().then(info => {
-        setAppVersion(info.version);
-        setIsPackaged(info.isPackaged);
-      });
-    }
-
-    // 监听更新状态
-    if (nativeApi.isAvailable()) {
-      const unsubscribe = nativeApi.updates.onStatus(payload => {
-        setUpdateStatus(payload.status);
-        setUpdateInfo(payload);
-        
-        if (payload.status === 'checking') {
-          setIsChecking(true);
-        } else {
-          setIsChecking(false);
-        }
-        
-        if (payload.status === 'downloading') {
-          setIsDownloading(true);
-        } else if (payload.status === 'downloaded' || payload.status === 'error') {
-          setIsDownloading(false);
-        }
-      });
-
-      return unsubscribe;
-    }
-    return undefined;
-  }, []);
+  // 获取应用版本
+  // 监听更新状态
+  const {
+    metadata,
+    snapshot,
+    isReady,
+    isChecking,
+    isDownloading,
+    checkForUpdates,
+    downloadUpdate,
+    installUpdate
+  } = useUpdateManager();
 
   const handleCheckForUpdates = async () => {
-    if (!nativeApi.isAvailable()) return;
-
-    setIsChecking(true);
-    setUpdateStatus('checking');
-    
-    try {
-      const result = await nativeApi.updates.checkForUpdates();
-      
-      if (result.status === 'dev-mode') {
-        setUpdateStatus('dev-mode');
-        setUpdateInfo({ message: result.message });
-      }
-    } catch (err) {
-      setUpdateStatus('error');
-      setUpdateInfo({ message: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setIsChecking(false);
-    }
+    await checkForUpdates();
   };
 
   const handleDownloadUpdate = async () => {
-    if (!nativeApi.isAvailable()) return;
-
-    try {
-      await nativeApi.updates.downloadUpdate();
-    } catch (err) {
-      setUpdateStatus('error');
-      setUpdateInfo({ message: err instanceof Error ? err.message : String(err) });
-    }
+    await downloadUpdate();
   };
 
   const handleInstallUpdate = async () => {
-    if (!nativeApi.isAvailable()) return;
-
     if (confirm('应用将重启以安装更新。是否继续？')) {
-      try {
-        await nativeApi.updates.installUpdate();
-      } catch (err) {
-        setUpdateStatus('error');
-        setUpdateInfo({ message: err instanceof Error ? err.message : String(err) });
-      }
+      await installUpdate();
     }
   };
 
@@ -123,15 +73,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             <div className="space-y-2 rounded-lg border border-white/[0.08] bg-white/[0.04] p-4">
               <div className="flex justify-between text-[12px]">
                 <span className="text-slate-400">应用名称</span>
-                <span className="font-medium text-slate-100">TidyDesk</span>
+                <span className="font-medium text-slate-100">{metadata?.name || 'TidyDesk'}</span>
               </div>
               <div className="flex justify-between text-[12px]">
                 <span className="text-slate-400">当前版本</span>
-                <span className="font-medium text-slate-100">v{appVersion || '加载中...'}</span>
+                <span className="font-medium text-slate-100">v{metadata?.version || '加载中...'}</span>
               </div>
               <div className="flex justify-between text-[12px]">
                 <span className="text-slate-400">运行模式</span>
-                <span className="font-medium text-slate-100">{isPackaged ? '生产模式' : '开发模式'}</span>
+                <span className="font-medium text-slate-100">{metadata?.isPackaged ? '生产模式' : '开发模式'}</span>
+              </div>
+              <div className="flex justify-between text-[12px]">
+                <span className="text-slate-400">运行壳</span>
+                <span className="font-medium uppercase text-slate-100">{metadata?.runtime || '加载中...'}</span>
               </div>
             </div>
           </div>
@@ -141,80 +95,95 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             <h3 className="mb-3 text-[13px] font-semibold text-slate-200">软件更新</h3>
             
             {/* 更新状态显示 */}
-            {updateStatus && (
-              <div className={`mb-3 rounded-lg border p-3 text-[12px] ${
-                updateStatus === 'available' ? 'border-sky-400/20 bg-sky-500/10 text-sky-100' :
-                updateStatus === 'not-available' ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100' :
-                updateStatus === 'downloaded' ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100' :
-                updateStatus === 'error' || updateStatus === 'dev-mode' ? 'border-amber-400/20 bg-amber-500/10 text-amber-100' :
-                'border-white/[0.08] bg-white/[0.04] text-slate-300'
-              }`}>
-                {updateStatus === 'checking' && (
+            {(snapshot || !isReady) && (
+              <div className={`mb-3 rounded-lg border p-3 text-[12px] ${updateStatusTone(snapshot)}`}>
+                {!isReady && (
+                  <div className="flex items-center gap-2">
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>正在初始化更新服务...</span>
+                  </div>
+                )}
+
+                {snapshot?.state === 'checking' && (
                   <div className="flex items-center gap-2">
                     <RefreshCw size={14} className="animate-spin" />
                     <span>正在检查更新...</span>
                   </div>
                 )}
                 
-                {updateStatus === 'available' && (
+                {snapshot?.state === 'available' && (
                   <div>
                     <div className="flex items-center gap-2 font-semibold">
                       <AlertCircle size={14} />
-                      <span>发现新版本: v{updateInfo.version}</span>
+                      <span>发现新版本: v{snapshot.availableVersion || '新版本'}</span>
                     </div>
-                    {updateInfo.releaseNotes && (
+                    {snapshot.releaseNotes && (
                       <div className="mt-2 text-[11px] opacity-80">
-                        {updateInfo.releaseNotes}
+                        {snapshot.releaseNotes}
                       </div>
                     )}
                   </div>
                 )}
                 
-                {updateStatus === 'not-available' && (
+                {snapshot?.state === 'up-to-date' && (
                   <div className="flex items-center gap-2">
                     <Check size={14} />
                     <span>已是最新版本</span>
                   </div>
                 )}
                 
-                {updateStatus === 'downloading' && (
+                {snapshot?.state === 'downloading' && (
                   <div>
                     <div className="flex items-center gap-2">
                       <Download size={14} className="animate-bounce" />
-                      <span>正在下载更新... {updateInfo.percent?.toFixed(1)}%</span>
+                      <span>正在下载更新... {snapshot.percent?.toFixed(1)}%</span>
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.1]">
-                      <div 
+                      <div
                         className="h-full bg-sky-400 transition-all duration-300"
-                        style={{ width: `${updateInfo.percent || 0}%` }}
+                        style={{ width: `${snapshot.percent || 0}%` }}
                       />
                     </div>
                   </div>
                 )}
                 
-                {updateStatus === 'downloaded' && (
+                {snapshot?.state === 'ready-to-install' && (
                   <div className="flex items-center gap-2 font-semibold">
                     <Check size={14} />
                     <span>更新已下载，准备安装</span>
                   </div>
                 )}
+
+                {snapshot?.state === 'installing' && (
+                  <div className="flex items-center gap-2 font-semibold">
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span>正在准备安装更新...</span>
+                  </div>
+                )}
                 
-                {updateStatus === 'error' && (
+                {snapshot?.state === 'error' && (
                   <div>
                     <div className="flex items-center gap-2 font-semibold">
                       <AlertCircle size={14} />
                       <span>更新失败</span>
                     </div>
                     <div className="mt-1 text-[11px] opacity-80">
-                      {updateInfo.message}
+                      {snapshot.message}
                     </div>
                   </div>
                 )}
                 
-                {updateStatus === 'dev-mode' && (
+                {snapshot?.state === 'unsupported' && (
                   <div className="flex items-center gap-2">
                     <AlertCircle size={14} />
-                    <span>{updateInfo.message}</span>
+                    <span>{snapshot.message}</span>
+                  </div>
+                )}
+
+                {snapshot?.state === 'idle' && (
+                  <div className="flex items-center gap-2">
+                    <RefreshCw size={14} />
+                    <span>更新系统已就绪，可手动检查更新。</span>
                   </div>
                 )}
               </div>
@@ -222,7 +191,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
             {/* 操作按钮 */}
             <div className="flex gap-2">
-              {(!updateStatus || updateStatus === 'not-available' || updateStatus === 'error') && (
+              {snapshot?.canCheck && snapshot.state !== 'checking' && snapshot.state !== 'available' && snapshot.state !== 'downloading' && snapshot.state !== 'ready-to-install' && snapshot.state !== 'installing' && (
                 <button
                   type="button"
                   onClick={handleCheckForUpdates}
@@ -234,7 +203,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 </button>
               )}
               
-              {updateStatus === 'available' && (
+              {snapshot?.state === 'available' && snapshot.canDownload && (
                 <button
                   type="button"
                   onClick={handleDownloadUpdate}
@@ -246,7 +215,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 </button>
               )}
               
-              {updateStatus === 'downloaded' && (
+              {snapshot?.state === 'ready-to-install' && snapshot.canInstall && (
                 <button
                   type="button"
                   onClick={handleInstallUpdate}

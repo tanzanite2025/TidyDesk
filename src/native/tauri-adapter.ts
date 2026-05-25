@@ -1,5 +1,34 @@
 import type { NativeClient } from './types';
-import type { InstalledApp, InstalledAppsResult } from '../types/tidydesk-api';
+import type {
+  CreateQuickNoteInput,
+  QuickNotesState,
+  UpdateQuickNoteInput
+} from '../types/quick-note';
+import type {
+  CreateTodoCardInput,
+  MoveTodoCardInput,
+  TodoCounts,
+  TodoState,
+  UpdateTodoCardInput
+} from '../types/todo';
+import type {
+  DesktopFilesResult,
+  DrawerStatePayload,
+  InstalledApp,
+  InstalledAppsResult,
+  ModuleStatePayload,
+  RepairShortcutPayload,
+  RepairShortcutResult,
+  SnipRect,
+  StickerData,
+  StickerPinResult,
+  StickerUpdatedPayload,
+  TidyDeskSendChannel,
+  TargetFileEventPayload,
+  RestoreToDesktopResult
+} from '../types/tidydesk-api';
+import type { UpdateMetadata, UpdateSnapshot } from '../types/update';
+import type { ShortcutValidationStats } from '../types/tidydesk-api';
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -40,12 +69,27 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
   return (api.invoke as TauriInvoke)<T>(command, args);
 }
 
-function unavailable(feature: string): never {
-  throw new Error(`Tauri NativeClient feature is not implemented yet: ${feature}`);
+function onTauriEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+  import('@tauri-apps/api/event')
+    .then(api => api.listen<T>(eventName, event => callback(event.payload)))
+    .then(nextUnlisten => {
+      if (disposed) nextUnlisten();
+      else unlisten = nextUnlisten;
+    })
+    .catch(err => {
+      console.error(`[TIDYDESK] Failed to listen Tauri event "${eventName}":`, err);
+    });
+
+  return () => {
+    disposed = true;
+    unlisten?.();
+  };
 }
 
-function unsupportedPromise(feature: string): Promise<never> {
-  return Promise.reject(new Error(`Tauri NativeClient feature is not implemented yet: ${feature}`));
+function unavailable(feature: string): never {
+  throw new Error(`Tauri NativeClient feature is not implemented yet: ${feature}`);
 }
 
 async function scanInstalledAppsWithTargets(): Promise<InstalledAppsResult> {
@@ -64,35 +108,72 @@ async function scanInstalledAppsWithTargets(): Promise<InstalledAppsResult> {
   }
 }
 
+function normalizeModifiedAt(value: unknown): string {
+  if (typeof value === 'string' && Number.isNaN(Number(value)) && !Number.isNaN(Date.parse(value))) {
+    return value;
+  }
+
+  const timestamp = Number(value);
+  if (Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
+function normalizeDesktopFilesResult(result: DesktopFilesResult): DesktopFilesResult {
+  return {
+    ...result,
+    files: Array.isArray(result.files)
+      ? result.files.map(file => ({
+          ...file,
+          modifiedAt: normalizeModifiedAt(file.modifiedAt)
+        }))
+      : [],
+    folders: Array.isArray(result.folders)
+      ? result.folders.map(folder => ({
+          ...folder,
+          modifiedAt: normalizeModifiedAt(folder.modifiedAt)
+        }))
+      : []
+  };
+}
+
 export function createTauriNativeClient(): NativeClient {
   return {
     isAvailable: isTauriRuntime,
     files: {
-      readDesktopFiles: () => unsupportedPromise('files.readDesktopFiles'),
-      importExternalFiles: () => unsupportedPromise('files.importExternalFiles'),
-      open: () => unsupportedPromise('files.open'),
-      restoreToDesktop: () => unsupportedPromise('files.restoreToDesktop')
+      readDesktopFiles: async () => normalizeDesktopFilesResult(await invoke<DesktopFilesResult>('files_read_desktop_files')),
+      importExternalFiles: payload => invoke('files_import_external_files', { payload }),
+      open: filePath => invoke('files_open', { payload: { filePath } }),
+      restoreToDesktop: payload => invoke<RestoreToDesktopResult>('files_restore_to_desktop', { payload })
     },
     drawers: {
-      create: () => unsupportedPromise('drawers.create'),
-      renameItem: () => unsupportedPromise('drawers.renameItem'),
-      deleteItem: () => unsupportedPromise('drawers.deleteItem')
+      create: name => invoke('drawers_create', { name }),
+      renameItem: payload => invoke('drawers_rename_item', { payload }),
+      deleteItem: payload => invoke('drawers_delete_item', { payload })
     },
     shortcuts: {
-      validateAll: () => unsupportedPromise('shortcuts.validateAll'),
-      repair: () => unsupportedPromise('shortcuts.repair'),
-      onTargetFileDeleted: () => undefined,
-      onTargetFileRestored: () => undefined,
-      onValidated: () => undefined
+      validateAll: () => invoke<ShortcutValidationStats>('shortcuts_validate_all'),
+      repair: (payload: RepairShortcutPayload) => invoke<RepairShortcutResult>('shortcuts_repair', { payload }),
+      onTargetFileDeleted: callback => onTauriEvent<TargetFileEventPayload>('target-file-deleted', callback),
+      onTargetFileRestored: callback => onTauriEvent<TargetFileEventPayload>('target-file-restored', callback),
+      onValidated: callback => onTauriEvent<ShortcutValidationStats>('shortcuts-validated', callback)
     },
     todos: {
-      readState: () => unsupportedPromise('todos.readState'),
-      getCounts: () => unsupportedPromise('todos.getCounts'),
-      createCard: () => unsupportedPromise('todos.createCard'),
-      updateCard: () => unsupportedPromise('todos.updateCard'),
-      deleteCard: () => unsupportedPromise('todos.deleteCard'),
-      moveCard: () => unsupportedPromise('todos.moveCard'),
-      onCountsUpdated: () => undefined
+      readState: () => invoke<TodoState>('todos_read_state'),
+      getCounts: () => invoke<TodoCounts>('todos_get_counts'),
+      createCard: (payload: CreateTodoCardInput) => invoke<TodoState>('todos_create_card', { payload }),
+      updateCard: (payload: UpdateTodoCardInput) => invoke<TodoState>('todos_update_card', { payload }),
+      deleteCard: (cardId: string) => invoke<TodoState>('todos_delete_card', { card_id: cardId }),
+      moveCard: (payload: MoveTodoCardInput) => invoke<TodoState>('todos_move_card', { payload }),
+      onCountsUpdated: callback => onTauriEvent<TodoCounts>('todo-counts-updated', callback)
+    },
+    quickNotes: {
+      readState: () => invoke<QuickNotesState>('quick_notes_read_state'),
+      createNote: (payload: CreateQuickNoteInput) => invoke<QuickNotesState>('quick_notes_create_note', { payload }),
+      updateNote: (payload: UpdateQuickNoteInput) => invoke<QuickNotesState>('quick_notes_update_note', { payload }),
+      deleteNote: (noteId: string) => invoke<QuickNotesState>('quick_notes_delete_note', { noteId })
     },
     apps: {
       scanInstalled: scanInstalledAppsWithTargets,
@@ -122,43 +203,52 @@ export function createTauriNativeClient(): NativeClient {
           };
         }
       },
-      openPicker: () => invoke('open_app_picker_poc'),
+      openPicker: payload => invoke('open_app_picker_poc', { payload }),
       closePicker: () => invoke('close_app_picker_poc'),
-      getPickerTarget: async () => ({ targetFolder: '收纳抽屉' }),
-      onSetTargetFolder: () => undefined,
+      getPickerTarget: () => invoke('apps_get_picker_target'),
+      onSetTargetFolder: callback => onTauriEvent<string>('set-target-folder', callback),
       addToDrawer: payload => invoke('apps_add_to_drawer', { payload })
     },
     windows: {
-      control: () => undefined,
+      control: action => {
+        void invoke('windows_control', { payload: { action } });
+      },
       getPathForFile: () => unavailable('windows.getPathForFile'),
-      onDrawerState: () => undefined,
-      onModuleState: () => undefined
+      onDrawerState: callback => onTauriEvent<DrawerStatePayload>('drawer-state', callback),
+      onModuleState: callback => onTauriEvent<ModuleStatePayload>('module-state', callback)
+    },
+    toolWindows: {
+      openTodo: () => invoke('open_todo_window'),
+      closeTodo: () => invoke('close_todo_window')
     },
     clipboard: {
-      readText: () => unsupportedPromise('clipboard.readText')
+      readText: () => invoke<string>('clipboard_read_text')
     },
     capture: {
       onOpened: () => undefined,
-      completeSnipSelection: () => unsupportedPromise('capture.completeSnipSelection'),
-      cancelSnip: () => unsupportedPromise('capture.cancelSnip')
+      completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
+      cancelSnip: () => invoke('snip_cancel')
     },
     stickers: {
-      get: () => unsupportedPromise('stickers.get'),
-      togglePin: () => unsupportedPromise('stickers.togglePin'),
-      copy: () => unsupportedPromise('stickers.copy'),
-      saveAs: () => unsupportedPromise('stickers.saveAs'),
-      close: () => unsupportedPromise('stickers.close'),
-      onUpdated: () => undefined
+      get: (stickerId: string) => invoke<StickerData | null>('sticker_get', { sticker_id: stickerId }),
+      togglePin: (stickerId: string) => invoke<StickerPinResult>('sticker_toggle_pin', { sticker_id: stickerId }),
+      copy: (stickerId: string) => invoke('sticker_copy', { sticker_id: stickerId }),
+      saveAs: (stickerId: string) => invoke('sticker_save_as', { sticker_id: stickerId }),
+      close: (stickerId: string) => invoke('sticker_close', { sticker_id: stickerId }),
+      onUpdated: callback => onTauriEvent<StickerUpdatedPayload>('sticker-updated', callback)
     },
     updates: {
-      getAppVersion: async () => ({ version: 'tauri-poc', name: 'TidyDesk Tauri PoC', isPackaged: false }),
-      checkForUpdates: () => unsupportedPromise('updates.checkForUpdates'),
-      downloadUpdate: () => unsupportedPromise('updates.downloadUpdate'),
-      installUpdate: () => unsupportedPromise('updates.installUpdate'),
-      onStatus: () => undefined
+      getMetadata: () => invoke<UpdateMetadata>('updates_get_metadata'),
+      getState: () => invoke<UpdateSnapshot>('updates_get_state'),
+      check: () => invoke<UpdateSnapshot>('updates_check'),
+      download: () => invoke<UpdateSnapshot>('updates_download'),
+      install: () => invoke<UpdateSnapshot>('updates_install'),
+      onChange: callback => onTauriEvent<UpdateSnapshot>('updates-state', callback)
     },
     events: {
-      send: () => undefined
+      send: (channel: TidyDeskSendChannel) => {
+        void invoke('events_send', { payload: { channel } });
+      }
     }
   };
 }

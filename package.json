@@ -14,8 +14,13 @@
     "build:electron": "npm run build:sidecar && npm run build && electron-builder --win --publish never",
     "build:publish": "npm run build:sidecar && npm run build && electron-builder --win --publish always",
     "verify:packaged-sidecar": "node scripts/verify-packaged-sidecar.cjs",
-    "tauri:poc:dev": "npx --yes @tauri-apps/cli@2 dev",
-    "tauri:poc:build": "npx --yes @tauri-apps/cli@2 build"
+    "tauri:preflight": "node scripts/check-tauri-release-env.cjs",
+    "tauri:dev": "npx --yes @tauri-apps/cli@2 dev",
+    "tauri:build": "npm run tauri:preflight && npx --yes @tauri-apps/cli@2 build",
+    "tauri:manifest": "node scripts/generate-tauri-latest-json.cjs",
+    "tauri:release": "npm run tauri:build && npm run tauri:manifest",
+    "tauri:poc:dev": "npm run tauri:dev",
+    "tauri:poc:build": "npm run tauri:build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

@@ -1,24 +1,30 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "TidyDesk Tauri PoC",
-  "version": "0.1.0",
-  "identifier": "com.tidydesk.tauri-poc",
+  "productName": "TidyDesk",
+  "version": "../package.json",
+  "identifier": "com.tidydesk.app",
   "build": {
     "beforeDevCommand": "npm run prepare:tauri-sidecar && npm run dev",
     "beforeBuildCommand": "npm run prepare:tauri-sidecar && npm run build",
-    "devUrl": "http://localhost:3000?mode=tauri-poc",
+    "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "TidyDesk Tauri PoC",
+        "title": "TidyDesk",
         "width": 980,
         "height": 680,
-        "url": "index.html?mode=tauri-poc",
-        "resizable": true,
+        "url": "index.html?mode=drawer",
+        "resizable": false,
         "fullscreen": false,
-        "center": true
+        "center": false,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": false
       }
     ],
     "trayIcon": {
@@ -30,7 +36,8 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "nsis",
     "icon": [
       "../build/icon.ico"
