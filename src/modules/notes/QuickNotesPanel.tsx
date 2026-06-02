@@ -3,7 +3,6 @@ import { Clipboard, Copy, Loader2, NotebookPen, Pin, Plus, Save, Search, Star, T
 import { nativeClient } from '../../native/native-client';
 import type { QuickNote, QuickNotesState } from '../../types/quick-note';
 
-const nativeApi = nativeClient;
 type SortMode = 'updated' | 'created' | 'title';
 
 interface QuickNoteSection {
@@ -153,7 +152,7 @@ export const QuickNotesPanel: React.FC = () => {
   async function preloadClipboardDraft(mode: 'auto' | 'manual' = 'manual') {
     setIsImportingClipboard(true);
     try {
-      const text = (await nativeApi.clipboard.readText()).trim();
+      const text = (await nativeClient.clipboard.readText()).trim();
       if (!text) {
         if (mode === 'manual') {
           setNotice('当前剪贴板没有可用文本');
@@ -186,10 +185,10 @@ export const QuickNotesPanel: React.FC = () => {
       setIsLoading(true);
       setError(null);
       try {
-        const state = await nativeApi.quickNotes.readState();
+        const state = await nativeClient.quickNotes.readState();
         if (disposed) return;
         applyState(state, null);
-        const clipboardText = (await nativeApi.clipboard.readText().catch(() => '')).trim();
+        const clipboardText = (await nativeClient.clipboard.readText().catch(() => '')).trim();
         if (disposed || !clipboardText) return;
         setSelectedNoteId(null);
         setDraftTitle(titleFromContent(clipboardText));
@@ -242,8 +241,8 @@ export const QuickNotesPanel: React.FC = () => {
     setError(null);
     try {
       const state = selectedNoteId
-        ? await nativeApi.quickNotes.updateNote({ id: selectedNoteId, title, content, pinned: draftPinned, favorite: draftFavorite })
-        : await nativeApi.quickNotes.createNote({ title, content, pinned: draftPinned, favorite: draftFavorite });
+        ? await nativeClient.quickNotes.updateNote({ id: selectedNoteId, title, content, pinned: draftPinned, favorite: draftFavorite })
+        : await nativeClient.quickNotes.createNote({ title, content, pinned: draftPinned, favorite: draftFavorite });
       const nextSelectedId = selectedNoteId || state.notes[0]?.id || null;
       applyState(state, nextSelectedId);
       setNotice(selectedNoteId ? '记录已保存' : '记录已创建');
@@ -256,7 +255,7 @@ export const QuickNotesPanel: React.FC = () => {
 
   const removeNote = async (noteId: string) => {
     try {
-      const state = await nativeApi.quickNotes.deleteNote(noteId);
+      const state = await nativeClient.quickNotes.deleteNote(noteId);
       applyState(state, selectedNoteId === noteId ? null : selectedNoteId);
       setNotice('记录已删除');
       setError(null);

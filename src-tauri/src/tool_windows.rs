@@ -1,25 +1,29 @@
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, WindowEvent, WebviewWindow, WebviewWindowBuilder};
+use crate::shell::{
+    ShellState, apply_window_bounds, handle_window_bounds, set_handle_always_on_top,
+    shell_snapshot, update_shell_state, update_active_module, hide_drawer_window_now,
+    webview_url_for_mode,
+};
 
 const TODO_WINDOW_LABEL: &str = "todos";
 const TODO_MODULE_ID: &str = "todos";
 
 fn sync_todo_window_closed(app: &AppHandle) -> Result<(), String> {
-    let drawer_state = app.state::<crate::DrawerWindowState>();
-    let module_state = app.state::<crate::ModuleWindowState>();
-    let current = crate::shell_snapshot(&drawer_state, &module_state)?;
+    let shell = app.state::<ShellState>();
+    let current = shell_snapshot(&shell)?;
     let next_module = if current.active_module.as_deref() == Some(TODO_MODULE_ID) {
         None
     } else {
         current.active_module
     };
 
-    crate::apply_window_bounds(app, "handle", crate::handle_window_bounds(app, false)?)?;
+    apply_window_bounds(app, "handle", handle_window_bounds(app, false)?)?;
     if let Some(window) = app.get_webview_window("handle") {
         window.show().map_err(|err| err.to_string())?;
     }
-    crate::set_handle_always_on_top(app, true)?;
-    crate::update_shell_state(app, &drawer_state, &module_state, false, next_module)
+    set_handle_always_on_top(app, true)?;
+    update_shell_state(app, &shell, false, next_module)
 }
 
 fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
@@ -28,12 +32,10 @@ fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
             let _ = sync_todo_window_closed(&app);
         }
         WindowEvent::Focused(focused) if *focused => {
-            let drawer_state = app.state::<crate::DrawerWindowState>();
-            let module_state = app.state::<crate::ModuleWindowState>();
-            let _ = crate::update_active_module(
+            let shell = app.state::<ShellState>();
+            let _ = update_active_module(
                 &app,
-                &drawer_state,
-                &module_state,
+                &shell,
                 Some(TODO_MODULE_ID.to_string()),
             );
         }
@@ -46,7 +48,7 @@ fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, crate::webview_url_for_mode("tauri-todos")?)
+    let window = WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("tauri-todos")?)
         .title("TidyDesk Todos")
         .inner_size(980.0, 680.0)
         .resizable(true)
@@ -58,15 +60,14 @@ fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn show_todo_window(app: &AppHandle) -> Result<(), String> {
-    let drawer_state = app.state::<crate::DrawerWindowState>();
-    let module_state = app.state::<crate::ModuleWindowState>();
-    let current = crate::shell_snapshot(&drawer_state, &module_state)?;
+    let shell = app.state::<ShellState>();
+    let current = shell_snapshot(&shell)?;
     if current.active_module.as_deref() == Some(TODO_MODULE_ID) {
         close_todo_window_internal(app)?;
         return Ok(());
     }
 
-    crate::hide_drawer_window_now(app, &drawer_state, &module_state)?;
+    hide_drawer_window_now(app, &shell)?;
     if let Some(window) = app.get_webview_window("capture") {
         window.hide().map_err(|err| err.to_string())?;
     }
@@ -74,10 +75,9 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
         window.show().map_err(|err| err.to_string())?;
     }
-    crate::update_active_module(
+    update_active_module(
         app,
-        &drawer_state,
-        &module_state,
+        &shell,
         Some(TODO_MODULE_ID.to_string()),
     )
 }

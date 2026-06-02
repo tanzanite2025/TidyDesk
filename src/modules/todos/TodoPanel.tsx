@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bold, Check, CheckSquare, Edit3, Eye, Heading1, Italic, Link, List, Loader2, Plus, RefreshCw, Table2, Trash2, X } from 'lucide-react';
 import { TodoProvider, useTodos } from '../../context/TodoContext';
-import type { NativeClient } from '../../native/types';
+import { nativeClient } from '../../native/native-client';
 import { TodoCard, TodoColumn } from '../../types/todo';
 import { MarkdownPreview } from './MarkdownPreview';
 
@@ -74,8 +74,7 @@ const MarkdownToolbar: React.FC<{
   </div>
 );
 
-const TodoPanelInner: React.FC<{ client: NativeClient }> = ({ client }) => {
-  const nativeApi = client;
+const TodoPanelInner: React.FC = () => {
   const { board, cardsByColumn, counts, isLoading, error, refreshTodos, createCard, updateCard, deleteCard, moveCard, clearError } = useTodos();
   const [newCardTitle, setNewCardTitle] = useState('');
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -175,7 +174,7 @@ const TodoPanelInner: React.FC<{ client: NativeClient }> = ({ client }) => {
           <button type="button" onClick={refreshTodos} title="刷新" className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100">
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
           </button>
-          <button type="button" onClick={() => nativeApi.isAvailable() && void nativeApi.toolWindows.closeTodo()} title="关闭" className="rounded-md p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-200">
+          <button type="button" onClick={() => nativeClient.isAvailable() && void nativeClient.toolWindows.closeTodo()} title="关闭" className="rounded-md p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-200">
             <X size={14} />
           </button>
         </div>
@@ -301,8 +300,8 @@ const TodoPanelInner: React.FC<{ client: NativeClient }> = ({ client }) => {
   );
 };
 
-export const TodoPanelApp: React.FC<{ client: NativeClient }> = ({ client }) => (
-  <TodoProvider client={client}>
-    <TodoPanelInner client={client} />
+export const TodoPanelApp: React.FC = () => (
+  <TodoProvider client={nativeClient}>
+    <TodoPanelInner />
   </TodoProvider>
 );

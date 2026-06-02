@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search, X, Loader2, AppWindow, Globe, Code, FileText, MessageSquare, Play } from 'lucide-react';
 import { nativeClient } from '../native/native-client';
 import type { InstalledApp } from '../types/tidydesk-api';
@@ -13,51 +13,37 @@ interface AppPickerProps {
 
 export const AppPicker: React.FC<AppPickerProps> = ({ isOpen, onClose, onSelectApp, targetFolder }) => {
   const [apps, setApps] = useState<InstalledApp[]>([]);
-  const [filteredApps, setFilteredApps] = useState<InstalledApp[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
   useEffect(() => {
-    if (isOpen) {
-      loadApps();
-    }
+    if (!isOpen) return;
+    let disposed = false;
+    const loadApps = async () => {
+      setIsLoading(true);
+      try {
+        if (!nativeClient.isAvailable()) return;
+        const result = await nativeClient.apps.scanInstalled();
+        if (disposed) return;
+        if (result.success) {
+          setApps(result.apps);
+        }
+      } catch {
+        // error handled by finally
+      } finally {
+        if (!disposed) setIsLoading(false);
+      }
+    };
+    loadApps();
+    return () => { disposed = true; };
   }, [isOpen]);
 
-  useEffect(() => {
-    filterApps();
-  }, [searchQuery, selectedCategory, apps]);
-
-  const loadApps = async () => {
-    setIsLoading(true);
-    try {
-      const nativeApi = nativeClient;
-      if (!nativeApi.isAvailable()) {
-        console.error('[TIDYDESK] scanInstalledApps API not available');
-        return;
-      }
-
-      const result = await nativeApi.apps.scanInstalled();
-      if (result.success) {
-        setApps(result.apps);
-        setFilteredApps(result.apps);
-      }
-    } catch (err) {
-      console.error('[TIDYDESK] Failed to load apps:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const filterApps = () => {
+  const filteredApps = useMemo(() => {
     let filtered = apps;
-
-    // 按分类过滤
     if (selectedCategory !== 'all') {
       filtered = filtered.filter(app => app.category === selectedCategory);
     }
-
-    // 按搜索词过滤
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(app =>
@@ -65,9 +51,8 @@ export const AppPicker: React.FC<AppPickerProps> = ({ isOpen, onClose, onSelectA
         app.targetPath.toLowerCase().includes(query)
       );
     }
-
-    setFilteredApps(filtered);
-  };
+    return filtered;
+  }, [apps, searchQuery, selectedCategory]);
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
@@ -168,9 +153,9 @@ export const AppPicker: React.FC<AppPickerProps> = ({ isOpen, onClose, onSelectA
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-2">
-              {filteredApps.map((app, index) => (
+              {filteredApps.map((app) => (
                 <button
-                  key={index}
+                  key={app.shortcutPath}
                   onClick={() => onSelectApp(app)}
                   className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-left transition-all hover:bg-white/10 hover:border-white/20"
                 >

@@ -83,7 +83,6 @@ function applyTodoState(state: TodoState, setBoard: (board: TodoBoard | null) =>
 }
 
 export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient }> = ({ children, client }) => {
-  const nativeApi = useMemo(() => client, [client]);
   const [board, setBoard] = useState<TodoBoard | null>(null);
   const [cards, setCards] = useState<TodoCard[]>([]);
   const [counts, setCounts] = useState<TodoCounts>(emptyCounts);
@@ -91,7 +90,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   const [error, setError] = useState<string | null>(null);
 
   const refreshTodos = useCallback(async () => {
-    if (!nativeApi.isAvailable()) {
+    if (!client.isAvailable()) {
       applyTodoState(simulatedTodoState, setBoard, setCards, setCounts);
       return;
     }
@@ -99,14 +98,14 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     setIsLoading(true);
     setError(null);
     try {
-      const state = await nativeApi.todos.readState();
+      const state = await client.todos.readState();
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`读取待办失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsLoading(false);
     }
-  }, [nativeApi]);
+  }, [client]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -119,11 +118,11 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   }, [refreshTodos]);
 
   useEffect(() => {
-    if (!nativeApi.isAvailable()) return undefined;
-    return nativeApi.todos.onCountsUpdated(nextCounts => {
+    if (!client.isAvailable()) return undefined;
+    return client.todos.onCountsUpdated(nextCounts => {
       setCounts(nextCounts);
     });
-  }, [nativeApi]);
+  }, [client]);
 
   const cardsByColumn = useMemo(() => {
     if (!board) return {};
@@ -144,10 +143,10 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   }, [board, cards]);
 
   const createCard = async (payload: CreateTodoCardInput): Promise<TodoCard | null> => {
-    if (!nativeApi.isAvailable()) return null;
+    if (!client.isAvailable()) return null;
 
     try {
-      const state = await nativeApi.todos.createCard(payload);
+      const state = await client.todos.createCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
       return state.cards[state.cards.length - 1] || null;
     } catch (err) {
@@ -157,10 +156,10 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   };
 
   const updateCard = async (payload: UpdateTodoCardInput) => {
-    if (!nativeApi.isAvailable()) return;
+    if (!client.isAvailable()) return;
 
     try {
-      const state = await nativeApi.todos.updateCard(payload);
+      const state = await client.todos.updateCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`保存待办失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -168,10 +167,10 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   };
 
   const deleteCard = async (cardId: string) => {
-    if (!nativeApi.isAvailable()) return;
+    if (!client.isAvailable()) return;
 
     try {
-      const state = await nativeApi.todos.deleteCard(cardId);
+      const state = await client.todos.deleteCard(cardId);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`删除待办失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -179,10 +178,10 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   };
 
   const moveCard = async (payload: MoveTodoCardInput) => {
-    if (!nativeApi.isAvailable()) return;
+    if (!client.isAvailable()) return;
 
     try {
-      const state = await nativeApi.todos.moveCard(payload);
+      const state = await client.todos.moveCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
     } catch (err) {
       setError(`移动待办失败: ${err instanceof Error ? err.message : String(err)}`);

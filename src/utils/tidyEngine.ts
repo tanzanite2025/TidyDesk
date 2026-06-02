@@ -4,13 +4,13 @@ import { TidyFile, FileCategory, DesktopHealthInfo } from '../types/file';
  * 依据后缀智能判定文件类别
  */
 export function getCategoryByExtension(ext: string, fileName: string): FileCategory {
-  const nameLower = fileName.toLowerCase();
-  const extLower = ext.toLowerCase().replace('.', '');
-
   // [FAIL LOUDLY] 防静默失效：如果文件名完全为空，强制抛出错误
   if (!fileName) {
     throw new Error("[CRITICAL] getCategoryByExtension received an empty fileName. Fatal input validation failure.");
   }
+
+  const nameLower = fileName.toLowerCase();
+  const extLower = ext.toLowerCase().replace('.', '');
 
   // 临时文件标记
   if (
@@ -26,7 +26,7 @@ export function getCategoryByExtension(ext: string, fileName: string): FileCateg
   const images = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp', 'ico'];
   if (images.includes(extLower)) return 'image';
 
-  const documents = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf', 'txt', 'csv', 'md', 'pdf', 'key', 'numbers', 'pages'];
+  const documents = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf', 'txt', 'csv', 'md', 'key', 'numbers', 'pages'];
   if (documents.includes(extLower)) return 'document';
 
   const archives = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2'];

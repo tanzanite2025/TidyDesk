@@ -8,7 +8,6 @@ import {
   createInstallingUpdateSnapshot
 } from '../../types/update';
 
-const nativeApi = nativeClient;
 
 interface UpdateManagerState {
   metadata: UpdateMetadata | null;
@@ -26,8 +25,8 @@ export function useUpdateManager() {
 
     const load = async () => {
       try {
-        const nextMetadata = await nativeApi.updates.getMetadata();
-        const nextSnapshot = await nativeApi.updates.getState().catch(err => (
+        const nextMetadata = await nativeClient.updates.getMetadata();
+        const nextSnapshot = await nativeClient.updates.getState().catch(err => (
           createErrorUpdateSnapshot(nextMetadata, err instanceof Error ? err.message : String(err))
         ));
 
@@ -56,7 +55,7 @@ export function useUpdateManager() {
       }
     };
 
-    const unsubscribe = nativeApi.updates.onChange(payload => {
+    const unsubscribe = nativeClient.updates.onChange(payload => {
       if (disposed) return;
       setState(current => ({
         metadata: current.metadata,
@@ -106,21 +105,21 @@ export function useUpdateManager() {
   const checkForUpdates = useCallback(async () => {
     await runWithPendingState(
       current => createCheckingUpdateSnapshot(current),
-      () => nativeApi.updates.check()
+      () => nativeClient.updates.check()
     );
   }, [runWithPendingState]);
 
   const downloadUpdate = useCallback(async () => {
     await runWithPendingState(
       current => createDownloadingUpdateSnapshot(current),
-      () => nativeApi.updates.download()
+      () => nativeClient.updates.download()
     );
   }, [runWithPendingState]);
 
   const installUpdate = useCallback(async () => {
     await runWithPendingState(
       current => createInstallingUpdateSnapshot(current),
-      () => nativeApi.updates.install()
+      () => nativeClient.updates.install()
     );
   }, [runWithPendingState]);
 

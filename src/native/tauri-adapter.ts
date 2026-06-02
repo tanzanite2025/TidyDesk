@@ -12,6 +12,7 @@ import type {
   UpdateTodoCardInput
 } from '../types/todo';
 import type {
+  CaptureOpenedPayload,
   DesktopFilesResult,
   DrawerStatePayload,
   InstalledApp,
@@ -211,7 +212,7 @@ export function createTauriNativeClient(): NativeClient {
     },
     windows: {
       control: action => {
-        void invoke('windows_control', { payload: { action } });
+        invoke('windows_control', { payload: { action } }).catch(() => {});
       },
       getPathForFile: () => unavailable('windows.getPathForFile'),
       onDrawerState: callback => onTauriEvent<DrawerStatePayload>('drawer-state', callback),
@@ -225,7 +226,7 @@ export function createTauriNativeClient(): NativeClient {
       readText: () => invoke<string>('clipboard_read_text')
     },
     capture: {
-      onOpened: () => undefined,
+      onOpened: callback => onTauriEvent<CaptureOpenedPayload>('capture-opened', callback),
       completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
       cancelSnip: () => invoke('snip_cancel')
     },
@@ -247,7 +248,7 @@ export function createTauriNativeClient(): NativeClient {
     },
     events: {
       send: (channel: TidyDeskSendChannel) => {
-        void invoke('events_send', { payload: { channel } });
+        invoke('events_send', { payload: { channel } }).catch(() => {});
       }
     }
   };

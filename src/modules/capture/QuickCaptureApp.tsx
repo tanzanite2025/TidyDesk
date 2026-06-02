@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Clipboard, Loader2, X } from 'lucide-react';
 import { nativeClient } from '../../native/native-client';
 
-const nativeApi = nativeClient;
 
 function titleFromContent(content: string) {
   return content
@@ -19,14 +18,14 @@ export const QuickCaptureApp: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    (nativeApi.isAvailable() ? nativeApi.clipboard.readText() : Promise.resolve('')).then(text => {
+    (nativeClient.isAvailable() ? nativeClient.clipboard.readText() : Promise.resolve('')).then(text => {
       if (text.trim()) {
         setContent(text);
         setTitle(titleFromContent(text));
       }
     }).catch(() => undefined);
 
-    return nativeApi.capture.onOpened(payload => {
+    return nativeClient.capture.onOpened(payload => {
       const text = payload.clipboardText || '';
       setContent(text);
       setTitle(titleFromContent(text));
@@ -37,16 +36,16 @@ export const QuickCaptureApp: React.FC = () => {
   const derivedTitle = useMemo(() => title.trim() || titleFromContent(content), [content, title]);
 
   const close = () => {
-    if (nativeApi.isAvailable()) nativeApi.windows.control('close-panel');
+    if (nativeClient.isAvailable()) nativeClient.windows.control('close-panel');
   };
 
   const save = async () => {
-    if (!nativeApi.isAvailable() || (!title.trim() && !content.trim())) return;
+    if (!nativeClient.isAvailable() || (!title.trim() && !content.trim())) return;
 
     setIsSaving(true);
     setNotice(null);
     try {
-      await nativeApi.todos.createCard({
+      await nativeClient.todos.createCard({
         title: derivedTitle,
         content: content.trim() ? content : `# ${derivedTitle}`,
         columnId: 'todo'

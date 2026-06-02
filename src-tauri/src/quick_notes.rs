@@ -103,11 +103,11 @@ fn sort_quick_notes(notes: &mut [QuickNote]) {
 }
 
 fn quick_notes_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(crate::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME))
+    Ok(crate::files::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME))
 }
 
 fn ensure_quick_notes_storage(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(crate::file_storage_root(app)?)
+    fs::create_dir_all(crate::files::file_storage_root(app)?)
         .map_err(|err| format!("failed to create quick notes storage root: {err}"))
 }
 

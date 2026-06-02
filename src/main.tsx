@@ -14,12 +14,8 @@ async function resolveAppComponent(): Promise<ComponentType> {
     return (await import('./AppPickerApp.tsx')).AppPickerApp;
   }
 
-  if (mode === 'tauri-poc') {
-    return (await import('./TauriPocApp.tsx')).TauriPocApp;
-  }
-
   if (mode === 'tauri-todos') {
-    return (await import('./TauriTodoApp.tsx')).TauriTodoApp;
+    return (await import('./modules/todos/TodoPanel')).TodoPanelApp;
   }
 
   return (await import('./App.tsx')).default;

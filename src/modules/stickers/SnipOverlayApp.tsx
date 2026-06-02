@@ -4,7 +4,6 @@ import { nativeClient } from '../../native/native-client';
 type Point = { x: number; y: number };
 type Rect = { x: number; y: number; width: number; height: number };
 
-const nativeApi = nativeClient;
 
 function rectFromPoints(start: Point, end: Point): Rect {
   const x = Math.min(start.x, end.x);
@@ -25,28 +24,14 @@ export const SnipOverlayApp: React.FC = () => {
   }, [startPoint, endPoint]);
 
   useEffect(() => {
-    // 调试信息：检查组件是否正确加载
-    console.log('[SNIP] SnipOverlayApp mounted');
-    console.log('[SNIP] Window size:', window.innerWidth, 'x', window.innerHeight);
-    console.log('[SNIP] Device pixel ratio:', window.devicePixelRatio);
-    
-    // 检查背景色是否正确应用
-    const rootElement = document.querySelector('.snip-overlay-root');
-    if (rootElement) {
-      const computedStyle = window.getComputedStyle(rootElement);
-      console.log('[SNIP] Root element background:', computedStyle.backgroundColor);
-    }
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        console.log('[SNIP] Escape pressed, canceling snip');
-        nativeApi.isAvailable() && nativeApi.capture.cancelSnip();
+        nativeClient.isAvailable() && nativeClient.capture.cancelSnip();
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => {
-      console.log('[SNIP] SnipOverlayApp unmounted');
       window.removeEventListener('keydown', onKeyDown);
     };
   }, []);
@@ -54,14 +39,14 @@ export const SnipOverlayApp: React.FC = () => {
   const completeSelection = async (rect: Rect) => {
     if (isCapturing) return;
     if (rect.width < 8 || rect.height < 8) {
-      nativeApi.isAvailable() && nativeApi.capture.cancelSnip();
+      nativeClient.isAvailable() && nativeClient.capture.cancelSnip();
       return;
     }
 
     setIsCapturing(true);
     try {
-      if (nativeApi.isAvailable()) {
-        await nativeApi.capture.completeSnipSelection(rect);
+      if (nativeClient.isAvailable()) {
+        await nativeClient.capture.completeSnipSelection(rect);
       }
     } finally {
       setIsCapturing(false);
@@ -75,7 +60,6 @@ export const SnipOverlayApp: React.FC = () => {
       onMouseDown={event => {
         if (isCapturing) return;
         const point = { x: event.clientX, y: event.clientY };
-        console.log('[SNIP] Mouse down at:', point);
         setStartPoint(point);
         setEndPoint(point);
       }}
@@ -85,7 +69,6 @@ export const SnipOverlayApp: React.FC = () => {
       }}
       onMouseUp={() => {
         if (!selection) return;
-        console.log('[SNIP] Selection complete:', selection);
         completeSelection(selection);
       }}
     >

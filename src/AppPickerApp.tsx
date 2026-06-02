@@ -1,12 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, X, Loader2, AppWindow, Globe, Code, FileText, MessageSquare, Play, RefreshCw } from 'lucide-react';
 import { nativeClient } from './native/native-client';
 import type { AppCacheInfo, InstalledApp } from './types/tidydesk-api';
 
 
 export const AppPickerApp: React.FC = () => {
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const [apps, setApps] = useState<InstalledApp[]>([]);
-  const [filteredApps, setFilteredApps] = useState<InstalledApp[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -16,24 +17,42 @@ export const AppPickerApp: React.FC = () => {
   const [notice, setNotice] = useState<string>('');
   const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
   const isTauriAppPickerPoc = cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
-  const isTauriMetadataOnly = cacheInfo?.source === 'tauri-sidecar-metadata';
-  const isTauriTargetAware = cacheInfo?.source === 'tauri-sidecar-target-aware';
 
   useEffect(() => {
-    loadTargetFolder();
-    loadApps();
-    loadCacheInfo();
+    const init = async () => {
+      await loadTargetFolder();
+      await loadApps();
+      await loadCacheInfo();
+    };
+    init();
   }, []);
 
   useEffect(() => {
-    filterApps();
-  }, [searchQuery, selectedCategory, apps]);
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  const filteredApps = useMemo(() => {
+    let filtered = apps;
+    if (selectedCategory !== 'all') {
+      filtered = filtered.filter(app => app.category === selectedCategory);
+    }
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(app =>
+        app.name.toLowerCase().includes(query) ||
+        app.targetPath.toLowerCase().includes(query)
+      );
+    }
+    return filtered;
+  }, [apps, searchQuery, selectedCategory]);
 
   // 监听目标文件夹设置
   useEffect(() => {
-    const nativeApi = nativeClient;
-    if (nativeApi.isAvailable()) {
-      const unsubscribe = nativeApi.apps.onSetTargetFolder((folder: string) => {
+    if (nativeClient.isAvailable()) {
+      const unsubscribe = nativeClient.apps.onSetTargetFolder((folder: string) => {
         setTargetFolder(folder);
       });
       return unsubscribe;
@@ -43,96 +62,60 @@ export const AppPickerApp: React.FC = () => {
 
   const loadTargetFolder = async () => {
     try {
-      const nativeApi = nativeClient;
-      if (!nativeApi.isAvailable()) {
-        console.error('[TIDYDESK] getAppPickerTarget API not available');
-        return;
-      }
-
-      const result = await nativeApi.apps.getPickerTarget();
+      if (!nativeClient.isAvailable()) return;
+      const result = await nativeClient.apps.getPickerTarget();
       if (result.targetFolder) {
         setTargetFolder(result.targetFolder);
       }
-    } catch (err) {
-      console.error('[TIDYDESK] Failed to load target folder:', err);
+    } catch {
+      // target folder is optional
     }
   };
 
   const loadCacheInfo = async () => {
     try {
-      const nativeApi = nativeClient;
-      if (nativeApi.isAvailable()) {
-        const result = await nativeApi.apps.getCacheInfo();
-        if (result.success) {
-          setCacheInfo(result.info ?? null);
-        }
+      if (!nativeClient.isAvailable()) return;
+      const result = await nativeClient.apps.getCacheInfo();
+      if (result.success) {
+        setCacheInfo(result.info ?? null);
       }
-    } catch (err) {
-      console.error('[TIDYDESK] Failed to load cache info:', err);
+    } catch {
+      // cache info is optional
     }
   };
 
   const loadApps = async () => {
     setIsLoading(true);
     try {
-      const nativeApi = nativeClient;
-      if (!nativeApi.isAvailable()) {
-        console.error('[TIDYDESK] scanInstalledApps API not available');
-        return;
-      }
-
-      const result = await nativeApi.apps.scanInstalled();
+      if (!nativeClient.isAvailable()) return;
+      const result = await nativeClient.apps.scanInstalled();
       if (result.success) {
         setApps(result.apps);
-        setFilteredApps(result.apps);
       }
-    } catch (err) {
-      console.error('[TIDYDESK] Failed to load apps:', err);
+    } catch {
       setError('加载应用列表失败');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const filterApps = () => {
-    let filtered = apps;
-
-    // 按分类过滤
-    if (selectedCategory !== 'all') {
-      filtered = filtered.filter(app => app.category === selectedCategory);
-    }
-
-    // 按搜索词过滤
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(app =>
-        app.name.toLowerCase().includes(query) ||
-        app.targetPath.toLowerCase().includes(query)
-      );
-    }
-
-    setFilteredApps(filtered);
-  };
-
   const handleRefresh = async () => {
     setIsRefreshing(true);
     setError('');
     try {
-      const nativeApi = nativeClient;
-      if (!nativeApi.isAvailable()) {
+      if (!nativeClient.isAvailable()) {
         setError('刷新功能不可用');
         return;
       }
 
-      const result = await nativeApi.apps.refresh();
+      const result = await nativeClient.apps.refresh();
       if (result.success) {
         setApps(result.apps);
-        setFilteredApps(result.apps);
         setNotice('应用列表已刷新');
         await loadCacheInfo();
         
         // 清除成功提示
-        setTimeout(() => setNotice(''), 3000);
+        noticeTimerRef.current = setTimeout(() => setNotice(''), 3000);
       } else {
         setError('刷新失败');
       }
@@ -145,19 +128,12 @@ export const AppPickerApp: React.FC = () => {
 
   const handleSelectApp = async (app: InstalledApp) => {
     try {
-      if (isTauriMetadataOnly) {
-        setNotice(`Tauri PoC 当前只验证应用扫描与 target 解析，暂不添加应用: ${app.name}`);
-        setTimeout(() => setNotice(''), 3000);
-        return;
-      }
-
-      const nativeApi = nativeClient;
-      if (!nativeApi.isAvailable()) {
+      if (!nativeClient.isAvailable()) {
         setError('添加应用功能不可用');
         return;
       }
 
-      await nativeApi.apps.addToDrawer({
+      await nativeClient.apps.addToDrawer({
         shortcutPath: app.shortcutPath,
         targetFolder: targetFolder
       });
@@ -165,7 +141,7 @@ export const AppPickerApp: React.FC = () => {
       setNotice(`已添加应用: ${app.name}`);
       
       // 延迟关闭窗口，让用户看到成功提示
-      setTimeout(() => {
+      closeTimerRef.current = setTimeout(() => {
         handleClose();
       }, 1000);
     } catch (err) {
@@ -175,12 +151,11 @@ export const AppPickerApp: React.FC = () => {
 
   const handleClose = async () => {
     try {
-      const nativeApi = nativeClient;
-      if (nativeApi.isAvailable()) {
-        await nativeApi.apps.closePicker();
+      if (nativeClient.isAvailable()) {
+        await nativeClient.apps.closePicker();
       }
-    } catch (err) {
-      console.error('[TIDYDESK] Failed to close app picker:', err);
+    } catch {
+      // close failure is non-critical
     }
   };
 
@@ -236,7 +211,7 @@ export const AppPickerApp: React.FC = () => {
           <h2 className="text-lg font-semibold text-slate-100">{isTauriAppPickerPoc ? 'AppPicker Tauri PoC' : '添加应用'}</h2>
           <p className="text-xs text-slate-500 mt-0.5">
             {isTauriAppPickerPoc
-              ? '验证 Go sidecar 扫描、Tauri target 解析与添加到抽屉，暂不提取 icon'
+              ? 'Tauri AppPicker：扫描应用并添加到抽屉'
               : `选择要添加到 "${targetFolder || '...'}" 的应用`}
           </p>
         </div>
@@ -251,9 +226,7 @@ export const AppPickerApp: React.FC = () => {
 
       {isTauriAppPickerPoc && (
         <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-6 py-3 text-xs text-cyan-100">
-          {isTauriTargetAware
-            ? `Tauri add-to-drawer PoC：targetPath 由 Rust 解析，点击条目会复制快捷方式到 "${targetFolder || '收纳抽屉'}"。`
-            : 'Tauri metadata-only PoC：列表来自 Go sidecar `apps.scanMetadata`，点击条目不会执行添加动作。'}
+          Tauri AppPicker：targetPath 由 Rust 解析，点击条目会复制快捷方式到 "{targetFolder || '收纳抽屉'}"。
         </div>
       )}
 
@@ -315,9 +288,9 @@ export const AppPickerApp: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-2">
-            {filteredApps.map((app, index) => (
+            {filteredApps.map((app) => (
               <button
-                key={index}
+                key={app.shortcutPath}
                 onClick={() => handleSelectApp(app)}
                 className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-left transition-all hover:bg-white/10 hover:border-white/20"
               >
