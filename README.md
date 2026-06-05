@@ -81,8 +81,9 @@
 
 ### 环境要求
 
-- Node.js 16+
-- npm 或 yarn
+- Node.js 18+
+- Rust 工具链 (rustup, cargo)
+- Go 1.20+ (用于编译 sidecar 进程)
 - Windows 10/11
 
 ### 安装依赖
@@ -100,45 +101,40 @@ npm run dev
 ### 构建
 
 ```bash
-# 构建前端
+# 构建 Tauri 生产安装包
 npm run build
 
-# 打包 Electron 应用（不发布）
-npm run build:electron
-
-# 打包并发布到 GitHub
-npm run build:publish
+# 构建前端静态文件
+npm run build:frontend
 ```
 
 ### 项目结构
 
 ```
 TidyDesk/
-├── electron/              # Electron 主进程
-│   ├── main.cjs          # 主进程入口
-│   └── preload.cjs       # 预加载脚本
+├── src-tauri/            # Tauri 壳与 Rust 后端代码
+│   ├── src/              # Rust 代码
+│   ├── sidecars/         # 编译后的 Go sidecar 存放目录
+│   └── tauri.conf.json   # Tauri 配置文件
+├── sidecars/             # Go 业务 sidecar 源代码
+│   └── apps-cache/       # 应用程序扫描缓存 sidecar
 ├── src/                  # React 前端
 │   ├── components/       # 组件
-│   ├── context/          # Context
+│   ├── native/           # 平台 Native API 适配器 (对接 Tauri)
 │   ├── types/            # 类型定义
-│   ├── utils/            # 工具函数
-│   ├── App.tsx           # 主应用
-│   └── main.tsx          # 入口
-├── dist/                 # 构建输出
-├── release/              # 打包输出
+│   └── App.tsx           # 主应用
+├── dist/                 # 编译打包后的前端静态资源
 └── package.json
 ```
 
 ##  技术栈
 
-- **框架**: Electron 30.0.8
-- **前端**: React 18.3.1 + TypeScript
+- **桌面框架**: Tauri v2 (Rust)
+- **后端服务**: Go (Sidecar 进程，用于高性能系统操作如扫注册表)
+- **前端框架**: React 18.3.1 + TypeScript
 - **样式**: Tailwind CSS
-- **构建**: Vite 5.2.11
-- **打包**: electron-builder 24.13.3
-- **更新**: electron-updater 6.1.7
-- **监控**: chokidar 3.6.0
-- **图标**: lucide-react 0.378.0
+- **构建工具**: Vite 5.2.11
+- **图标库**: lucide-react 0.378.0
 
 ##  安全性
 
@@ -193,12 +189,11 @@ TidyDesk/
 
 ## 🙏 致谢
 
-- [Electron](https://www.electronjs.org/) - 跨平台桌面应用框架
+- [Tauri](https://tauri.app/) - 跨平台轻量级桌面应用框架
 - [React](https://reactjs.org/) - 用户界面库
 - [Tailwind CSS](https://tailwindcss.com/) - CSS 框架
 - [lucide-react](https://lucide.dev/) - 图标库
 - [chokidar](https://github.com/paulmillr/chokidar) - 文件监控
-- [electron-updater](https://www.electron.build/auto-update) - 自动更新
 
 **⭐ 如果这个项目对你有帮助，请给个 Star！**
 

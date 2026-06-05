@@ -37,7 +37,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "nsis",
     "icon": [
       "../build/icon.ico"

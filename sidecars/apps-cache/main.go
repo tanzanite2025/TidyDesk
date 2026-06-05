@@ -399,8 +399,8 @@ func categorizeShortcut(name string, shortcutPath string) string {
 		strings.Contains(nameLower, "qq") ||
 		strings.Contains(nameLower, "dingtalk") ||
 		strings.Contains(nameLower, "teams") ||
-		strings.Contains(nameLower, "寰俊") ||
-		strings.Contains(nameLower, "閽夐拤") {
+		strings.Contains(nameLower, "微信") ||
+		strings.Contains(nameLower, "钉钉") {
 		return "communication"
 	}
 
