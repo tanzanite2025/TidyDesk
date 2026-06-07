@@ -1,4 +1,12 @@
-export type FileCategory = 'document' | 'image' | 'archive' | 'app' | 'developer' | 'temporary' | 'other' | 'folder';
+export type FileCategory =
+  | 'document'
+  | 'image'
+  | 'archive'
+  | 'app'
+  | 'developer'
+  | 'temporary'
+  | 'other'
+  | 'folder';
 
 export interface TidyFile {
   id: string;
@@ -9,13 +17,11 @@ export interface TidyFile {
   extension: string;
   modifiedAt: string;
   isSimulated: boolean;
-  parentId: string | null; // null represents the Desktop root
-  // Web File System Access API Handle, if in real mode
+  parentId: string | null;
   realHandle?: FileSystemFileHandle;
-  // Shortcut validation
-  isValid?: boolean;        // 快捷方式是否有效（目标文件存在）
-  targetPath?: string;      // 快捷方式指向的目标路径
-  icon?: string;            // 文件图标（Base64 Data URL）
+  isValid?: boolean;
+  targetPath?: string;
+  icon?: string;
 }
 
 export interface TidyFolder {
@@ -26,17 +32,16 @@ export interface TidyFolder {
   modifiedAt: string;
   isSimulated: boolean;
   parentId: string | null;
-  // Web File System Access API Handle, if in real mode
   realHandle?: FileSystemDirectoryHandle;
 }
 
 export interface DesktopHealthInfo {
-  score: number; // 0 - 100
+  score: number;
   totalFiles: number;
   totalFolders: number;
-  totalSize: number; // in bytes
+  totalSize: number;
   tempFileCount: number;
-  largeFileCount: number; // > 100MB
+  largeFileCount: number;
   suggestion: string;
   status: 'HEALTHY' | 'ALERT' | 'CRITICAL';
 }

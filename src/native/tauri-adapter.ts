@@ -15,6 +15,7 @@ import type {
   CaptureOpenedPayload,
   DesktopFilesResult,
   DrawerStatePayload,
+  ImportExternalFilesResult,
   InstalledApp,
   InstalledAppsResult,
   ModuleStatePayload,
@@ -145,7 +146,7 @@ export function createTauriNativeClient(): NativeClient {
     isAvailable: isTauriRuntime,
     files: {
       readDesktopFiles: async () => normalizeDesktopFilesResult(await invoke<DesktopFilesResult>('files_read_desktop_files')),
-      importExternalFiles: payload => invoke('files_import_external_files', { payload }),
+      importExternalFiles: payload => invoke<ImportExternalFilesResult>('files_import_external_files', { payload }),
       open: filePath => invoke('files_open', { payload: { filePath } }),
       restoreToDesktop: payload => invoke<RestoreToDesktopResult>('files_restore_to_desktop', { payload })
     },

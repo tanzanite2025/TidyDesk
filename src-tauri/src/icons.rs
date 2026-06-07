@@ -53,7 +53,9 @@ pub fn extract_icon_data_url(_path: &Path) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn icon_handle_to_data_url(hicon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Result<String, String> {
+fn icon_handle_to_data_url(
+    hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
+) -> Result<String, String> {
     unsafe {
         let screen_dc = GetDC(None);
         if screen_dc.0 == std::ptr::null_mut() {
@@ -98,7 +100,9 @@ fn icon_handle_to_data_url(hicon: windows::Win32::UI::WindowsAndMessaging::HICON
         std::ptr::write_bytes(bits, 0, (ICON_SIZE * ICON_SIZE * 4) as usize);
         let old_object = SelectObject(memory_dc, HGDIOBJ(bitmap.0));
 
-        let draw_result = DrawIconEx(memory_dc, 0, 0, hicon, ICON_SIZE, ICON_SIZE, 0, None, DI_NORMAL);
+        let draw_result = DrawIconEx(
+            memory_dc, 0, 0, hicon, ICON_SIZE, ICON_SIZE, 0, None, DI_NORMAL,
+        );
         if let Err(err) = draw_result {
             let _ = SelectObject(memory_dc, old_object);
             let _ = DeleteObject(HGDIOBJ(bitmap.0));
@@ -107,7 +111,9 @@ fn icon_handle_to_data_url(hicon: windows::Win32::UI::WindowsAndMessaging::HICON
             return Err(format!("failed to draw icon: {err}"));
         }
 
-        let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (ICON_SIZE * ICON_SIZE * 4) as usize).to_vec();
+        let pixels =
+            std::slice::from_raw_parts(bits.cast::<u8>(), (ICON_SIZE * ICON_SIZE * 4) as usize)
+                .to_vec();
 
         let _ = SelectObject(memory_dc, old_object);
         let _ = DeleteObject(HGDIOBJ(bitmap.0));

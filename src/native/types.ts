@@ -6,6 +6,7 @@ import type {
   DesktopFilesResult,
   DeleteItemPayload,
   DrawerStatePayload,
+  ImportExternalFilesResult,
   ImportExternalFilesPayload,
   InstalledAppsResult,
   ModuleStatePayload,
@@ -41,7 +42,7 @@ import type {
 
 export interface NativeFilesClient {
   readDesktopFiles: () => Promise<DesktopFilesResult>;
-  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<unknown>;
+  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
   open: (filePath: string) => Promise<unknown>;
   restoreToDesktop: (payload: RestoreToDesktopPayload) => Promise<RestoreToDesktopResult>;
 }

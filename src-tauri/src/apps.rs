@@ -6,8 +6,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, WebviewWindowBuilder};
 use tauri::State;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindowBuilder};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RpcResponse {
@@ -190,7 +190,11 @@ pub fn open_app_picker_poc(
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(&app, "app-picker-poc", crate::shell::webview_url_for_mode("app-picker")?)
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "app-picker-poc",
+        crate::shell::webview_url_for_mode("app-picker")?,
+    )
     .title("TidyDesk AppPicker Tauri PoC")
     .inner_size(920.0, 720.0)
     .resizable(true)
@@ -312,7 +316,10 @@ pub struct SidecarState {
 
 fn sidecar_call(app: &AppHandle, method: &str, params: Value) -> Result<Value, String> {
     let state = app.state::<SidecarState>();
-    let mut guard = state.process.lock().map_err(|_| "failed to lock sidecar state".to_string())?;
+    let mut guard = state
+        .process
+        .lock()
+        .map_err(|_| "failed to lock sidecar state".to_string())?;
 
     let needs_restart = match guard.as_mut() {
         Some(p) => !p.is_alive(),

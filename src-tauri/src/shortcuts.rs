@@ -83,35 +83,45 @@ fn attempt_shortcut_repair(
         });
     };
 
-    for search_path in shortcut_repair_search_paths() {
-        let possible_path = search_path.join(file_name);
-        if !possible_path.exists() {
-            continue;
+    let repair_candidates = shortcut_repair_candidates(file_name);
+    if repair_candidates.len() != 1 {
+        if repair_candidates.len() > 1 {
+            eprintln!(
+                "[TIDYDESK] Skip auto-repair for {} because {} candidates matched {}",
+                shortcut_path.display(),
+                repair_candidates.len(),
+                Path::new(target_path).display()
+            );
         }
+        return Ok(RepairShortcutResult {
+            repaired: false,
+            new_path: None,
+        });
+    }
 
-        let description = format!(
-            "TidyDesk shortcut for {} (auto-repaired)",
-            possible_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("file")
-        );
+    let possible_path = &repair_candidates[0];
+    let description = format!(
+        "TidyDesk shortcut for {} (auto-repaired)",
+        possible_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("file")
+    );
 
-        match crate::write_shortcut_link(shortcut_path, &possible_path, &description) {
-            Ok(()) => {
-                return Ok(RepairShortcutResult {
-                    repaired: true,
-                    new_path: Some(possible_path.display().to_string()),
-                });
-            }
-            Err(err) => {
-                eprintln!(
-                    "[TIDYDESK] Failed to repair shortcut {} with {}: {}",
-                    shortcut_path.display(),
-                    possible_path.display(),
-                    err
-                );
-            }
+    match crate::write_shortcut_link(shortcut_path, possible_path, &description) {
+        Ok(()) => {
+            return Ok(RepairShortcutResult {
+                repaired: true,
+                new_path: Some(possible_path.display().to_string()),
+            });
+        }
+        Err(err) => {
+            eprintln!(
+                "[TIDYDESK] Failed to repair shortcut {} with {}: {}",
+                shortcut_path.display(),
+                possible_path.display(),
+                err
+            );
         }
     }
 
@@ -140,6 +150,17 @@ fn shortcut_repair_search_paths() -> Vec<PathBuf> {
     paths
 }
 
+fn shortcut_repair_candidates(file_name: &std::ffi::OsStr) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for search_path in shortcut_repair_search_paths() {
+        let possible_path = search_path.join(file_name);
+        if possible_path.is_file() {
+            candidates.push(possible_path);
+        }
+    }
+    candidates
+}
+
 #[tauri::command]
 pub fn shortcuts_validate_all(app: AppHandle) -> Result<ShortcutValidationStats, String> {
     shortcuts_validate_all_internal(&app)
@@ -150,8 +171,8 @@ fn shortcuts_validate_all_internal(app: &AppHandle) -> Result<ShortcutValidation
     let drawer_root = crate::drawer_root(&app)?;
     let mut stats = ShortcutValidationStats::default();
 
-    let drawer_items = fs::read_dir(&drawer_root)
-        .map_err(|err| format!("failed to read drawer root: {err}"))?;
+    let drawer_items =
+        fs::read_dir(&drawer_root).map_err(|err| format!("failed to read drawer root: {err}"))?;
 
     for drawer_item in drawer_items {
         let Ok(drawer_item) = drawer_item else {
@@ -244,13 +265,15 @@ pub fn shortcuts_repair(
     attempt_shortcut_repair(&shortcut_path, &payload.target_path)
 }
 
-fn collect_shortcut_watch_entries(app: &AppHandle) -> Result<HashMap<String, ShortcutWatchEntry>, String> {
+fn collect_shortcut_watch_entries(
+    app: &AppHandle,
+) -> Result<HashMap<String, ShortcutWatchEntry>, String> {
     crate::prepare_drawer_storage(app)?;
     let drawer_root = crate::drawer_root(app)?;
     let mut entries = HashMap::new();
 
-    let drawer_items = fs::read_dir(&drawer_root)
-        .map_err(|err| format!("failed to read drawer root: {err}"))?;
+    let drawer_items =
+        fs::read_dir(&drawer_root).map_err(|err| format!("failed to read drawer root: {err}"))?;
 
     for drawer_item in drawer_items {
         let Ok(drawer_item) = drawer_item else {
@@ -360,7 +383,9 @@ pub fn start_shortcut_background_services(app: AppHandle) {
                     Ok(stats) => {
                         if stats.repaired > 0 || stats.invalid > 0 {
                             if let Err(err) = app.emit(SHORTCUTS_VALIDATED_EVENT, stats) {
-                                eprintln!("[TIDYDESK] Failed to emit shortcut validation stats: {err}");
+                                eprintln!(
+                                    "[TIDYDESK] Failed to emit shortcut validation stats: {err}"
+                                );
                             }
                         }
                     }

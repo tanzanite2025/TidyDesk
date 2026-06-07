@@ -129,11 +129,7 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
 
     Some(QuickNote {
         id,
-        title: safe_quick_note_title(
-            note.title.as_deref().unwrap_or(""),
-            &content,
-            "未命名记录",
-        ),
+        title: safe_quick_note_title(note.title.as_deref().unwrap_or(""), &content, "未命名记录"),
         content,
         pinned: note.pinned.unwrap_or(false),
         favorite: note.favorite.unwrap_or(false),
@@ -145,10 +141,11 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
 fn read_quick_notes(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
     ensure_quick_notes_storage(app)?;
     let raw = fs::read_to_string(quick_notes_path(app)?).unwrap_or_default();
-    let stored = serde_json::from_str::<StoredQuickNotesFile>(&raw).unwrap_or(StoredQuickNotesFile {
-        _version: QUICK_NOTES_VERSION,
-        notes: Vec::new(),
-    });
+    let stored =
+        serde_json::from_str::<StoredQuickNotesFile>(&raw).unwrap_or(StoredQuickNotesFile {
+            _version: QUICK_NOTES_VERSION,
+            notes: Vec::new(),
+        });
 
     let mut notes = stored
         .notes

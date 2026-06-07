@@ -1,7 +1,9 @@
 use serde_json::json;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
+};
 use url::Url;
 
 #[derive(Debug, Clone, Default)]
@@ -61,12 +63,7 @@ pub fn apply_drawer_state(
         set_handle_always_on_top(app, false)?;
         animate_window_bounds(app.clone(), "main", drawer_start, drawer_target, false);
         animate_window_bounds(app.clone(), "handle", handle_from, handle_to, false);
-        update_shell_state(
-            app,
-            shell,
-            true,
-            next_active_module,
-        )?;
+        update_shell_state(app, shell, true, next_active_module)?;
     } else {
         let drawer_from = drawer_window_bounds(app)?;
         let drawer_target = drawer_hidden_bounds(app, &drawer_from)?;
@@ -174,9 +171,7 @@ pub fn update_active_module(
     update_shell_state(app, shell, expanded, active_module)
 }
 
-pub fn shell_snapshot(
-    shell: &tauri::State<'_, ShellState>,
-) -> Result<ShellWindowSnapshot, String> {
+pub fn shell_snapshot(shell: &tauri::State<'_, ShellState>) -> Result<ShellWindowSnapshot, String> {
     Ok(shell
         .0
         .lock()
@@ -184,7 +179,10 @@ pub fn shell_snapshot(
         .clone())
 }
 
-pub fn broadcast_shell_state(app: &AppHandle, snapshot: &ShellWindowSnapshot) -> Result<(), String> {
+pub fn broadcast_shell_state(
+    app: &AppHandle,
+    snapshot: &ShellWindowSnapshot,
+) -> Result<(), String> {
     let payload = json!({
         "expanded": snapshot.expanded,
         "activeModule": snapshot.active_module.clone(),
@@ -218,7 +216,11 @@ pub fn hide_module_windows(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-pub fn apply_window_bounds(app: &AppHandle, label: &str, bounds: ShellBounds) -> Result<(), String> {
+pub fn apply_window_bounds(
+    app: &AppHandle,
+    label: &str,
+    bounds: ShellBounds,
+) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(label) {
         window
             .set_position(PhysicalPosition::new(bounds.x, bounds.y))
@@ -351,21 +353,17 @@ pub fn ensure_handle_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let bounds = handle_window_bounds(app, false)?;
-    let window = WebviewWindowBuilder::new(
-        app,
-        "handle",
-        webview_url_for_mode("handle")?,
-    )
-    .title("TidyDesk Handle")
-    .inner_size(bounds.width as f64, bounds.height as f64)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|err| err.to_string())?;
+    let window = WebviewWindowBuilder::new(app, "handle", webview_url_for_mode("handle")?)
+        .title("TidyDesk Handle")
+        .inner_size(bounds.width as f64, bounds.height as f64)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|err| err.to_string())?;
     window
         .set_size(PhysicalSize::new(bounds.width, bounds.height))
         .map_err(|err| err.to_string())?;

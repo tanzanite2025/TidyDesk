@@ -34,7 +34,14 @@ function main() {
   const targetDir = path.join(projectRoot, 'src-tauri', 'sidecars', 'apps-cache');
   const targetPath = path.join(targetDir, `tidydesk-apps-cache-${targetTriple}${getExecutableSuffix()}`);
 
-  execFileSync('go', ['-C', path.join('sidecars', 'apps-cache'), 'build', '-o', sourceName, '.'], {
+  const goBuildArgs = ['-C', path.join('sidecars', 'apps-cache'), 'build'];
+  if (process.platform === 'win32') {
+    // Build the helper as a GUI-subsystem executable so packaged releases do not open a console window.
+    goBuildArgs.push('-ldflags=-H=windowsgui');
+  }
+  goBuildArgs.push('-o', sourceName, '.');
+
+  execFileSync('go', goBuildArgs, {
     cwd: projectRoot,
     stdio: 'inherit'
   });

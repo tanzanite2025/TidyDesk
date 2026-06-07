@@ -73,7 +73,8 @@ pub fn todos_create_card(app: AppHandle, payload: CreateTodoCardPayload) -> Resu
         "updatedAt": now,
     });
 
-    index["cards"].as_array_mut()
+    index["cards"]
+        .as_array_mut()
         .ok_or_else(|| "todo index cards is not an array".to_string())?
         .push(card);
     prepend_card_order(&mut index, &column_id, &card_id)?;
@@ -334,7 +335,9 @@ fn normalize_todo_index(index: Value) -> Value {
         board["cardOrder"][column_id] = json!(filtered);
     }
     for card in &cards {
-        let Some(card_id) = card["id"].as_str() else { continue; };
+        let Some(card_id) = card["id"].as_str() else {
+            continue;
+        };
         let column_id = card["columnId"].as_str().unwrap_or("todo");
         if let Some(order) = board["cardOrder"][column_id].as_array_mut() {
             if !order.iter().any(|id| id.as_str() == Some(card_id)) {
@@ -511,5 +514,9 @@ fn safe_todo_title(title: &str, fallback: &str) -> String {
 }
 
 fn create_todo_id(prefix: &str) -> String {
-    format!("{prefix}-{}-{}", crate::timestamp_string(), std::process::id())
+    format!(
+        "{prefix}-{}-{}",
+        crate::timestamp_string(),
+        std::process::id()
+    )
 }

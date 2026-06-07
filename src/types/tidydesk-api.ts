@@ -48,6 +48,17 @@ export interface ImportExternalFilesPayload {
   targetFolder: string | null;
 }
 
+export interface ImportedFileResult {
+  source: string;
+  shortcut: string;
+  mode: string;
+}
+
+export interface ImportExternalFilesResult {
+  success: boolean;
+  added: ImportedFileResult[];
+}
+
 export interface RestoreToDesktopPayload {
   shortcutPath: string;
 }
@@ -192,7 +203,7 @@ export interface TidyDeskAPI {
   createDrawer: (name: string) => Promise<unknown>;
   renameItem: (payload: RenameItemPayload) => Promise<unknown>;
   deleteItem: (payload: DeleteItemPayload) => Promise<unknown>;
-  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<unknown>;
+  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
   openFile: (filePath: string) => Promise<unknown>;
   windowControl: (action: WindowAction) => void;
   send: (channel: TidyDeskSendChannel) => void;

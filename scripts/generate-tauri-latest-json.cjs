@@ -1,8 +1,27 @@
 const fs = require('fs');
 const path = require('path');
+const { loadReleaseEnvFromWindowsUserEnv } = require('./tauri-release-env.cjs');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function normalizeGitHubRepository(owner, repo) {
+  if (!owner || !repo) return null;
+  return {
+    owner: owner.trim(),
+    repo: repo.trim()
+  };
+}
+
+function parseGitHubRepositoryFromUrl(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /github\.com[/:](?<owner>[^/\s]+)\/(?<repo>[^/\s]+?)(?:\.git)?$/i
+  );
+  if (!match?.groups) return null;
+  return normalizeGitHubRepository(match.groups.owner, match.groups.repo);
 }
 
 function getTargetKey() {
@@ -29,16 +48,38 @@ function normalizeBaseUrl(pkg) {
     return process.env.TIDYDESK_UPDATER_BASE_URL.replace(/\/$/, '');
   }
 
-  const owner = pkg.build?.publish?.owner;
-  const repo = pkg.build?.publish?.repo;
-  if (!owner || !repo) {
-    throw new Error('Missing package.json build.publish.owner/repo for default updater base URL');
+  const publishRepository = normalizeGitHubRepository(
+    pkg.build?.publish?.owner,
+    pkg.build?.publish?.repo
+  );
+  if (publishRepository) {
+    return `https://github.com/${publishRepository.owner}/${publishRepository.repo}/releases/download/v${pkg.version}`;
   }
 
-  return `https://github.com/${owner}/${repo}/releases/download/v${pkg.version}`;
+  const envRepository = parseGitHubRepositoryFromUrl(
+    process.env.GITHUB_REPOSITORY
+      ? `https://github.com/${process.env.GITHUB_REPOSITORY}`
+      : ''
+  );
+  if (envRepository) {
+    return `https://github.com/${envRepository.owner}/${envRepository.repo}/releases/download/v${pkg.version}`;
+  }
+
+  const repositoryValue = typeof pkg.repository === 'string'
+    ? pkg.repository
+    : pkg.repository?.url;
+  const packageRepository = parseGitHubRepositoryFromUrl(repositoryValue);
+  if (packageRepository) {
+    return `https://github.com/${packageRepository.owner}/${packageRepository.repo}/releases/download/v${pkg.version}`;
+  }
+
+  throw new Error(
+    'Missing updater base URL. Set TIDYDESK_UPDATER_BASE_URL or provide a GitHub repository via package.json build.publish or repository.url.'
+  );
 }
 
 function main() {
+  loadReleaseEnvFromWindowsUserEnv();
   const projectRoot = path.resolve(__dirname, '..');
   const packageJsonPath = path.join(projectRoot, 'package.json');
   const pkg = readJson(packageJsonPath);

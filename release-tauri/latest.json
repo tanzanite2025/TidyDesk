@@ -1,0 +1,11 @@
+{
+  "version": "3.0.1",
+  "notes": "",
+  "pub_date": "2026-06-07T02:58:36.926Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRdWtRVzhCN1JidStpdXNNejRIMDR5QWtFUTlGTXpxaGRUYWVhR2x2RW1mcVlLTmY1eU9HcnZTcWNDZC9naVh4cFQ4ZVo1Z1RmQ1h3UTU3NDg1dkVhSFhQNm5zUmhFNlFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgwODAxMTE2CWZpbGU6VGlkeURlc2tfMy4wLjFfeDY0LXNldHVwLmV4ZQpuR0xuWnBrakRiL1VSRERLK2czSkJZQTIwSjdDSGp2OE9Xdk9wVFhzdURkTUhGNjBHRGZLb3lpVmxaOXA1RFBQUmNhdUxpUVl4ZiswWTc5WU5rV3NBQT09Cg==",
+      "url": "https://github.com/tanzanite2025/TidyDesk/releases/download/v3.0.1/TidyDesk_3.0.1_x64-setup.exe"
+    }
+  }
+}

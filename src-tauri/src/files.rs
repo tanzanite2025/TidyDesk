@@ -259,7 +259,10 @@ pub fn drawers_create(app: AppHandle, name: String) -> Result<serde_json::Value,
 }
 
 #[tauri::command]
-pub fn drawers_rename_item(app: AppHandle, payload: RenameItemPayload) -> Result<serde_json::Value, String> {
+pub fn drawers_rename_item(
+    app: AppHandle,
+    payload: RenameItemPayload,
+) -> Result<serde_json::Value, String> {
     if payload.old_name.trim().is_empty() || payload.new_name.trim().is_empty() {
         return Err("oldName and newName are required".to_string());
     }
@@ -305,7 +308,10 @@ pub fn drawers_rename_item(app: AppHandle, payload: RenameItemPayload) -> Result
 }
 
 #[tauri::command]
-pub fn drawers_delete_item(app: AppHandle, payload: DeleteItemPayload) -> Result<serde_json::Value, String> {
+pub fn drawers_delete_item(
+    app: AppHandle,
+    payload: DeleteItemPayload,
+) -> Result<serde_json::Value, String> {
     if payload.name.trim().is_empty() {
         return Err("Delete requires name.".to_string());
     }

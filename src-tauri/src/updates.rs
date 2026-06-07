@@ -7,7 +7,6 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
 const DEFAULT_UPDATER_CHANNEL: &str = "stable";
-const DEFAULT_UPDATER_ENDPOINT: &str = "https://github.com/tanzanite2025/TidyDesk/releases/latest/download/latest.json";
 const UPDATE_EVENT_NAME: &str = "updates-state";
 const UPDATER_CHANNEL_ENV: &str = "TIDYDESK_UPDATER_CHANNEL";
 const UPDATER_ENDPOINTS_ENV: &str = "TIDYDESK_UPDATER_ENDPOINTS";
@@ -58,8 +57,8 @@ struct PendingUpdate {
 #[derive(Debug, Clone)]
 struct ResolvedUpdaterConfig {
     channel: String,
-    endpoints: Vec<Url>,
-    pubkey: String,
+    endpoint_override: Option<Vec<Url>>,
+    pubkey_override: Option<String>,
 }
 
 fn current_channel() -> String {
@@ -70,7 +69,7 @@ fn current_channel() -> String {
         .unwrap_or_else(|| DEFAULT_UPDATER_CHANNEL.to_string())
 }
 
-fn resolve_public_key() -> Result<Option<String>, String> {
+fn resolve_public_key_override() -> Result<Option<String>, String> {
     if let Ok(value) = env::var(UPDATER_PUBLIC_KEY_ENV) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -87,18 +86,15 @@ fn resolve_public_key() -> Result<Option<String>, String> {
         }
     }
 
-    if let Some(value) = option_env!("TIDYDESK_UPDATER_PUBLIC_KEY") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Ok(Some(trimmed.to_string()));
-        }
-    }
-
     Ok(None)
 }
 
-fn resolve_endpoints() -> Result<Vec<Url>, String> {
-    let raw = env::var(UPDATER_ENDPOINTS_ENV).unwrap_or_else(|_| DEFAULT_UPDATER_ENDPOINT.to_string());
+fn resolve_endpoints_override() -> Result<Option<Vec<Url>>, String> {
+    let raw = match env::var(UPDATER_ENDPOINTS_ENV) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+
     let endpoints = raw
         .split(|ch| ch == ';' || ch == ',' || ch == '\n')
         .map(str::trim)
@@ -112,23 +108,19 @@ fn resolve_endpoints() -> Result<Vec<Url>, String> {
         return Err("no updater endpoints configured".to_string());
     }
 
-    Ok(endpoints)
+    Ok(Some(endpoints))
 }
 
-fn resolve_updater_config() -> Result<Option<ResolvedUpdaterConfig>, String> {
-    let Some(pubkey) = resolve_public_key()? else {
-        return Ok(None);
-    };
-
-    Ok(Some(ResolvedUpdaterConfig {
+fn resolve_updater_config() -> Result<ResolvedUpdaterConfig, String> {
+    Ok(ResolvedUpdaterConfig {
         channel: current_channel(),
-        endpoints: resolve_endpoints()?,
-        pubkey,
-    }))
+        endpoint_override: resolve_endpoints_override()?,
+        pubkey_override: resolve_public_key_override()?,
+    })
 }
 
 fn update_metadata(app: &AppHandle) -> UpdateMetadata {
-    let resolved_config = resolve_updater_config().ok().flatten();
+    let resolved_config = resolve_updater_config().ok();
 
     UpdateMetadata {
         name: app
@@ -171,7 +163,7 @@ fn up_to_date_snapshot(metadata: &UpdateMetadata) -> UpdateSnapshot {
         release_date: None,
         release_notes: None,
         percent: None,
-        message: Some("已是最新版本".to_string()),
+        message: Some("You are already on the latest version.".to_string()),
         reason: None,
         can_check: true,
         can_download: false,
@@ -256,7 +248,7 @@ fn ready_to_install_snapshot(metadata: &UpdateMetadata, update: &Update) -> Upda
         release_date: update.date.as_ref().map(ToString::to_string),
         release_notes: update.body.clone(),
         percent: Some(100.0),
-        message: Some("更新已下载，准备安装。".to_string()),
+        message: Some("Update downloaded and ready to install.".to_string()),
         reason: None,
         can_check: false,
         can_download: false,
@@ -272,7 +264,7 @@ fn installing_snapshot(metadata: &UpdateMetadata, update: &Update) -> UpdateSnap
         release_date: update.date.as_ref().map(ToString::to_string),
         release_notes: update.body.clone(),
         percent: None,
-        message: Some("正在安装更新。".to_string()),
+        message: Some("Installing update...".to_string()),
         reason: None,
         can_check: false,
         can_download: false,
@@ -287,28 +279,36 @@ fn default_snapshot(app: &AppHandle) -> UpdateSnapshot {
         return unsupported_snapshot(
             &metadata,
             "development-build",
-            "开发环境下不会执行自动更新，请使用打包构建验证 updater。",
+            "Updater checks are disabled in development builds.",
         );
     }
 
     match resolve_updater_config() {
-        Ok(Some(_)) => idle_snapshot(&metadata),
-        Ok(None) => unsupported_snapshot(
+        Ok(_) => idle_snapshot(&metadata),
+        Err(err) => error_snapshot(
             &metadata,
-            "not-configured",
-            "缺少 updater 公钥配置，请先提供 TIDYDESK_UPDATER_PUBLIC_KEY。",
+            format!("Updater configuration is invalid: {err}"),
         ),
-        Err(err) => error_snapshot(&metadata, format!("Updater 配置无效：{err}")),
     }
 }
 
-fn build_updater(app: &AppHandle, config: &ResolvedUpdaterConfig) -> Result<tauri_plugin_updater::Updater, String> {
-    app.updater_builder()
-        .pubkey(config.pubkey.clone())
-        .endpoints(config.endpoints.clone())
-        .map_err(|err| err.to_string())?
-        .build()
-        .map_err(|err| err.to_string())
+fn build_updater(
+    app: &AppHandle,
+    config: &ResolvedUpdaterConfig,
+) -> Result<tauri_plugin_updater::Updater, String> {
+    let mut builder = app.updater_builder();
+
+    if let Some(pubkey) = &config.pubkey_override {
+        builder = builder.pubkey(pubkey.clone());
+    }
+
+    if let Some(endpoints) = &config.endpoint_override {
+        builder = builder
+            .endpoints(endpoints.clone())
+            .map_err(|err| err.to_string())?;
+    }
+
+    builder.build().map_err(|err| err.to_string())
 }
 
 fn replace_session(
@@ -325,7 +325,10 @@ fn replace_session(
     Ok(())
 }
 
-fn current_snapshot(app: &AppHandle, state: &State<'_, UpdaterSessionState>) -> Result<UpdateSnapshot, String> {
+fn current_snapshot(
+    app: &AppHandle,
+    state: &State<'_, UpdaterSessionState>,
+) -> Result<UpdateSnapshot, String> {
     let session = state
         .0
         .lock()
@@ -376,23 +379,18 @@ pub async fn updates_check(
         let snapshot = unsupported_snapshot(
             &metadata,
             "development-build",
-            "开发环境下不会执行自动更新，请使用打包构建验证 updater。",
+            "Updater checks are disabled in development builds.",
         );
         return emit_and_store(&app, &state, &snapshot, None);
     }
 
     let config = match resolve_updater_config() {
-        Ok(Some(config)) => config,
-        Ok(None) => {
-            let snapshot = unsupported_snapshot(
-                &metadata,
-                "not-configured",
-                "缺少 updater 公钥配置，请先提供 TIDYDESK_UPDATER_PUBLIC_KEY。",
-            );
-            return emit_and_store(&app, &state, &snapshot, None);
-        }
+        Ok(config) => config,
         Err(err) => {
-            let snapshot = error_snapshot(&metadata, format!("Updater 配置无效：{err}"));
+            let snapshot = error_snapshot(
+                &metadata,
+                format!("Updater configuration is invalid: {err}"),
+            );
             return emit_and_store(&app, &state, &snapshot, None);
         }
     };
@@ -400,7 +398,7 @@ pub async fn updates_check(
     let updater = match build_updater(&app, &config) {
         Ok(updater) => updater,
         Err(err) => {
-            let snapshot = error_snapshot(&metadata, format!("创建 updater 失败：{err}"));
+            let snapshot = error_snapshot(&metadata, format!("Failed to create updater: {err}"));
             return emit_and_store(&app, &state, &snapshot, None);
         }
     };
@@ -408,7 +406,7 @@ pub async fn updates_check(
     let update = match updater.check().await {
         Ok(update) => update,
         Err(err) => {
-            let snapshot = error_snapshot(&metadata, format!("检查更新失败：{err}"));
+            let snapshot = error_snapshot(&metadata, format!("Failed to check for updates: {err}"));
             return emit_and_store(&app, &state, &snapshot, None);
         }
     };
@@ -447,7 +445,10 @@ pub async fn updates_download(
         match session.pending_update.as_ref() {
             Some(pending) => pending.update.clone(),
             None => {
-                let snapshot = error_snapshot(&metadata, "没有待下载的更新，请先检查更新。");
+                let snapshot = error_snapshot(
+                    &metadata,
+                    "No update is ready to download. Check for updates first.",
+                );
                 drop(session);
                 return emit_and_store(&app, &state, &snapshot, None);
             }
@@ -471,9 +472,9 @@ pub async fn updates_download(
                     .map(|total| ((downloaded_bytes as f64 / total as f64) * 100.0).min(100.0));
                 let message = match content_length {
                     Some(total) => Some(format!(
-                        "正在下载更新（{downloaded_bytes}/{total} bytes）"
+                        "Downloading update ({downloaded_bytes}/{total} bytes)..."
                     )),
-                    None => Some(format!("正在下载更新（{downloaded_bytes} bytes）")),
+                    None => Some(format!("Downloading update ({downloaded_bytes} bytes)...")),
                 };
                 let snapshot = downloading_snapshot(
                     &metadata_for_progress,
@@ -488,7 +489,7 @@ pub async fn updates_download(
                     &metadata_for_finish,
                     &update_for_finish,
                     Some(100.0),
-                    Some("下载完成，正在校验更新包。".to_string()),
+                    Some("Download complete. Verifying update package...".to_string()),
                 );
                 let _ = emit_snapshot(&app_for_finish, &snapshot);
             },
@@ -497,7 +498,7 @@ pub async fn updates_download(
     {
         Ok(bytes) => bytes,
         Err(err) => {
-            let snapshot = error_snapshot(&metadata, format!("下载更新失败：{err}"));
+            let snapshot = error_snapshot(&metadata, format!("Failed to download update: {err}"));
             return emit_and_store(
                 &app,
                 &state,
@@ -535,7 +536,10 @@ pub fn updates_install(
             .map_err(|_| "failed to lock updater session".to_string())?;
 
         let Some(pending) = session.pending_update.take() else {
-            let snapshot = error_snapshot(&metadata, "没有可安装的更新，请先下载更新。");
+            let snapshot = error_snapshot(
+                &metadata,
+                "No update is ready to install. Download the update first.",
+            );
             session.last_snapshot = Some(snapshot.clone());
             drop(session);
             emit_snapshot(&app, &snapshot)?;
@@ -543,7 +547,10 @@ pub fn updates_install(
         };
 
         let Some(bytes) = pending.downloaded_bytes else {
-            let snapshot = error_snapshot(&metadata, "更新尚未下载完成，请先下载更新。");
+            let snapshot = error_snapshot(
+                &metadata,
+                "The update package has not finished downloading yet.",
+            );
             session.pending_update = Some(PendingUpdate {
                 update: pending.update,
                 downloaded_bytes: None,
@@ -562,7 +569,7 @@ pub fn updates_install(
     emit_snapshot(&app, &snapshot)?;
 
     if let Err(err) = update.install(&bytes) {
-        let failure = error_snapshot(&metadata, format!("安装更新失败：{err}"));
+        let failure = error_snapshot(&metadata, format!("Failed to install update: {err}"));
         return emit_and_store(
             &app,
             &state,

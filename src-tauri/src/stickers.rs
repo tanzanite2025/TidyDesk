@@ -94,10 +94,16 @@ struct CapturedSticker {
 }
 
 pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(images_root(app)?).map_err(|err| format!("failed to create sticker image root: {err}"))?;
+    fs::create_dir_all(images_root(app)?)
+        .map_err(|err| format!("failed to create sticker image root: {err}"))?;
     let state_path = sticker_state_path(app)?;
     if !state_path.exists() {
-        write_sticker_state(app, &StickerStateFile { stickers: Vec::new() })?;
+        write_sticker_state(
+            app,
+            &StickerStateFile {
+                stickers: Vec::new(),
+            },
+        )?;
     }
     Ok(())
 }
@@ -106,7 +112,9 @@ pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
     ensure_storage(app)?;
     let mut state = read_sticker_state(app)?;
     let original_len = state.stickers.len();
-    state.stickers.retain(|sticker| Path::new(&sticker.image_path).exists());
+    state
+        .stickers
+        .retain(|sticker| Path::new(&sticker.image_path).exists());
     if state.stickers.len() != original_len {
         write_sticker_state(app, &state)?;
     }
@@ -120,45 +128,40 @@ pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
 pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
     let monitor = active_monitor(app)?;
     if let Some(window) = app.get_webview_window(SNIP_WINDOW_LABEL) {
+        prepare_snip_window(&window, &monitor)?;
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
-        window
-            .set_size(PhysicalSize::new(monitor.width, monitor.height))
-            .map_err(|err| err.to_string())?;
-        window
-            .set_position(PhysicalPosition::new(monitor.x, monitor.y))
-            .map_err(|err| err.to_string())?;
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(app, SNIP_WINDOW_LABEL, crate::webview_url_for_mode("snip")?)
-        .title("TidyDesk Snip")
-        .inner_size(monitor.width as f64, monitor.height as f64)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .build()
-        .map_err(|err| err.to_string())?;
-    window
-        .set_size(PhysicalSize::new(monitor.width, monitor.height))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(monitor.x, monitor.y))
-        .map_err(|err| err.to_string())?;
+    let window =
+        WebviewWindowBuilder::new(app, SNIP_WINDOW_LABEL, crate::webview_url_for_mode("snip")?)
+            .title("TidyDesk Snip")
+            .inner_size(monitor.width as f64, monitor.height as f64)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .build()
+            .map_err(|err| err.to_string())?;
+    prepare_snip_window(&window, &monitor)?;
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn snip_complete_selection(app: AppHandle, payload: SnipRectPayload) -> Result<Value, String> {
+pub async fn snip_complete_selection(
+    app: AppHandle,
+    payload: SnipRectPayload,
+) -> Result<Value, String> {
     let app_handle = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || capture_selection(&app_handle, payload))
-        .await
-        .map_err(|err| err.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || capture_selection(&app_handle, payload))
+            .await
+            .map_err(|err| err.to_string())??;
     Ok(json!({
         "success": true,
         "stickerId": result.sticker_id,
@@ -172,7 +175,10 @@ pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn sticker_get(app: AppHandle, sticker_id: String) -> Result<Option<StickerDataPayload>, String> {
+pub fn sticker_get(
+    app: AppHandle,
+    sticker_id: String,
+) -> Result<Option<StickerDataPayload>, String> {
     ensure_storage(&app)?;
     let state = read_sticker_state(&app)?;
     let Some(sticker) = state.stickers.iter().find(|item| item.id == sticker_id) else {
@@ -183,7 +189,8 @@ pub fn sticker_get(app: AppHandle, sticker_id: String) -> Result<Option<StickerD
         return Ok(None);
     }
 
-    let bytes = fs::read(&image_path).map_err(|err| format!("failed to read sticker image: {err}"))?;
+    let bytes =
+        fs::read(&image_path).map_err(|err| format!("failed to read sticker image: {err}"))?;
     Ok(Some(StickerDataPayload {
         id: sticker.id.clone(),
         image_data_url: format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes)),
@@ -193,7 +200,10 @@ pub fn sticker_get(app: AppHandle, sticker_id: String) -> Result<Option<StickerD
 }
 
 #[tauri::command]
-pub fn sticker_toggle_pin(app: AppHandle, sticker_id: String) -> Result<StickerPinResultPayload, String> {
+pub fn sticker_toggle_pin(
+    app: AppHandle,
+    sticker_id: String,
+) -> Result<StickerPinResultPayload, String> {
     ensure_storage(&app)?;
     let mut state = read_sticker_state(&app)?;
     let Some(sticker) = state.stickers.iter_mut().find(|item| item.id == sticker_id) else {
@@ -241,7 +251,8 @@ pub fn sticker_copy(app: AppHandle, sticker_id: String) -> Result<Value, String>
     let (width, height) = rgba.dimensions();
     let bytes = rgba.into_raw();
 
-    let mut clipboard = Clipboard::new().map_err(|err| format!("failed to access system clipboard: {err}"))?;
+    let mut clipboard =
+        Clipboard::new().map_err(|err| format!("failed to access system clipboard: {err}"))?;
     clipboard
         .set_image(ImageData {
             width: width as usize,
@@ -269,13 +280,19 @@ pub fn sticker_save_as(app: AppHandle, sticker_id: String) -> Result<Value, Stri
     let Some(file_path) = FileDialog::new()
         .set_title("保存截图贴纸")
         .add_filter("PNG Image", &["png"])
-        .set_file_name(default_path.file_name().and_then(|value| value.to_str()).unwrap_or("TidyDesk-sticker.png"))
+        .set_file_name(
+            default_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("TidyDesk-sticker.png"),
+        )
         .save_file()
     else {
         return Ok(json!({ "success": false, "canceled": true }));
     };
 
-    fs::copy(&source_path, &file_path).map_err(|err| format!("failed to save sticker image: {err}"))?;
+    fs::copy(&source_path, &file_path)
+        .map_err(|err| format!("failed to save sticker image: {err}"))?;
     Ok(json!({
         "success": true,
         "filePath": file_path.display().to_string(),
@@ -301,7 +318,8 @@ pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String
     if let Some(sticker) = removed {
         let image_path = PathBuf::from(sticker.image_path);
         if image_path.exists() {
-            fs::remove_file(&image_path).map_err(|err| format!("failed to delete sticker image: {err}"))?;
+            fs::remove_file(&image_path)
+                .map_err(|err| format!("failed to delete sticker image: {err}"))?;
         }
     }
 
@@ -316,7 +334,11 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     std::thread::sleep(Duration::from_millis(140));
 
     let png = capture_monitor_region_png(&monitor, &normalized)?;
-    let sticker_id = format!("sticker-{}-{}", crate::timestamp_string(), std::process::id());
+    let sticker_id = format!(
+        "sticker-{}-{}",
+        crate::timestamp_string(),
+        std::process::id()
+    );
     let image_path = images_root(app)?.join(format!("{sticker_id}.png"));
     fs::write(&image_path, &png).map_err(|err| format!("failed to write sticker image: {err}"))?;
 
@@ -337,7 +359,11 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
 }
 
 fn normalize_rect(payload: SnipRectPayload) -> Result<SnipRectPayload, String> {
-    if !payload.x.is_finite() || !payload.y.is_finite() || !payload.width.is_finite() || !payload.height.is_finite() {
+    if !payload.x.is_finite()
+        || !payload.y.is_finite()
+        || !payload.width.is_finite()
+        || !payload.height.is_finite()
+    {
         return Err("Invalid snip rectangle".to_string());
     }
     if payload.width < 8.0 || payload.height < 8.0 {
@@ -351,7 +377,10 @@ fn normalize_rect(payload: SnipRectPayload) -> Result<SnipRectPayload, String> {
     })
 }
 
-fn initial_sticker_bounds(monitor: &MonitorSnapshot, rect: &SnipRectPayload) -> StickerWindowBounds {
+fn initial_sticker_bounds(
+    monitor: &MonitorSnapshot,
+    rect: &SnipRectPayload,
+) -> StickerWindowBounds {
     let min_width = (160.0 * monitor.scale_factor).round() as u32;
     let min_height = (100.0 * monitor.scale_factor).round() as u32;
     let max_width = ((monitor.width as f64) * 0.45).round() as u32;
@@ -366,7 +395,9 @@ fn initial_sticker_bounds(monitor: &MonitorSnapshot, rect: &SnipRectPayload) -> 
     let width = ((rect_width as f64) * ratio).round() as u32;
     let height = ((rect_height as f64) * ratio).round() as u32;
     let width = width.max(min_width).min(monitor.width.saturating_sub(48));
-    let height = height.max(min_height).min(monitor.height.saturating_sub(48));
+    let height = height
+        .max(min_height)
+        .min(monitor.height.saturating_sub(48));
     let preferred_x = monitor.x + ((rect.x * monitor.scale_factor).round() as i32) + 24;
     let preferred_y = monitor.y + ((rect.y * monitor.scale_factor).round() as i32) + 24;
     let max_x = monitor.x + monitor.width as i32 - width as i32 - 24;
@@ -392,7 +423,10 @@ fn ensure_sticker_window(app: &AppHandle, sticker: &StickerRecord) -> Result<(),
             .set_always_on_top(sticker.always_on_top)
             .map_err(|err| err.to_string())?;
         window
-            .set_size(PhysicalSize::new(sticker.bounds.width, sticker.bounds.height))
+            .set_size(PhysicalSize::new(
+                sticker.bounds.width,
+                sticker.bounds.height,
+            ))
             .map_err(|err| err.to_string())?;
         window
             .set_position(PhysicalPosition::new(sticker.bounds.x, sticker.bounds.y))
@@ -412,7 +446,10 @@ fn ensure_sticker_window(app: &AppHandle, sticker: &StickerRecord) -> Result<(),
         .build()
         .map_err(|err| err.to_string())?;
     window
-        .set_size(PhysicalSize::new(sticker.bounds.width, sticker.bounds.height))
+        .set_size(PhysicalSize::new(
+            sticker.bounds.width,
+            sticker.bounds.height,
+        ))
         .map_err(|err| err.to_string())?;
     window
         .set_position(PhysicalPosition::new(sticker.bounds.x, sticker.bounds.y))
@@ -451,9 +488,39 @@ fn persist_sticker_window_bounds(app: &AppHandle, sticker_id: &str) -> Result<()
     Ok(())
 }
 
+fn prepare_snip_window(window: &WebviewWindow, monitor: &MonitorSnapshot) -> Result<(), String> {
+    window
+        .set_ignore_cursor_events(false)
+        .map_err(|err| err.to_string())?;
+    window
+        .set_focusable(true)
+        .map_err(|err| err.to_string())?;
+    window
+        .set_always_on_top(true)
+        .map_err(|err| err.to_string())?;
+    window
+        .set_skip_taskbar(true)
+        .map_err(|err| err.to_string())?;
+    window
+        .set_size(PhysicalSize::new(monitor.width, monitor.height))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(monitor.x, monitor.y))
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn dispose_snip_window(window: &WebviewWindow) {
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_focusable(false);
+    let _ = window.set_always_on_top(false);
+    let _ = window.hide();
+    let _ = window.destroy().or_else(|_| window.close());
+}
+
 fn close_snip_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(SNIP_WINDOW_LABEL) {
-        window.close().map_err(|err| err.to_string())?;
+        dispose_snip_window(&window);
     }
     Ok(())
 }
@@ -465,7 +532,13 @@ fn sticker_window_label(sticker_id: &str) -> String {
 fn sanitize_sticker_id(value: &str) -> String {
     value
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -477,7 +550,9 @@ fn sticker_webview_url(sticker_id: &str) -> Result<WebviewUrl, String> {
             .append_pair("id", sticker_id);
         Ok(WebviewUrl::External(url))
     } else {
-        Ok(WebviewUrl::App(format!("index.html?mode=sticker&id={sticker_id}").into()))
+        Ok(WebviewUrl::App(
+            format!("index.html?mode=sticker&id={sticker_id}").into(),
+        ))
     }
 }
 
@@ -493,8 +568,11 @@ fn read_sticker_state(app: &AppHandle) -> Result<StickerStateFile, String> {
     ensure_storage(app)?;
     let path = sticker_state_path(app)?;
     match fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).map_err(|err| format!("failed to parse sticker state: {err}")),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(StickerStateFile { stickers: Vec::new() }),
+        Ok(content) => serde_json::from_str(&content)
+            .map_err(|err| format!("failed to parse sticker state: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(StickerStateFile {
+            stickers: Vec::new(),
+        }),
         Err(err) => Err(format!("failed to read sticker state: {err}")),
     }
 }
@@ -508,8 +586,10 @@ fn write_sticker_state(app: &AppHandle, state: &StickerStateFile) -> Result<(), 
 }
 
 fn ensure_storage_dirs(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(sticker_root(app)?).map_err(|err| format!("failed to create sticker root: {err}"))?;
-    fs::create_dir_all(images_root(app)?).map_err(|err| format!("failed to create sticker images root: {err}"))?;
+    fs::create_dir_all(sticker_root(app)?)
+        .map_err(|err| format!("failed to create sticker root: {err}"))?;
+    fs::create_dir_all(images_root(app)?)
+        .map_err(|err| format!("failed to create sticker images root: {err}"))?;
     Ok(())
 }
 
@@ -567,7 +647,10 @@ fn active_monitor(app: &AppHandle) -> Result<MonitorSnapshot, String> {
 }
 
 #[cfg(windows)]
-fn capture_monitor_region_png(monitor: &MonitorSnapshot, rect: &SnipRectPayload) -> Result<Vec<u8>, String> {
+fn capture_monitor_region_png(
+    monitor: &MonitorSnapshot,
+    rect: &SnipRectPayload,
+) -> Result<Vec<u8>, String> {
     let capture_x = monitor.x + ((rect.x * monitor.scale_factor).round() as i32);
     let capture_y = monitor.y + ((rect.y * monitor.scale_factor).round() as i32);
     let capture_width = ((rect.width * monitor.scale_factor).round() as i32).max(1);
@@ -659,6 +742,9 @@ fn capture_monitor_region_png(monitor: &MonitorSnapshot, rect: &SnipRectPayload)
 }
 
 #[cfg(not(windows))]
-fn capture_monitor_region_png(_monitor: &MonitorSnapshot, _rect: &SnipRectPayload) -> Result<Vec<u8>, String> {
+fn capture_monitor_region_png(
+    _monitor: &MonitorSnapshot,
+    _rect: &SnipRectPayload,
+) -> Result<Vec<u8>, String> {
     Err("Native screenshot capture is only implemented for Windows".to_string())
 }

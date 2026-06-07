@@ -1,3 +1,5 @@
+#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -19,12 +21,12 @@ use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 mod apps;
 mod files;
 mod icons;
+mod quick_notes;
 mod shell;
 mod shortcuts;
 mod stickers;
-mod tool_windows;
-mod quick_notes;
 mod todos;
+mod tool_windows;
 mod updates;
 
 use apps::{
@@ -42,9 +44,8 @@ use quick_notes::{
     quick_notes_update_note,
 };
 use shell::{
-    ShellState, apply_drawer_state, apply_window_bounds,
-    close_active_module, drawer_window_bounds, ensure_handle_window,
-    shell_snapshot, update_active_module, webview_url_for_mode,
+    apply_drawer_state, apply_window_bounds, close_active_module, drawer_window_bounds,
+    ensure_handle_window, shell_snapshot, update_active_module, webview_url_for_mode, ShellState,
 };
 use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
 use stickers::{
@@ -52,15 +53,14 @@ use stickers::{
     sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin,
 };
 use todos::{
-    todos_create_card, todos_delete_card, todos_get_counts, todos_move_card,
-    todos_read_state, todos_update_card,
+    todos_create_card, todos_delete_card, todos_get_counts, todos_move_card, todos_read_state,
+    todos_update_card,
 };
 use tool_windows::{close_todo_window, open_todo_window};
 use updates::{
     updates_check, updates_download, updates_get_metadata, updates_get_state, updates_install,
     UpdaterSessionState,
 };
-
 
 #[tauri::command]
 fn events_send(
@@ -132,18 +132,10 @@ fn windows_control(
             if current.expanded && current.active_module.as_deref() == Some("files") {
                 apply_drawer_state(&app, &shell, false)?;
             } else if current.expanded {
-                update_active_module(
-                    &app,
-                    &shell,
-                    Some("files".to_string()),
-                )?;
+                update_active_module(&app, &shell, Some("files".to_string()))?;
             } else {
                 apply_drawer_state(&app, &shell, true)?;
-                update_active_module(
-                    &app,
-                    &shell,
-                    Some("files".to_string()),
-                )?;
+                update_active_module(&app, &shell, Some("files".to_string()))?;
             }
         }
         "open-capture" => {
@@ -155,11 +147,7 @@ fn windows_control(
                     window.hide().map_err(|err| err.to_string())?;
                 }
                 apply_drawer_state(&app, &shell, true)?;
-                update_active_module(
-                    &app,
-                    &shell,
-                    Some("capture".to_string()),
-                )?;
+                update_active_module(&app, &shell, Some("capture".to_string()))?;
                 emit_capture_opened(&app)?;
             }
         }
@@ -168,22 +156,14 @@ fn windows_control(
             if !current.expanded {
                 apply_drawer_state(&app, &shell, true)?;
             }
-            update_active_module(
-                &app,
-                &shell,
-                Some("files".to_string()),
-            )?;
+            update_active_module(&app, &shell, Some("files".to_string()))?;
         }
         "show-capture-tab" => {
             let current = shell_snapshot(&shell)?;
             if !current.expanded {
                 apply_drawer_state(&app, &shell, true)?;
             }
-            update_active_module(
-                &app,
-                &shell,
-                Some("capture".to_string()),
-            )?;
+            update_active_module(&app, &shell, Some("capture".to_string()))?;
             emit_capture_opened(&app)?;
         }
         "close-panel" => {
@@ -279,7 +259,11 @@ pub fn prepare_drawer_storage(app: &AppHandle) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-pub fn write_shortcut_link(shortcut_path: &Path, target_path: &Path, description: &str) -> Result<(), String> {
+pub fn write_shortcut_link(
+    shortcut_path: &Path,
+    target_path: &Path,
+    description: &str,
+) -> Result<(), String> {
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
             .ok()
@@ -316,13 +300,10 @@ fn write_shortcut_link_with_com(
             .encode_utf16()
             .chain(Some(0))
             .collect();
-        let description_wide: Vec<u16> = format!(
-            "{}",
-            description
-        )
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+        let description_wide: Vec<u16> = format!("{}", description)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
 
         shell_link
             .SetPath(PCWSTR(target_wide.as_ptr()))

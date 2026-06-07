@@ -1,90 +1,46 @@
-# TidyDesk 
+# TidyDesk
 
-> 一个优雅的 Windows 桌面文件整理工具
+TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React + TypeScript + Rust` 构建，并通过一个 Go sidecar 扫描本机已安装应用。它的目标不是“强行搬走你的文件”，而是先建立抽屉式入口、待办、便签和截图工作流，让桌面更干净，同时尽量降低误操作风险。
 
-[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/your-github-username/TidyDesk/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey.svg)](https://github.com/your-github-username/TidyDesk)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+## 当前能力
 
-## ✨ 特性
+- 桌面抽屉：把桌面文件收纳到抽屉中，默认以快捷方式作为入口，避免直接破坏原始文件布局
+- 快捷方式体检：检测失效快捷方式，支持批量校验、清理和有限的自动修复
+- 已安装应用收纳：通过 Go sidecar 扫描开始菜单/桌面快捷方式，并加入抽屉
+- 待办面板：独立 Todo 窗口，支持列管理、Markdown 编辑和预览
+- 快捷记录：抽屉侧栏可切换到快速记录面板
+- 截图贴纸：支持截图、贴纸展示、置顶、复制和另存为
+- 自动更新：基于 Tauri updater，支持检查、下载和安装签名更新包
 
-###  多抽屉管理
-- 创建多个抽屉分类管理桌面文件
-- 拖拽文件到抽屉，自动创建快捷方式
-- 重命名、删除抽屉
-- 卡片式展示，一目了然
+## 技术栈
 
-###  智能验证
-- 自动检测失效的快捷方式
-- 实时监控目标文件变化
-- 失效快捷方式自动标记（红色边框 + 警告图标）
-- 批量清理失效快捷方式
+- 前端：`React 18`、`TypeScript`、`Vite`、`Tailwind CSS`
+- 桌面容器：`Tauri 2`
+- 原生逻辑：`Rust`
+- 应用扫描 sidecar：`Go`
 
-###  智能修复
-- 自动搜索移动的文件（桌面、文档、下载、图片、视频）
-- 一键修复失效快捷方式
-- 修复成功率高达 90%+
+## 目录结构
 
-###  自动维护
-- 每 30 分钟自动验证所有快捷方式
-- 后台静默运行，不打扰工作
-- 发现问题自动通知
+```text
+TidyDesk/
+├─ src/                 React 前端
+├─ src-tauri/           Tauri / Rust 代码
+│  ├─ src/
+│  └─ tauri.conf.json
+├─ sidecars/apps-cache/ Go sidecar 源码
+├─ scripts/             构建与发布脚本
+├─ docs/                补充文档
+└─ build/               图标等构建资源
+```
 
-###  应用内更新
-- 启动时自动检查更新
-- 一键下载并安装新版本
-- 无需手动下载，无缝更新体验
-
-###  精美 UI
-- 深色主题，护眼舒适
-- 平滑动画，流畅体验
-- Windows 11 圆角适配
-- 响应式布局
-
-##  截图
-
-> 待添加截图
-
-##  快速开始
-
-### 下载安装
-
-1. 访问 [Releases](https://github.com/your-github-username/TidyDesk/releases) 页面
-2. 下载最新版本的 `TidyDesk-Setup.exe`
-3. 运行安装程序
-4. 完成安装
-
-### 使用方法
-
-1. **创建抽屉**
-   - 点击左上角的 "+" 按钮
-   - 输入抽屉名称
-   - 点击确认
-
-2. **整理文件**
-   - 从桌面拖拽文件到抽屉
-   - 文件会自动创建快捷方式
-   - 原文件保持不动
-
-3. **管理抽屉**
-   - 右键点击抽屉卡片可以重命名或删除
-   - 点击文件可以打开
-   - 点击 🔧 按钮可以修复失效快捷方式
-
-4. **检查更新**
-   - 点击右上角的 ⚙️ 设置按钮
-   - 点击"检查更新"
-   - 如有新版本，点击"下载更新"
-   - 下载完成后点击"安装并重启"
-
-## 🛠️ 开发
+## 本地开发
 
 ### 环境要求
 
-- Node.js 18+
-- Rust 工具链 (rustup, cargo)
-- Go 1.20+ (用于编译 sidecar 进程)
-- Windows 10/11
+- `Node.js 18+`
+- `Rust` 与 `cargo`
+- `Go 1.20+`
+- `Windows 10/11`
 
 ### 安装依赖
 
@@ -92,109 +48,135 @@
 npm install
 ```
 
-### 开发模式
+### 前端开发
 
 ```bash
 npm run dev
 ```
 
-### 构建
+### Tauri 开发
+
+`prepare:tauri-sidecar` 会自动编译并复制 sidecar，因此日常启动建议直接使用：
 
 ```bash
-# 构建 Tauri 生产安装包
+npm run tauri:dev
+```
+
+### 常用检查
+
+```bash
 npm run build
-
-# 构建前端静态文件
-npm run build:frontend
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
-### 项目结构
+## 构建与发布
 
-```
-TidyDesk/
-├── src-tauri/            # Tauri 壳与 Rust 后端代码
-│   ├── src/              # Rust 代码
-│   ├── sidecars/         # 编译后的 Go sidecar 存放目录
-│   └── tauri.conf.json   # Tauri 配置文件
-├── sidecars/             # Go 业务 sidecar 源代码
-│   └── apps-cache/       # 应用程序扫描缓存 sidecar
-├── src/                  # React 前端
-│   ├── components/       # 组件
-│   ├── native/           # 平台 Native API 适配器 (对接 Tauri)
-│   ├── types/            # 类型定义
-│   └── App.tsx           # 主应用
-├── dist/                 # 编译打包后的前端静态资源
-└── package.json
+### 仅构建前端静态资源
+
+```bash
+npm run build
 ```
 
-##  技术栈
+### 仅构建安装包与签名
 
-- **桌面框架**: Tauri v2 (Rust)
-- **后端服务**: Go (Sidecar 进程，用于高性能系统操作如扫注册表)
-- **前端框架**: React 18.3.1 + TypeScript
-- **样式**: Tailwind CSS
-- **构建工具**: Vite 5.2.11
-- **图标库**: lucide-react 0.378.0
+```bash
+npm run tauri:bundle
+```
 
-##  安全性
+### 一键构建安装包并生成 updater manifest
 
-### 非破坏性设计
-- 只创建快捷方式，不移动原文件
-- 删除快捷方式不影响原文件
-- 所有操作可逆
+```bash
+npm run tauri:build
+```
 
-### 路径安全
-- 防止路径遍历攻击
-- 系统目录保护
-- 抽屉路径隔离
+### 发布命令别名
 
-### 更新安全
-- HTTPS 连接
-- 文件完整性验证（SHA512）
-- 签名验证（如果有证书）
+```bash
+npm run tauri:release
+```
 
-## 📖 文档
+当前 `npm run tauri:release` 等价于 `npm run tauri:build`，方便本地与 CI 统一命令。
 
-- [下一步操作指南](NEXT_STEPS.md) - 发布前必读
-- [自动更新指南](AUTO_UPDATE_GUIDE.md) - 完整的自动更新文档
-- [发布检查清单](RELEASE_CHECKLIST.md) - 发布流程
-- [项目状态报告](PROJECT_STATUS.md) - 详细的项目状态
-- [更新日志](CHANGELOG.md) - 版本历史
+### 发布前必需环境变量
 
-## 🐛 问题反馈
+- `TAURI_SIGNING_PRIVATE_KEY` 或 `TAURI_SIGNING_PRIVATE_KEY_PATH`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
-如果你遇到任何问题或有功能建议，请：
+说明：如果签名私钥是加密的，非交互构建必须提供 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；如果当初生成私钥时使用的是空密码，可以显式设为空字符串。
 
-1. 查看 [常见问题](AUTO_UPDATE_GUIDE.md#故障排除)
-2. 搜索 [已有 Issues](https://github.com/your-github-username/TidyDesk/issues)
-3. 创建 [新 Issue](https://github.com/your-github-username/TidyDesk/issues/new)
+构建脚本会优先读取当前终端环境变量；如果当前终端没有设置，则会自动回退到 Windows 用户环境变量，所以推荐只设置一次：
 
-## 🤝 贡献
+```powershell
+[System.Environment]::SetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PATH', 'C:\Users\你的用户名\.tauri\tidydesk.key', 'User')
+[System.Environment]::SetEnvironmentVariable('TAURI_SIGNING_PRIVATE_KEY_PASSWORD', '', 'User')
+```
 
-欢迎贡献代码！请遵循以下步骤：
+如果你只配置了 `TAURI_SIGNING_PRIVATE_KEY_PATH`，`scripts/run-tauri-build.cjs` 会自动读取私钥文件内容并传给 Tauri CLI。
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+### 常用可选环境变量
 
-## 📝 更新日志
+- `TIDYDESK_UPDATER_BASE_URL`：覆盖默认的 GitHub Releases 下载地址
+- `TIDYDESK_UPDATER_NOTES`：写入 `latest.json` 的更新说明
+- `TIDYDESK_UPDATER_MANIFEST_DIR`：修改 `latest.json` 输出目录
+- `TAURI_TARGET_TRIPLE`：指定打包目标架构
 
-查看 [CHANGELOG.md](CHANGELOG.md) 了解版本历史。
+### 默认发布配置
 
-## 📄 许可证
+- `src-tauri/tauri.conf.json` 已内置 GitHub Releases 的 `latest.json` endpoint
+- updater 公钥已内置在 `plugins.updater.pubkey` 中，安装后的客户端会直接使用它验证更新签名
+- Windows 安装更新默认使用 `passive` 模式，保留进度反馈但减少人工交互
+- `bundle.createUpdaterArtifacts` 已开启，`npm run tauri:bundle` 会生成安装包与 `.sig` 签名文件，`npm run tauri:build` 会额外生成 `release-tauri/latest.json`
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+### updater manifest 说明
 
-## 🙏 致谢
+- `npm run tauri:manifest` 需要先存在已签名的安装包和对应 `.sig` 文件
+- 如果未设置 `TIDYDESK_UPDATER_BASE_URL`，脚本会优先从 `package.json > build.publish` 推导 GitHub Releases 地址，并回退到 `GITHUB_REPOSITORY` 或 `repository.url`
 
-- [Tauri](https://tauri.app/) - 跨平台轻量级桌面应用框架
-- [React](https://reactjs.org/) - 用户界面库
-- [Tailwind CSS](https://tailwindcss.com/) - CSS 框架
-- [lucide-react](https://lucide.dev/) - 图标库
-- [chokidar](https://github.com/paulmillr/chokidar) - 文件监控
+## 数据存储
 
-**⭐ 如果这个项目对你有帮助，请给个 Star！**
+应用数据保存在 Tauri 的 `app_data_dir()` 下，主要包括：
 
-Made with ❤️ by [who-am-i]
+- `drawers/`：抽屉目录
+- `storage/`：TidyDesk 托管的原文件存储区
+- `todos/`：待办面板数据
+- `stickers/`：贴纸与截图数据
+
+## 安全说明
+
+- 默认优先创建快捷方式入口，而不是直接删除或覆盖原文件
+- Rust 命令层对抽屉目录、恢复目录和托管存储目录做了路径边界校验
+- 生产包已补上显式 CSP，限制脚本、对象、frame 和跨源连接范围
+- updater 依赖签名公钥验证更新包
+- updater 公钥可以安全提交到仓库；真正需要严格保密的是签名私钥
+- 快捷方式自动修复现在只会在“唯一候选文件”时执行，避免同名文件误修复
+
+## 当前已知限制
+
+- 快捷方式自动修复本质上仍是启发式能力，不能替代人工确认
+- 仓库里还没有看到 `src-tauri/capabilities/*.json` 这类窗口级 capability 配置，后续建议把主窗口、待办窗口、贴纸窗口的 Tauri 权限进一步按窗口拆分
+- Rust 命令层目前缺少针对路径恢复、抽屉导入和快捷方式修复的自动化测试
+
+## 这次仓库自检结果
+
+已完成的本地检查：
+
+- `npm run build`
+- `cargo check`
+- `npm audit --omit=dev`
+- `npm run tauri:manifest`
+  说明：在验证时临时补了一个测试签名文件，仅用于确认 manifest 生成逻辑和 GitHub release URL 推导是否正确，随后已删除
+
+当前结果：
+
+- 前端构建通过
+- Rust 编译检查通过
+- 生产依赖未发现 `npm audit` 已知漏洞
+- updater manifest 脚本现在可以正确推导 `https://github.com/tanzanite2025/TidyDesk/releases/download/v3.0.1`
+
+## 后续建议
+
+如果你准备继续把这个项目做成可稳定发布的桌面应用，建议优先做这三件事：
+
+1. 为不同窗口补齐 Tauri capability 配置，收紧 IPC 和插件权限边界
+2. 给 Rust 命令层补少量路径安全与恢复逻辑测试
+3. 给前端补一条覆盖“智能整理 -> 导入 -> 刷新”的集成验证，避免后续回归

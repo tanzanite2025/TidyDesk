@@ -32,12 +32,13 @@
       "iconAsTemplate": false
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost https://fonts.googleapis.com https://fonts.gstatic.com; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ipc: http://ipc.localhost https://fonts.googleapis.com https://fonts.gstatic.com; media-src 'self' data: blob:; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "devCsp": "default-src 'self' ipc: http://ipc.localhost http://127.0.0.1:3000 ws://127.0.0.1:3000 https://fonts.googleapis.com https://fonts.gstatic.com; script-src 'self' 'unsafe-eval' http://127.0.0.1:3000; style-src 'self' 'unsafe-inline' http://127.0.0.1:3000 https://fonts.googleapis.com; img-src 'self' data: blob: http://127.0.0.1:3000; font-src 'self' data: http://127.0.0.1:3000 https://fonts.gstatic.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:3000 ws://127.0.0.1:3000 https://fonts.googleapis.com https://fonts.gstatic.com; media-src 'self' data: blob: http://127.0.0.1:3000; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     }
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "targets": "nsis",
     "icon": [
       "../build/icon.ico"
@@ -45,5 +46,16 @@
     "externalBin": [
       "sidecars/apps-cache/tidydesk-apps-cache"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/tanzanite2025/TidyDesk/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJCNUJCNDA3QkMwNTkxMkUKUldRdWtRVzhCN1JidTNuRVhnL3U0ZHQ2UllZcW9SZU40bTkvOFgzK2poRzJDYTAvWThwbWowakQK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
