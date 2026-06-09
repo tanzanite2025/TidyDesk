@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::AppHandle;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 
 const QUICK_NOTES_VERSION: u8 = 2;
 const QUICK_NOTES_FILE_NAME: &str = "quick-notes.json";
+const QUICK_NOTE_FALLBACK_TITLE: &str = "Untitled Note";
+
+#[derive(Debug, Default)]
+pub struct QuickNotesStoreState(Mutex<()>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +78,18 @@ fn default_quick_notes_version() -> u8 {
     QUICK_NOTES_VERSION
 }
 
+fn with_quick_notes_store_lock<T>(
+    app: &AppHandle,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let state = app.state::<QuickNotesStoreState>();
+    let _guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock quick notes store".to_string())?;
+    operation()
+}
+
 fn safe_quick_note_title(title: &str, content: &str, fallback: &str) -> String {
     let normalized = title.split_whitespace().collect::<Vec<_>>().join(" ");
     let value = if normalized.is_empty() {
@@ -106,7 +123,7 @@ fn quick_notes_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(crate::files::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME))
 }
 
-fn ensure_quick_notes_storage(app: &AppHandle) -> Result<(), String> {
+fn ensure_quick_notes_storage_unlocked(app: &AppHandle) -> Result<(), String> {
     fs::create_dir_all(crate::files::file_storage_root(app)?)
         .map_err(|err| format!("failed to create quick notes storage root: {err}"))
 }
@@ -129,7 +146,11 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
 
     Some(QuickNote {
         id,
-        title: safe_quick_note_title(note.title.as_deref().unwrap_or(""), &content, "未命名记录"),
+        title: safe_quick_note_title(
+            note.title.as_deref().unwrap_or(""),
+            &content,
+            QUICK_NOTE_FALLBACK_TITLE,
+        ),
         content,
         pinned: note.pinned.unwrap_or(false),
         favorite: note.favorite.unwrap_or(false),
@@ -138,8 +159,8 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
     })
 }
 
-fn read_quick_notes(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
-    ensure_quick_notes_storage(app)?;
+fn read_quick_notes_unlocked(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
+    ensure_quick_notes_storage_unlocked(app)?;
     let raw = fs::read_to_string(quick_notes_path(app)?).unwrap_or_default();
     let stored =
         serde_json::from_str::<StoredQuickNotesFile>(&raw).unwrap_or(StoredQuickNotesFile {
@@ -153,12 +174,12 @@ fn read_quick_notes(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
         .filter_map(normalize_quick_note)
         .collect::<Vec<_>>();
     sort_quick_notes(&mut notes);
-    write_quick_notes(app, &notes)?;
+    write_quick_notes_unlocked(app, &notes)?;
     Ok(notes)
 }
 
-fn write_quick_notes(app: &AppHandle, notes: &[QuickNote]) -> Result<(), String> {
-    ensure_quick_notes_storage(app)?;
+fn write_quick_notes_unlocked(app: &AppHandle, notes: &[QuickNote]) -> Result<(), String> {
+    ensure_quick_notes_storage_unlocked(app)?;
     let payload = WritableQuickNotesFile {
         version: QUICK_NOTES_VERSION,
         notes: notes.to_vec(),
@@ -170,8 +191,10 @@ fn write_quick_notes(app: &AppHandle, notes: &[QuickNote]) -> Result<(), String>
 }
 
 fn quick_notes_state(app: &AppHandle) -> Result<QuickNotesState, String> {
-    Ok(QuickNotesState {
-        notes: read_quick_notes(app)?,
+    with_quick_notes_store_lock(app, || {
+        Ok(QuickNotesState {
+            notes: read_quick_notes_unlocked(app)?,
+        })
     })
 }
 
@@ -185,28 +208,32 @@ pub fn quick_notes_create_note(
     app: AppHandle,
     payload: CreateQuickNotePayload,
 ) -> Result<QuickNotesState, String> {
-    let mut notes = read_quick_notes(&app)?;
-    let content = payload.content.unwrap_or_default();
-    let now = crate::timestamp_string();
-    notes.insert(
-        0,
-        QuickNote {
-            id: create_quick_note_id(),
-            title: safe_quick_note_title(
-                payload.title.as_deref().unwrap_or(""),
-                &content,
-                "未命名记录",
-            ),
-            content,
-            pinned: payload.pinned.unwrap_or(false),
-            favorite: payload.favorite.unwrap_or(false),
-            created_at: now.clone(),
-            updated_at: now,
-        },
-    );
-    sort_quick_notes(&mut notes);
-    write_quick_notes(&app, &notes)?;
-    quick_notes_state(&app)
+    with_quick_notes_store_lock(&app, || {
+        let mut notes = read_quick_notes_unlocked(&app)?;
+        let content = payload.content.unwrap_or_default();
+        let now = crate::timestamp_string();
+
+        notes.insert(
+            0,
+            QuickNote {
+                id: create_quick_note_id(),
+                title: safe_quick_note_title(
+                    payload.title.as_deref().unwrap_or(""),
+                    &content,
+                    QUICK_NOTE_FALLBACK_TITLE,
+                ),
+                content,
+                pinned: payload.pinned.unwrap_or(false),
+                favorite: payload.favorite.unwrap_or(false),
+                created_at: now.clone(),
+                updated_at: now,
+            },
+        );
+
+        sort_quick_notes(&mut notes);
+        write_quick_notes_unlocked(&app, &notes)?;
+        Ok(QuickNotesState { notes })
+    })
 }
 
 #[tauri::command]
@@ -218,34 +245,39 @@ pub fn quick_notes_update_note(
         return Err("Missing quick note id".to_string());
     }
 
-    let mut notes = read_quick_notes(&app)?;
-    let note = notes
-        .iter_mut()
-        .find(|note| note.id == payload.id)
-        .ok_or_else(|| "Quick note not found".to_string())?;
+    with_quick_notes_store_lock(&app, || {
+        let mut notes = read_quick_notes_unlocked(&app)?;
+        let note = notes
+            .iter_mut()
+            .find(|note| note.id == payload.id)
+            .ok_or_else(|| "Quick note not found".to_string())?;
 
-    if let Some(content) = payload.content {
-        note.content = content;
-    }
-    if let Some(title) = payload.title {
-        note.title = safe_quick_note_title(&title, &note.content, "未命名记录");
-    }
-    if let Some(pinned) = payload.pinned {
-        note.pinned = pinned;
-    }
-    if let Some(favorite) = payload.favorite {
-        note.favorite = favorite;
-    }
-    note.updated_at = crate::timestamp_string();
-    sort_quick_notes(&mut notes);
-    write_quick_notes(&app, &notes)?;
-    quick_notes_state(&app)
+        if let Some(content) = payload.content {
+            note.content = content;
+        }
+        if let Some(title) = payload.title {
+            note.title = safe_quick_note_title(&title, &note.content, QUICK_NOTE_FALLBACK_TITLE);
+        }
+        if let Some(pinned) = payload.pinned {
+            note.pinned = pinned;
+        }
+        if let Some(favorite) = payload.favorite {
+            note.favorite = favorite;
+        }
+
+        note.updated_at = crate::timestamp_string();
+        sort_quick_notes(&mut notes);
+        write_quick_notes_unlocked(&app, &notes)?;
+        Ok(QuickNotesState { notes })
+    })
 }
 
 #[tauri::command]
 pub fn quick_notes_delete_note(app: AppHandle, note_id: String) -> Result<QuickNotesState, String> {
-    let mut notes = read_quick_notes(&app)?;
-    notes.retain(|note| note.id != note_id);
-    write_quick_notes(&app, &notes)?;
-    quick_notes_state(&app)
+    with_quick_notes_store_lock(&app, || {
+        let mut notes = read_quick_notes_unlocked(&app)?;
+        notes.retain(|note| note.id != note_id);
+        write_quick_notes_unlocked(&app, &notes)?;
+        Ok(QuickNotesState { notes })
+    })
 }

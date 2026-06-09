@@ -12,10 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "TidyDesk",
-        "width": 980,
-        "height": 680,
-        "url": "index.html?mode=drawer",
+        "label": "bootstrap",
+        "title": "TidyDesk Bootstrap",
+        "width": 320,
+        "height": 240,
+        "url": "index.html",
         "resizable": false,
         "fullscreen": false,
         "center": false,

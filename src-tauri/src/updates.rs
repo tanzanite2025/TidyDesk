@@ -1,8 +1,11 @@
 use serde::Serialize;
 use std::env;
 use std::fs;
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
@@ -40,13 +43,24 @@ pub struct UpdateSnapshot {
     can_install: bool,
 }
 
-#[derive(Default)]
-pub struct UpdaterSessionState(Mutex<UpdaterSession>);
+pub struct UpdaterSessionState {
+    session: Mutex<UpdaterSession>,
+    operation_in_flight: AtomicBool,
+}
 
 #[derive(Default)]
 struct UpdaterSession {
     pending_update: Option<PendingUpdate>,
     last_snapshot: Option<UpdateSnapshot>,
+}
+
+impl Default for UpdaterSessionState {
+    fn default() -> Self {
+        Self {
+            session: Mutex::new(UpdaterSession::default()),
+            operation_in_flight: AtomicBool::new(false),
+        }
+    }
 }
 
 struct PendingUpdate {
@@ -317,7 +331,7 @@ fn replace_session(
     pending_update: Option<PendingUpdate>,
 ) -> Result<(), String> {
     let mut session = state
-        .0
+        .session
         .lock()
         .map_err(|_| "failed to lock updater session".to_string())?;
     session.pending_update = pending_update;
@@ -330,7 +344,7 @@ fn current_snapshot(
     state: &State<'_, UpdaterSessionState>,
 ) -> Result<UpdateSnapshot, String> {
     let session = state
-        .0
+        .session
         .lock()
         .map_err(|_| "failed to lock updater session".to_string())?;
     if let Some(snapshot) = session.last_snapshot.clone() {
@@ -344,6 +358,23 @@ fn emit_snapshot(app: &AppHandle, snapshot: &UpdateSnapshot) -> Result<(), Strin
         .map_err(|err| err.to_string())
 }
 
+fn store_snapshot_for_state(
+    state: &UpdaterSessionState,
+    snapshot: &UpdateSnapshot,
+) -> Result<(), String> {
+    let mut session = state
+        .session
+        .lock()
+        .map_err(|_| "failed to lock updater session".to_string())?;
+    session.last_snapshot = Some(snapshot.clone());
+    Ok(())
+}
+
+fn store_snapshot_for_app(app: &AppHandle, snapshot: &UpdateSnapshot) -> Result<(), String> {
+    let state = app.state::<UpdaterSessionState>();
+    store_snapshot_for_state(&state, snapshot)
+}
+
 fn emit_and_store(
     app: &AppHandle,
     state: &State<'_, UpdaterSessionState>,
@@ -353,6 +384,28 @@ fn emit_and_store(
     replace_session(state, snapshot, pending_update)?;
     emit_snapshot(app, snapshot)?;
     Ok(snapshot.clone())
+}
+
+struct UpdaterOperationGuard<'a> {
+    state: &'a UpdaterSessionState,
+}
+
+impl Drop for UpdaterOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.state
+            .operation_in_flight
+            .store(false, Ordering::Release);
+    }
+}
+
+fn try_begin_updater_operation<'a>(
+    state: &'a State<'_, UpdaterSessionState>,
+) -> Option<UpdaterOperationGuard<'a>> {
+    state
+        .operation_in_flight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| UpdaterOperationGuard { state: &*state })
 }
 
 #[tauri::command]
@@ -373,6 +426,9 @@ pub async fn updates_check(
     app: AppHandle,
     state: State<'_, UpdaterSessionState>,
 ) -> Result<UpdateSnapshot, String> {
+    let Some(_operation_guard) = try_begin_updater_operation(&state) else {
+        return current_snapshot(&app, &state);
+    };
     let metadata = update_metadata(&app);
 
     if cfg!(debug_assertions) {
@@ -436,10 +492,13 @@ pub async fn updates_download(
     app: AppHandle,
     state: State<'_, UpdaterSessionState>,
 ) -> Result<UpdateSnapshot, String> {
+    let Some(_operation_guard) = try_begin_updater_operation(&state) else {
+        return current_snapshot(&app, &state);
+    };
     let metadata = update_metadata(&app);
     let update = {
         let session = state
-            .0
+            .session
             .lock()
             .map_err(|_| "failed to lock updater session".to_string())?;
         match session.pending_update.as_ref() {
@@ -482,6 +541,7 @@ pub async fn updates_download(
                     percent,
                     message,
                 );
+                let _ = store_snapshot_for_app(&app_for_progress, &snapshot);
                 let _ = emit_snapshot(&app_for_progress, &snapshot);
             },
             move || {
@@ -491,6 +551,7 @@ pub async fn updates_download(
                     Some(100.0),
                     Some("Download complete. Verifying update package...".to_string()),
                 );
+                let _ = store_snapshot_for_app(&app_for_finish, &snapshot);
                 let _ = emit_snapshot(&app_for_finish, &snapshot);
             },
         )
@@ -528,10 +589,13 @@ pub fn updates_install(
     app: AppHandle,
     state: State<'_, UpdaterSessionState>,
 ) -> Result<UpdateSnapshot, String> {
+    let Some(_operation_guard) = try_begin_updater_operation(&state) else {
+        return current_snapshot(&app, &state);
+    };
     let metadata = update_metadata(&app);
     let (update, bytes, snapshot) = {
         let mut session = state
-            .0
+            .session
             .lock()
             .map_err(|_| "failed to lock updater session".to_string())?;
 

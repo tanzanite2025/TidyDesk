@@ -4,6 +4,12 @@ import { nativeClient } from '../../native/native-client';
 type Point = { x: number; y: number };
 type Rect = { x: number; y: number; width: number; height: number };
 
+function centerPoint(): Point {
+  return {
+    x: Math.round(window.innerWidth / 2),
+    y: Math.round(window.innerHeight / 2)
+  };
+}
 
 function rectFromPoints(start: Point, end: Point): Rect {
   const x = Math.min(start.x, end.x);
@@ -49,10 +55,7 @@ export const SnipOverlayApp: React.FC = () => {
   const [endPoint, setEndPoint] = useState<Point | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [cursorPoint, setCursorPoint] = useState<Point>({
-    x: Math.round(window.innerWidth / 2),
-    y: Math.round(window.innerHeight / 2)
-  });
+  const [cursorPoint, setCursorPoint] = useState<Point>(centerPoint);
 
   const cancelSnip = () => {
     if (!nativeClient.isAvailable()) return;
@@ -68,6 +71,14 @@ export const SnipOverlayApp: React.FC = () => {
     setIsDragging(false);
     setStartPoint(null);
     setEndPoint(null);
+  };
+
+  const resetOverlay = () => {
+    setIsDragging(false);
+    setIsCapturing(false);
+    setStartPoint(null);
+    setEndPoint(null);
+    setCursorPoint(centerPoint());
   };
 
   const applySelection = (rect: Rect) => {
@@ -87,6 +98,28 @@ export const SnipOverlayApp: React.FC = () => {
     });
     applySelection(moved);
   };
+
+  useEffect(() => {
+    if (!nativeClient.isAvailable()) return;
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    import('@tauri-apps/api/event')
+      .then(api => api.listen('snip-reset', resetOverlay))
+      .then(nextUnlisten => {
+        if (disposed) nextUnlisten();
+        else unlisten = nextUnlisten;
+      })
+      .catch(error => {
+        console.error('[TIDYDESK] Failed to bind snip reset listener:', error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -155,8 +188,9 @@ export const SnipOverlayApp: React.FC = () => {
 
   return (
     <div
+      data-testid="snip-overlay-root"
       className="snip-overlay-root relative h-screen w-screen cursor-crosshair select-none overflow-hidden text-white"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.12)' }}
+      style={{ backgroundColor: 'rgba(2, 6, 23, 0.18)' }}
       onMouseDown={event => {
         if (isCapturing) return;
         if (event.button !== 0) {
@@ -190,21 +224,34 @@ export const SnipOverlayApp: React.FC = () => {
       }}
     >
       <div
-        className="pointer-events-none absolute inset-y-0 w-px bg-white/18"
+        className="pointer-events-none absolute inset-y-0 w-px bg-white/25"
         style={{ left: cursorPoint.x }}
       />
       <div
-        className="pointer-events-none absolute inset-x-0 h-px bg-white/18"
+        className="pointer-events-none absolute inset-x-0 h-px bg-white/25"
         style={{ top: cursorPoint.y }}
       />
 
-      <div className="pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 rounded-xl border border-white/15 bg-black/55 px-4 py-3 text-[12px] font-medium shadow-2xl backdrop-blur-sm">
-        {selection ? 'Enter / Space 确认，方向键微调，Shift + 方向键快速移动，Esc 取消' : '拖拽创建选区，Ctrl + A 全屏，Esc 取消'}
+      <div className="pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 rounded-xl border border-white/20 bg-black/70 px-4 py-3 text-[12px] font-medium shadow-2xl backdrop-blur-sm">
+        {selection
+          ? 'Enter / Space confirm | Arrow keys move | Shift + Arrow faster | Esc cancel'
+          : 'Drag to select | Ctrl + A full screen | Right click / Esc cancel'}
       </div>
+
+      {!selection && !isDragging && (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 w-[320px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/18 bg-slate-950/68 px-5 py-4 text-center shadow-2xl backdrop-blur-md">
+          <div className="text-sm font-semibold tracking-[0.08em] text-white/95">
+            Click and drag to capture
+          </div>
+          <div className="mt-2 text-[12px] leading-5 text-white/70">
+            Release the mouse to keep the selection, then press Enter or Space to create a sticker.
+          </div>
+        </div>
+      )}
 
       {selection && (
         <div
-          className="pointer-events-none absolute border border-sky-200 bg-sky-300/12 shadow-[0_0_0_9999px_rgba(2,6,23,0.42)]"
+          className="pointer-events-none absolute border border-sky-200 bg-sky-300/12 shadow-[0_0_0_9999px_rgba(2,6,23,0.48)]"
           style={{
             left: selection.x,
             top: selection.y,
@@ -213,14 +260,15 @@ export const SnipOverlayApp: React.FC = () => {
           }}
         >
           <div className="absolute -top-7 left-0 rounded bg-sky-200 px-2 py-1 text-[11px] font-bold text-slate-950">
-            {Math.round(selection.width)} x {Math.round(selection.height)} | {Math.round(selection.x)}, {Math.round(selection.y)}
+            {Math.round(selection.width)} x {Math.round(selection.height)} | {Math.round(selection.x)},{' '}
+            {Math.round(selection.y)}
           </div>
         </div>
       )}
 
       {isCapturing && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35 text-[13px] font-bold">
-          正在生成贴图...
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/40 text-[13px] font-bold">
+          Creating sticker...
         </div>
       )}
     </div>

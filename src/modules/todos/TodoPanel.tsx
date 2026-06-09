@@ -174,7 +174,7 @@ const TodoPanelInner: React.FC = () => {
           <button type="button" onClick={refreshTodos} title="刷新" className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100">
             <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
           </button>
-          <button type="button" onClick={() => nativeClient.isAvailable() && void nativeClient.toolWindows.closeTodo()} title="关闭" className="rounded-md p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-200">
+          <button type="button" onClick={() => nativeClient.isAvailable() && void nativeClient.toolWindows.closeTodo()} data-testid="todo-close" title="关闭" className="rounded-md p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-200">
             <X size={14} />
           </button>
         </div>

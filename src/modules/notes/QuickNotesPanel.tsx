@@ -1,291 +1,39 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React from 'react';
 import { Clipboard, Copy, Loader2, NotebookPen, Pin, Plus, Save, Search, Star, Trash2 } from 'lucide-react';
-import { nativeClient } from '../../native/native-client';
-import type { QuickNote, QuickNotesState } from '../../types/quick-note';
-
-type SortMode = 'updated' | 'created' | 'title';
-
-interface QuickNoteSection {
-  key: string;
-  label: string;
-  notes: QuickNote[];
-}
-
-function titleFromContent(content: string) {
-  return content
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .find(Boolean)
-    ?.slice(0, 80) || '未命名记录';
-}
-
-function formatTimeLabel(value: string) {
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return '刚刚';
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(timestamp));
-}
-
-async function copyText(text: string) {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
-}
-
-function notePreview(content: string) {
-  return content
-    .split(/\r?\n/)
-    .map(line => line.replace(/^#+\s*/, '').replace(/^- \[[ xX]\]\s*/, '').trim())
-    .filter(Boolean)
-    .slice(0, 3)
-    .join(' · ');
-}
-
-function timestampNumber(value: string) {
-  const timestamp = Date.parse(value);
-  return Number.isNaN(timestamp) ? 0 : timestamp;
-}
-
-function sortNotes(notes: QuickNote[], sortMode: SortMode) {
-  return [...notes].sort((left, right) => {
-    if (sortMode === 'title') {
-      return left.title.localeCompare(right.title, 'zh-CN')
-        || timestampNumber(right.updatedAt) - timestampNumber(left.updatedAt);
-    }
-
-    if (sortMode === 'created') {
-      return timestampNumber(right.createdAt) - timestampNumber(left.createdAt)
-        || timestampNumber(right.updatedAt) - timestampNumber(left.updatedAt);
-    }
-
-    return timestampNumber(right.updatedAt) - timestampNumber(left.updatedAt)
-      || timestampNumber(right.createdAt) - timestampNumber(left.createdAt);
-  });
-}
-
-function noteMatchesQuery(note: QuickNote, query: string) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
-
-  const haystack = `${note.title}\n${note.content}`.toLowerCase();
-  return normalized.split(/\s+/).every(part => haystack.includes(part));
-}
-
-function dayStart(timestamp: number) {
-  const next = new Date(timestamp);
-  next.setHours(0, 0, 0, 0);
-  return next.getTime();
-}
-
-function noteTimeBucket(note: QuickNote) {
-  const diffDays = Math.floor((dayStart(Date.now()) - dayStart(timestampNumber(note.updatedAt))) / 86400000);
-  if (diffDays <= 0) return 'today';
-  if (diffDays <= 7) return 'recent';
-  return 'earlier';
-}
-
-function buildSections(notes: QuickNote[], sortMode: SortMode): QuickNoteSection[] {
-  const sorted = sortNotes(notes, sortMode);
-  const pinned = sorted.filter(note => note.pinned);
-  const favorites = sorted.filter(note => !note.pinned && note.favorite);
-  const regular = sorted.filter(note => !note.pinned && !note.favorite);
-  const today = regular.filter(note => noteTimeBucket(note) === 'today');
-  const recent = regular.filter(note => noteTimeBucket(note) === 'recent');
-  const earlier = regular.filter(note => noteTimeBucket(note) === 'earlier');
-
-  return [
-    pinned.length > 0 ? { key: 'pinned', label: '置顶', notes: pinned } : null,
-    favorites.length > 0 ? { key: 'favorite', label: '收藏', notes: favorites } : null,
-    today.length > 0 ? { key: 'today', label: '今天', notes: today } : null,
-    recent.length > 0 ? { key: 'recent', label: '最近', notes: recent } : null,
-    earlier.length > 0 ? { key: 'earlier', label: '更早', notes: earlier } : null
-  ].filter((section): section is QuickNoteSection => Boolean(section));
-}
+import { useQuickNotes } from './useQuickNotes';
+import { formatTimeLabel, notePreview, SortMode } from './utils';
 
 export const QuickNotesPanel: React.FC = () => {
-  const [notes, setNotes] = useState<QuickNote[]>([]);
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
-  const [draftTitle, setDraftTitle] = useState('');
-  const [draftContent, setDraftContent] = useState('');
-  const [draftPinned, setDraftPinned] = useState(false);
-  const [draftFavorite, setDraftFavorite] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isImportingClipboard, setIsImportingClipboard] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortMode, setSortMode] = useState<SortMode>('updated');
-  const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const selectedNote = useMemo(
-    () => notes.find(note => note.id === selectedNoteId) || null,
-    [notes, selectedNoteId]
-  );
-
-  function applyState(state: QuickNotesState, preferredId?: string | null) {
-    const nextNotes = [...(state.notes || [])];
-    const activeId = preferredId === undefined ? selectedNoteId : preferredId;
-    const activeNote = (activeId ? nextNotes.find(note => note.id === activeId) : null) || nextNotes[0] || null;
-    setNotes(nextNotes);
-    setSelectedNoteId(activeNote?.id || null);
-    setDraftTitle(activeNote?.title || '');
-    setDraftContent(activeNote?.content || '');
-    setDraftPinned(activeNote?.pinned || false);
-    setDraftFavorite(activeNote?.favorite || false);
-  }
-
-  async function preloadClipboardDraft(mode: 'auto' | 'manual' = 'manual') {
-    setIsImportingClipboard(true);
-    try {
-      const text = (await nativeClient.clipboard.readText()).trim();
-      if (!text) {
-        if (mode === 'manual') {
-          setNotice('当前剪贴板没有可用文本');
-          setError(null);
-        }
-        return false;
-      }
-
-      setSelectedNoteId(null);
-      setDraftTitle(titleFromContent(text));
-      setDraftContent(text);
-      setDraftPinned(false);
-      setDraftFavorite(false);
-      setError(null);
-      setNotice(mode === 'auto' ? '已自动带入剪贴板内容，可直接保存成记录' : '已带入当前剪贴板文本');
-      return true;
-    } catch (err) {
-      if (mode === 'manual') {
-        setError(`读取剪贴板失败: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      return false;
-    } finally {
-      setIsImportingClipboard(false);
-    }
-  }
-
-  useEffect(() => {
-    let disposed = false;
-    const load = async () => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const state = await nativeClient.quickNotes.readState();
-        if (disposed) return;
-        applyState(state, null);
-        const clipboardText = (await nativeClient.clipboard.readText().catch(() => '')).trim();
-        if (disposed || !clipboardText) return;
-        setSelectedNoteId(null);
-        setDraftTitle(titleFromContent(clipboardText));
-        setDraftContent(clipboardText);
-        setDraftPinned(false);
-        setDraftFavorite(false);
-        setNotice('已自动带入剪贴板内容，可直接保存成记录');
-      } catch (err) {
-        if (disposed) return;
-        setError(`读取快捷记录失败: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        if (!disposed) setIsLoading(false);
-      }
-    };
-
-    void load();
-
-    return () => {
-      disposed = true;
-    };
-  }, []);
-
-  const beginNewNote = () => {
-    setSelectedNoteId(null);
-    setDraftTitle('');
-    setDraftContent('');
-    setDraftPinned(false);
-    setDraftFavorite(false);
-    setError(null);
-    setNotice(null);
-    void preloadClipboardDraft('manual');
-  };
-
-  const selectNote = (note: QuickNote) => {
-    setSelectedNoteId(note.id);
-    setDraftTitle(note.title);
-    setDraftContent(note.content);
-    setDraftPinned(note.pinned);
-    setDraftFavorite(note.favorite);
-    setNotice(null);
-    setError(null);
-  };
-
-  const saveNote = async () => {
-    const title = draftTitle.trim() || titleFromContent(draftContent);
-    const content = draftContent.trim();
-    if (!title && !content) return;
-
-    setIsSaving(true);
-    setError(null);
-    try {
-      const state = selectedNoteId
-        ? await nativeClient.quickNotes.updateNote({ id: selectedNoteId, title, content, pinned: draftPinned, favorite: draftFavorite })
-        : await nativeClient.quickNotes.createNote({ title, content, pinned: draftPinned, favorite: draftFavorite });
-      const nextSelectedId = selectedNoteId || state.notes[0]?.id || null;
-      applyState(state, nextSelectedId);
-      setNotice(selectedNoteId ? '记录已保存' : '记录已创建');
-    } catch (err) {
-      setError(`保存记录失败: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const removeNote = async (noteId: string) => {
-    try {
-      const state = await nativeClient.quickNotes.deleteNote(noteId);
-      applyState(state, selectedNoteId === noteId ? null : selectedNoteId);
-      setNotice('记录已删除');
-      setError(null);
-    } catch (err) {
-      setError(`删除记录失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const copyNote = async (note: QuickNote) => {
-    const payload = note.content.trim() || note.title;
-    if (!payload) return;
-
-    try {
-      await copyText(payload);
-      setNotice(`已复制：${note.title}`);
-      setError(null);
-    } catch (err) {
-      setError(`复制失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const filteredNotes = useMemo(
-    () => notes.filter(note => noteMatchesQuery(note, searchQuery)),
-    [notes, searchQuery]
-  );
-
-  const noteSections = useMemo(
-    () => buildSections(filteredNotes, sortMode),
-    [filteredNotes, sortMode]
-  );
+  const {
+    notes,
+    selectedNoteId,
+    selectedNote,
+    draftTitle,
+    setDraftTitle,
+    draftContent,
+    setDraftContent,
+    draftPinned,
+    setDraftPinned,
+    draftFavorite,
+    setDraftFavorite,
+    isLoading,
+    isSaving,
+    isImportingClipboard,
+    searchQuery,
+    setSearchQuery,
+    sortMode,
+    setSortMode,
+    notice,
+    error,
+    filteredNotes,
+    noteSections,
+    preloadClipboardDraft,
+    beginNewNote,
+    selectNote,
+    saveNote,
+    removeNote,
+    copyNote
+  } = useQuickNotes();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col px-5 pb-4">
@@ -492,40 +240,40 @@ export const QuickNotesPanel: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-1">
                             <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={event => {
-                                event.stopPropagation();
-                                void copyNote(note);
-                              }}
-                              onKeyDown={event => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  void copyNote(note);
-                                }
-                              }}
-                              className="rounded-full p-1.5 text-slate-400 hover:bg-white/[0.08] hover:text-slate-100"
-                              title="复制"
+                               role="button"
+                               tabIndex={0}
+                               onClick={event => {
+                                 event.stopPropagation();
+                                 void copyNote(note);
+                               }}
+                               onKeyDown={event => {
+                                 if (event.key === 'Enter' || event.key === ' ') {
+                                   event.preventDefault();
+                                   event.stopPropagation();
+                                   void copyNote(note);
+                                 }
+                               }}
+                               className="rounded-full p-1.5 text-slate-400 hover:bg-white/[0.08] hover:text-slate-100"
+                               title="复制"
                             >
                               <Copy size={14} />
                             </span>
                             <span
-                              role="button"
-                              tabIndex={0}
-                              onClick={event => {
-                                event.stopPropagation();
-                                void removeNote(note.id);
-                              }}
-                              onKeyDown={event => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  void removeNote(note.id);
-                                }
-                              }}
-                              className="rounded-full p-1.5 text-slate-400 hover:bg-rose-500/15 hover:text-rose-200"
-                              title="删除"
+                               role="button"
+                               tabIndex={0}
+                               onClick={event => {
+                                 event.stopPropagation();
+                                 void removeNote(note.id);
+                               }}
+                               onKeyDown={event => {
+                                 if (event.key === 'Enter' || event.key === ' ') {
+                                   event.preventDefault();
+                                   event.stopPropagation();
+                                   void removeNote(note.id);
+                                 }
+                               }}
+                               className="rounded-full p-1.5 text-slate-400 hover:bg-rose-500/15 hover:text-rose-200"
+                               title="删除"
                             >
                               <Trash2 size={14} />
                             </span>

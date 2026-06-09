@@ -24,7 +24,9 @@
     "tauri:bundle": "npm run tauri:preflight && node scripts/run-tauri-build.cjs",
     "tauri:manifest": "node scripts/generate-tauri-latest-json.cjs",
     "tauri:build": "npm run tauri:bundle && npm run tauri:manifest",
-    "tauri:release": "npm run tauri:build"
+    "tauri:release": "npm run tauri:build",
+    "test:e2e:install": "npm install --prefix e2e-tests",
+    "test:e2e:tauri": "npm test --prefix e2e-tests"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

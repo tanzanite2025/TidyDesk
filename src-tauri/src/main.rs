@@ -1,4 +1,7 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -10,24 +13,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
-use windows::core::{Interface, PCWSTR};
-use windows::Win32::Storage::FileSystem::WIN32_FIND_DATAW;
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED, STGM_READ,
-};
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 mod apps;
+mod apps_classifier;
+mod sidecar_client;
 mod files;
+mod files_rules;
 mod icons;
 mod quick_notes;
 mod shell;
 mod shortcuts;
 mod stickers;
+mod stickers_rules;
 mod todos;
+mod todos_rules;
 mod tool_windows;
 mod updates;
+
+pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link};
 
 use apps::{
     apps_add_to_drawer, apps_get_picker_target, apps_scan_installed, apps_scan_metadata,
@@ -41,20 +44,22 @@ use files::{
 use icons::extract_icon_data_url;
 use quick_notes::{
     quick_notes_create_note, quick_notes_delete_note, quick_notes_read_state,
-    quick_notes_update_note,
+    quick_notes_update_note, QuickNotesStoreState,
 };
 use shell::{
-    apply_drawer_state, apply_window_bounds, close_active_module, drawer_window_bounds,
-    ensure_handle_window, shell_snapshot, update_active_module, webview_url_for_mode, ShellState,
+    apply_drawer_state, apply_window_bounds, close_active_module, ensure_handle_window,
+    handle_window_bounds, recover_shell_windows, shell_snapshot, update_active_module,
+    update_shell_state, ShellState,
 };
 use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
 use stickers::{
     open_snip_window, restore_stickers, snip_cancel, snip_complete_selection, sticker_close,
-    sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin,
+    sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin, SnipCaptureState,
+    StickerStoreState,
 };
 use todos::{
     todos_create_card, todos_delete_card, todos_get_counts, todos_move_card, todos_read_state,
-    todos_update_card,
+    todos_update_card, TodoStoreState,
 };
 use tool_windows::{close_todo_window, open_todo_window};
 use updates::{
@@ -201,6 +206,95 @@ fn clipboard_read_text() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn tests_open_files_drawer(
+    app: AppHandle,
+    shell: tauri::State<'_, ShellState>,
+) -> Result<Value, String> {
+    if !shell_snapshot(&shell)?.expanded {
+        apply_drawer_state(&app, &shell, true)?;
+    }
+    update_active_module(&app, &shell, Some("files".to_string()))?;
+    Ok(json!({ "success": true }))
+}
+
+#[tauri::command]
+fn tests_collapse_drawer(
+    app: AppHandle,
+    shell: tauri::State<'_, ShellState>,
+) -> Result<Value, String> {
+    apply_drawer_state(&app, &shell, false)?;
+    Ok(json!({ "success": true }))
+}
+
+#[tauri::command]
+fn tests_start_snip(app: AppHandle) -> Result<Value, String> {
+    open_snip_window(&app)?;
+    Ok(json!({ "success": true }))
+}
+
+fn window_debug_snapshot(app: &AppHandle, label: &str) -> Value {
+    if let Some(window) = app.get_webview_window(label) {
+        let visible = window.is_visible().unwrap_or(false);
+        let url = window.url().ok().map(|value| value.to_string());
+        let title = window.title().ok();
+        json!({
+            "label": label,
+            "exists": true,
+            "visible": visible,
+            "url": url,
+            "title": title,
+        })
+    } else {
+        json!({
+            "label": label,
+            "exists": false,
+            "visible": false,
+            "url": Value::Null,
+            "title": Value::Null,
+        })
+    }
+}
+
+#[tauri::command]
+fn tests_get_window_snapshot(
+    app: AppHandle,
+    shell: tauri::State<'_, ShellState>,
+) -> Result<Value, String> {
+    let snapshot = shell_snapshot(&shell)?;
+    Ok(json!({
+        "success": true,
+        "shell": {
+            "expanded": snapshot.expanded,
+            "activeModule": snapshot.active_module,
+        },
+        "windows": {
+            "handle": window_debug_snapshot(&app, "handle"),
+            "main": window_debug_snapshot(&app, "main"),
+            "todos": window_debug_snapshot(&app, "todos"),
+            "snip": window_debug_snapshot(&app, "snip"),
+            "appPicker": window_debug_snapshot(&app, "app-picker-poc"),
+        }
+    }))
+}
+
+#[tauri::command]
+fn tests_reset_window_state(
+    app: AppHandle,
+    shell: tauri::State<'_, ShellState>,
+) -> Result<Value, String> {
+    let _ = close_app_picker_poc(app.clone());
+    let _ = snip_cancel(app.clone());
+    let _ = close_todo_window(app.clone());
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    update_shell_state(&app, &shell, false, None)?;
+    recover_shell_windows(&app)?;
+    tests_get_window_snapshot(app, shell)
+}
+
 fn emit_capture_opened(app: &AppHandle) -> Result<(), String> {
     let clipboard_text = {
         match arboard::Clipboard::new() {
@@ -258,132 +352,7 @@ pub fn prepare_drawer_storage(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
-pub fn write_shortcut_link(
-    shortcut_path: &Path,
-    target_path: &Path,
-    description: &str,
-) -> Result<(), String> {
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|err| format!("failed to initialize COM: {err}"))?;
-        let result = write_shortcut_link_with_com(shortcut_path, target_path, description);
-        CoUninitialize();
-        result
-    }
-}
 
-#[cfg(windows)]
-fn write_shortcut_link_with_com(
-    shortcut_path: &Path,
-    target_path: &Path,
-    description: &str,
-) -> Result<(), String> {
-    unsafe {
-        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|err| format!("failed to create ShellLink: {err}"))?;
-        let target_wide: Vec<u16> = target_path
-            .display()
-            .to_string()
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        let working_dir = if target_path.is_dir() {
-            target_path
-        } else {
-            target_path.parent().unwrap_or_else(|| Path::new(""))
-        };
-        let working_dir_wide: Vec<u16> = working_dir
-            .display()
-            .to_string()
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        let description_wide: Vec<u16> = format!("{}", description)
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-
-        shell_link
-            .SetPath(PCWSTR(target_wide.as_ptr()))
-            .map_err(|err| format!("failed to set shortcut target: {err}"))?;
-        shell_link
-            .SetWorkingDirectory(PCWSTR(working_dir_wide.as_ptr()))
-            .map_err(|err| format!("failed to set shortcut cwd: {err}"))?;
-        shell_link
-            .SetDescription(PCWSTR(description_wide.as_ptr()))
-            .map_err(|err| format!("failed to set shortcut description: {err}"))?;
-        let persist_file: IPersistFile = shell_link
-            .cast()
-            .map_err(|err| format!("failed to query IPersistFile: {err}"))?;
-        let shortcut_wide: Vec<u16> = shortcut_path
-            .display()
-            .to_string()
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
-        persist_file
-            .Save(PCWSTR(shortcut_wide.as_ptr()), true)
-            .map_err(|err| format!("failed to save shortcut: {err}"))?;
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-pub fn write_shortcut_link(
-    _shortcut_path: &Path,
-    _target_path: &Path,
-    _description: &str,
-) -> Result<(), String> {
-    Err("Creating shortcuts is only implemented for Windows in this PoC".to_string())
-}
-
-#[cfg(windows)]
-pub fn resolve_shortcut_target(shortcut_path: &str) -> Result<Option<String>, String> {
-    let shortcut_path_wide: Vec<u16> = shortcut_path.encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|err| format!("failed to initialize COM: {err}"))?;
-        let result = resolve_shortcut_target_with_com(&shortcut_path_wide);
-        CoUninitialize();
-        result
-    }
-}
-
-#[cfg(windows)]
-fn resolve_shortcut_target_with_com(shortcut_path_wide: &[u16]) -> Result<Option<String>, String> {
-    unsafe {
-        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|err| format!("failed to create ShellLink: {err}"))?;
-        let persist_file: IPersistFile = shell_link
-            .cast()
-            .map_err(|err| format!("failed to query IPersistFile: {err}"))?;
-        persist_file
-            .Load(PCWSTR(shortcut_path_wide.as_ptr()), STGM_READ)
-            .map_err(|err| format!("failed to load shortcut: {err}"))?;
-
-        let mut target = [0u16; 32768];
-        let mut find_data = WIN32_FIND_DATAW::default();
-        shell_link
-            .GetPath(&mut target, &mut find_data, 0)
-            .map_err(|err| format!("failed to resolve shortcut target: {err}"))?;
-        let end = target
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(target.len());
-        if end == 0 {
-            return Ok(None);
-        }
-        Ok(Some(String::from_utf16_lossy(&target[..end])))
-    }
-}
-
-#[cfg(not(windows))]
-pub fn resolve_shortcut_target(_shortcut_path: &str) -> Result<Option<String>, String> {
-    Ok(None)
-}
 
 fn main() {
     tauri::Builder::default()
@@ -392,6 +361,10 @@ fn main() {
         .manage(SidecarState::default())
         .manage(ShellState::default())
         .manage(UserInteractionState::default())
+        .manage(StickerStoreState::default())
+        .manage(SnipCaptureState::default())
+        .manage(TodoStoreState::default())
+        .manage(QuickNotesStoreState::default())
         .manage(UpdaterSessionState::default())
         .setup(|app| {
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
@@ -407,11 +380,8 @@ fn main() {
                 .build(app)?;
             let handle = app.handle().clone();
             let _ = ensure_handle_window(&handle);
-            if let Ok(bounds) = drawer_window_bounds(&handle) {
-                let _ = apply_window_bounds(&handle, "main", bounds);
-            }
-            if let Some(window) = handle.get_webview_window("main") {
-                let _ = window.hide();
+            if let Ok(bounds) = handle_window_bounds(&handle, false) {
+                let _ = apply_window_bounds(&handle, "handle", bounds);
             }
             if let Some(window) = handle.get_webview_window("handle") {
                 let _ = window.show();
@@ -437,6 +407,11 @@ fn main() {
             drawers_delete_item,
             apps_get_picker_target,
             windows_control,
+            tests_open_files_drawer,
+            tests_collapse_drawer,
+            tests_start_snip,
+            tests_get_window_snapshot,
+            tests_reset_window_state,
             clipboard_read_text,
             events_send,
             snip_complete_selection,

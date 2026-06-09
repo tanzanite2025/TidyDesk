@@ -125,6 +125,7 @@ export const RailBar: React.FC<RailBarProps> = ({ variant }) => {
             key={item.id}
             type="button"
             onClick={() => openModule(item.action)}
+            data-testid={`rail-${item.id}`}
             className={`${config.buttonClass} ${
               isActive ? config.activeClass : config.inactiveClass
             }`}
