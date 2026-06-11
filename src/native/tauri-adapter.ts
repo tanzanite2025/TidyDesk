@@ -229,7 +229,11 @@ export function createTauriNativeClient(): NativeClient {
     capture: {
       onOpened: callback => onTauriEvent<CaptureOpenedPayload>('capture-opened', callback),
       completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
-      cancelSnip: () => invoke('snip_cancel')
+      cancelSnip: () => invoke('snip_cancel'),
+      getBackgroundImage: async () => {
+        const res = await invoke<{ success: boolean; imageDataUrl: string }>('snip_get_background_image');
+        return res.success ? res.imageDataUrl : null;
+      }
     },
     stickers: {
       get: (stickerId: string) => invoke<StickerData | null>('sticker_get', { sticker_id: stickerId }),

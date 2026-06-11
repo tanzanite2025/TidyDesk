@@ -56,6 +56,7 @@ export const SnipOverlayApp: React.FC = () => {
   const [isCapturing, setIsCapturing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [cursorPoint, setCursorPoint] = useState<Point>(centerPoint);
+  const [bgImage, setBgImage] = useState<string | null>(null);
 
   const cancelSnip = () => {
     if (!nativeClient.isAvailable()) return;
@@ -114,6 +115,12 @@ export const SnipOverlayApp: React.FC = () => {
       .catch(error => {
         console.error('[TIDYDESK] Failed to bind snip reset listener:', error);
       });
+
+    nativeClient.capture.getBackgroundImage().then(img => {
+      setBgImage(img);
+    }).catch(err => {
+      console.error('[TIDYDESK] Failed to fetch background image:', err);
+    });
 
     return () => {
       disposed = true;
@@ -189,8 +196,12 @@ export const SnipOverlayApp: React.FC = () => {
   return (
     <div
       data-testid="snip-overlay-root"
-      className="snip-overlay-root relative h-screen w-screen cursor-crosshair select-none overflow-hidden text-white"
-      style={{ backgroundColor: 'rgba(2, 6, 23, 0.18)' }}
+      className="snip-overlay-root relative h-screen w-screen cursor-crosshair select-none overflow-hidden text-white bg-slate-950"
+      style={{
+        backgroundImage: bgImage ? `url(${bgImage})` : 'none',
+        backgroundSize: '100% 100%',
+        backgroundRepeat: 'no-repeat'
+      }}
       onMouseDown={event => {
         if (isCapturing) return;
         if (event.button !== 0) {
@@ -223,6 +234,10 @@ export const SnipOverlayApp: React.FC = () => {
         }
       }}
     >
+      {!selection && (
+        <div className="pointer-events-none absolute inset-0 bg-black/40" />
+      )}
+
       <div
         className="pointer-events-none absolute inset-y-0 w-px bg-white/25"
         style={{ left: cursorPoint.x }}
@@ -234,41 +249,66 @@ export const SnipOverlayApp: React.FC = () => {
 
       <div className="pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 rounded-xl border border-white/20 bg-black/70 px-4 py-3 text-[12px] font-medium shadow-2xl backdrop-blur-sm">
         {selection
-          ? 'Enter / Space confirm | Arrow keys move | Shift + Arrow faster | Esc cancel'
-          : 'Drag to select | Ctrl + A full screen | Right click / Esc cancel'}
+          ? 'Enter/空格 确认 | 方向键 微调 | Shift+方向键 快速微调 | Esc 取消'
+          : '拖拽鼠标框选 | Ctrl + A 全屏截图 | 右键/Esc 取消'}
       </div>
 
       {!selection && !isDragging && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 w-[320px] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-white/18 bg-slate-950/68 px-5 py-4 text-center shadow-2xl backdrop-blur-md">
           <div className="text-sm font-semibold tracking-[0.08em] text-white/95">
-            Click and drag to capture
+            请点击并拖拽进行框选
           </div>
           <div className="mt-2 text-[12px] leading-5 text-white/70">
-            Release the mouse to keep the selection, then press Enter or Space to create a sticker.
+            松开鼠标完成框选，按 Enter/空格 或 双击选区 确认截图，生成桌面贴纸。
           </div>
         </div>
       )}
 
       {selection && (
-        <div
-          className="pointer-events-none absolute border border-sky-200 bg-sky-300/12 shadow-[0_0_0_9999px_rgba(2,6,23,0.48)]"
-          style={{
-            left: selection.x,
-            top: selection.y,
-            width: selection.width,
-            height: selection.height
-          }}
-        >
-          <div className="absolute -top-7 left-0 rounded bg-sky-200 px-2 py-1 text-[11px] font-bold text-slate-950">
-            {Math.round(selection.width)} x {Math.round(selection.height)} | {Math.round(selection.x)},{' '}
-            {Math.round(selection.y)}
+        <>
+          <div
+            className={`absolute border border-sky-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] ${isCapturing ? 'pointer-events-none' : 'cursor-move'}`}
+            style={{
+              left: selection.x,
+              top: selection.y,
+              width: selection.width,
+              height: selection.height
+            }}
+            onDoubleClick={() => completeSelection(selection)}
+          >
+            <div className="pointer-events-none absolute -top-7 left-0 rounded bg-sky-200 px-2 py-1 text-[11px] font-bold text-slate-950">
+              {Math.round(selection.width)} x {Math.round(selection.height)} | {Math.round(selection.x)},{' '}
+              {Math.round(selection.y)}
+            </div>
+
+            {!isDragging && (
+              <div
+                className="absolute -bottom-10 right-0 flex items-center gap-2 rounded-lg border border-white/10 bg-slate-900/90 p-1 shadow-xl backdrop-blur-md"
+                onMouseDown={e => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => cancelSnip()}
+                  className="rounded px-3 py-1 text-[11px] font-bold text-slate-300 hover:bg-white/10 hover:text-white"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => completeSelection(selection)}
+                  className="rounded bg-sky-500 px-3 py-1 text-[11px] font-bold text-white hover:bg-sky-400"
+                >
+                  确认截图
+                </button>
+              </div>
+            )}
           </div>
-        </div>
+        </>
       )}
 
       {isCapturing && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/40 text-[13px] font-bold">
-          Creating sticker...
+          正在生成贴纸...
         </div>
       )}
     </div>

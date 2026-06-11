@@ -109,6 +109,7 @@ export interface NativeCaptureClient {
   onOpened: (callback: (payload: CaptureOpenedPayload) => void) => (() => void) | undefined;
   completeSnipSelection: (rect: SnipRect) => Promise<unknown>;
   cancelSnip: () => Promise<unknown>;
+  getBackgroundImage: () => Promise<string | null>;
 }
 
 export interface NativeStickersClient {

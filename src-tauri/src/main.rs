@@ -53,7 +53,7 @@ use shell::{
 };
 use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
 use stickers::{
-    open_snip_window, restore_stickers, snip_cancel, snip_complete_selection, sticker_close,
+    open_snip_window, restore_stickers, snip_cancel, snip_complete_selection, snip_get_background_image, sticker_close,
     sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin, SnipCaptureState,
     StickerStoreState,
 };
@@ -416,6 +416,7 @@ fn main() {
             events_send,
             snip_complete_selection,
             snip_cancel,
+            snip_get_background_image,
             sticker_get,
             sticker_toggle_pin,
             sticker_copy,

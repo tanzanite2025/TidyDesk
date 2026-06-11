@@ -443,6 +443,7 @@ pub fn capture_monitor_region_png(
 
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.swap(0, 2);
+            pixel[3] = 255;
         }
 
         let image = RgbaImage::from_raw(capture_width as u32, capture_height as u32, pixels)

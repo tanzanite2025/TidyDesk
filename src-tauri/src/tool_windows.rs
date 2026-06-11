@@ -190,7 +190,7 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
             .inner_size(monitor.width as f64, monitor.height as f64)
             .resizable(false)
             .decorations(false)
-            .transparent(true)
+            .transparent(false)
             .shadow(false)
             .always_on_top(true)
             .skip_taskbar(true)

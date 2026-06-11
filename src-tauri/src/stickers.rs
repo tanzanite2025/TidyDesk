@@ -22,9 +22,10 @@ pub use crate::stickers_rules::{
 #[derive(Debug, Default)]
 pub struct StickerStoreState(pub Mutex<()>);
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
+    pub frozen_image_png: Mutex<Option<Vec<u8>>>,
 }
 
 pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
@@ -42,7 +43,37 @@ pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
+    if is_snip_capture_in_flight(app) {
+        return Ok(());
+    }
+
+    // 在打开窗口之前，先静默截取全屏
+    let monitor = crate::stickers_rules::snip_open_monitor(app)?;
+    let rect = SnipRectPayload {
+        x: 0.0,
+        y: 0.0,
+        width: monitor.width as f64 / monitor.scale_factor,
+        height: monitor.height as f64 / monitor.scale_factor,
+    };
+    if let Ok(png) = crate::stickers_rules::capture_monitor_region_png(&monitor, &rect) {
+        let state = app.state::<SnipCaptureState>();
+        let mut frozen = state.frozen_image_png.lock().unwrap();
+        *frozen = Some(png);
+    }
+
     crate::tool_windows::open_snip_window(app)
+}
+
+#[tauri::command]
+pub fn snip_get_background_image(app: AppHandle) -> Result<Value, String> {
+    let state = app.state::<SnipCaptureState>();
+    let frozen = state.frozen_image_png.lock().unwrap();
+    if let Some(png) = frozen.as_ref() {
+        let b64 = format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png));
+        Ok(json!({ "success": true, "imageDataUrl": b64 }))
+    } else {
+        Ok(json!({ "success": false }))
+    }
 }
 
 #[tauri::command]
@@ -230,10 +261,34 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     ensure_storage(app)?;
     let monitor = crate::stickers_rules::active_monitor(app)?;
     let normalized = crate::stickers_rules::normalize_rect(payload)?;
+    
+    // 我们已经有静默截取的全屏图了，直接在内存中裁剪，无需等待窗口隐藏
+    let state = app.state::<SnipCaptureState>();
+    let png = {
+        let mut frozen = state.frozen_image_png.lock().unwrap();
+        if let Some(png_bytes) = frozen.take() {
+            let img = image::load_from_memory(&png_bytes)
+                .map_err(|err| format!("failed to load frozen image: {err}"))?;
+            
+            let crop_x = (normalized.x * monitor.scale_factor).round() as u32;
+            let crop_y = (normalized.y * monitor.scale_factor).round() as u32;
+            let crop_width = (normalized.width * monitor.scale_factor).round() as u32;
+            let crop_height = (normalized.height * monitor.scale_factor).round() as u32;
+            
+            let cropped = img.crop_imm(crop_x, crop_y, crop_width.max(1), crop_height.max(1));
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            cropped.write_to(&mut cursor, image::ImageFormat::Png)
+                .map_err(|err| format!("failed to encode cropped png: {err}"))?;
+            cursor.into_inner()
+        } else {
+            crate::tool_windows::close_snip_window(app)?;
+            std::thread::sleep(Duration::from_millis(140));
+            crate::stickers_rules::capture_monitor_region_png(&monitor, &normalized)?
+        }
+    };
+    
     crate::tool_windows::close_snip_window(app)?;
-    std::thread::sleep(Duration::from_millis(140));
 
-    let png = crate::stickers_rules::capture_monitor_region_png(&monitor, &normalized)?;
     let sticker_id = format!(
         "sticker-{}-{}",
         crate::timestamp_string(),
