@@ -14,9 +14,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 // 重新导出底层规则和结构，确保对 main.rs 等外部调用 100% 兼容
 pub use crate::stickers_rules::{
-    ensure_storage, mutate_sticker_state, read_sticker_state, upsert_sticker,
-    CapturedSticker, SnipRectPayload, StickerDataPayload, StickerPinResultPayload,
-    StickerRecord, StickerUpdatedPayload,
+    ensure_storage, mutate_sticker_state, read_sticker_state, upsert_sticker, CapturedSticker,
+    SnipRectPayload, StickerDataPayload, StickerPinResultPayload, StickerRecord,
+    StickerUpdatedPayload,
 };
 
 #[derive(Debug, Default)]
@@ -26,6 +26,7 @@ pub struct StickerStoreState(pub Mutex<()>);
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
     pub frozen_image_png: Mutex<Option<Vec<u8>>>,
+    pub frozen_image_error: Mutex<Option<String>>,
 }
 
 pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
@@ -55,10 +56,32 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
         width: monitor.width as f64 / monitor.scale_factor,
         height: monitor.height as f64 / monitor.scale_factor,
     };
-    if let Ok(png) = crate::stickers_rules::capture_monitor_region_png(&monitor, &rect) {
-        let state = app.state::<SnipCaptureState>();
-        let mut frozen = state.frozen_image_png.lock().unwrap();
-        *frozen = Some(png);
+    let state = app.state::<SnipCaptureState>();
+    match crate::stickers_rules::capture_monitor_region_png(&monitor, &rect) {
+        Ok(png) => {
+            let mut frozen = state
+                .frozen_image_png
+                .lock()
+                .map_err(|_| "failed to lock snip background image".to_string())?;
+            let mut error = state
+                .frozen_image_error
+                .lock()
+                .map_err(|_| "failed to lock snip background error".to_string())?;
+            *frozen = Some(png);
+            *error = None;
+        }
+        Err(err) => {
+            let mut frozen = state
+                .frozen_image_png
+                .lock()
+                .map_err(|_| "failed to lock snip background image".to_string())?;
+            let mut error = state
+                .frozen_image_error
+                .lock()
+                .map_err(|_| "failed to lock snip background error".to_string())?;
+            *frozen = None;
+            *error = Some(err);
+        }
     }
 
     crate::tool_windows::open_snip_window(app)
@@ -67,12 +90,23 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn snip_get_background_image(app: AppHandle) -> Result<Value, String> {
     let state = app.state::<SnipCaptureState>();
-    let frozen = state.frozen_image_png.lock().unwrap();
+    let frozen = state
+        .frozen_image_png
+        .lock()
+        .map_err(|_| "failed to lock snip background image".to_string())?;
     if let Some(png) = frozen.as_ref() {
         let b64 = format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png));
         Ok(json!({ "success": true, "imageDataUrl": b64 }))
     } else {
-        Ok(json!({ "success": false }))
+        let error = state
+            .frozen_image_error
+            .lock()
+            .map_err(|_| "failed to lock snip background error".to_string())?;
+        Ok(json!({
+            "success": false,
+            "imageDataUrl": Value::Null,
+            "error": error.as_deref().unwrap_or("No screenshot background is available")
+        }))
     }
 }
 
@@ -97,6 +131,7 @@ pub async fn snip_complete_selection(
 #[tauri::command]
 pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
     crate::tool_windows::close_snip_window(&app)?;
+    clear_frozen_background(&app)?;
     finish_snip_capture(&app);
     crate::shell::recover_shell_windows(&app)?;
     Ok(json!({ "success": true }))
@@ -147,7 +182,9 @@ pub fn sticker_toggle_pin(
         });
     };
 
-    if let Some(window) = app.get_webview_window(&crate::stickers_rules::sticker_window_label(&sticker_id)) {
+    if let Some(window) =
+        app.get_webview_window(&crate::stickers_rules::sticker_window_label(&sticker_id))
+    {
         window
             .set_always_on_top(always_on_top)
             .map_err(|err| err.to_string())?;
@@ -206,7 +243,8 @@ pub fn sticker_save_as(app: AppHandle, sticker_id: String) -> Result<Value, Stri
         return Err("Sticker image does not exist".to_string());
     }
 
-    let default_path = crate::stickers_rules::pictures_dir().join(format!("TidyDesk-{}.png", sticker.id));
+    let default_path =
+        crate::stickers_rules::pictures_dir().join(format!("TidyDesk-{}.png", sticker.id));
     let Some(file_path) = FileDialog::new()
         .set_title("保存截图贴纸")
         .add_filter("PNG Image", &["png"])
@@ -242,7 +280,9 @@ pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String
         Ok(removed)
     })?;
 
-    if let Some(window) = app.get_webview_window(&crate::stickers_rules::sticker_window_label(&sticker_id)) {
+    if let Some(window) =
+        app.get_webview_window(&crate::stickers_rules::sticker_window_label(&sticker_id))
+    {
         window.close().map_err(|err| err.to_string())?;
     }
 
@@ -260,24 +300,36 @@ pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String
 fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<CapturedSticker, String> {
     ensure_storage(app)?;
     let monitor = crate::stickers_rules::active_monitor(app)?;
-    let normalized = crate::stickers_rules::normalize_rect(payload)?;
-    
+    let normalized = crate::stickers_rules::normalize_rect(payload, &monitor)?;
+
     // 我们已经有静默截取的全屏图了，直接在内存中裁剪，无需等待窗口隐藏
     let state = app.state::<SnipCaptureState>();
     let png = {
-        let mut frozen = state.frozen_image_png.lock().unwrap();
+        let mut frozen = state
+            .frozen_image_png
+            .lock()
+            .map_err(|_| "failed to lock snip background image".to_string())?;
         if let Some(png_bytes) = frozen.take() {
             let img = image::load_from_memory(&png_bytes)
                 .map_err(|err| format!("failed to load frozen image: {err}"))?;
-            
-            let crop_x = (normalized.x * monitor.scale_factor).round() as u32;
-            let crop_y = (normalized.y * monitor.scale_factor).round() as u32;
-            let crop_width = (normalized.width * monitor.scale_factor).round() as u32;
-            let crop_height = (normalized.height * monitor.scale_factor).round() as u32;
-            
-            let cropped = img.crop_imm(crop_x, crop_y, crop_width.max(1), crop_height.max(1));
+
+            let image_width = img.width();
+            let image_height = img.height();
+            let crop_x = ((normalized.x * monitor.scale_factor).round() as u32)
+                .min(image_width.saturating_sub(1));
+            let crop_y = ((normalized.y * monitor.scale_factor).round() as u32)
+                .min(image_height.saturating_sub(1));
+            let crop_width = ((normalized.width * monitor.scale_factor).round() as u32)
+                .max(1)
+                .min(image_width.saturating_sub(crop_x));
+            let crop_height = ((normalized.height * monitor.scale_factor).round() as u32)
+                .max(1)
+                .min(image_height.saturating_sub(crop_y));
+
+            let cropped = img.crop_imm(crop_x, crop_y, crop_width, crop_height);
             let mut cursor = std::io::Cursor::new(Vec::new());
-            cropped.write_to(&mut cursor, image::ImageFormat::Png)
+            cropped
+                .write_to(&mut cursor, image::ImageFormat::Png)
                 .map_err(|err| format!("failed to encode cropped png: {err}"))?;
             cursor.into_inner()
         } else {
@@ -286,8 +338,9 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
             crate::stickers_rules::capture_monitor_region_png(&monitor, &normalized)?
         }
     };
-    
+
     crate::tool_windows::close_snip_window(app)?;
+    clear_frozen_background(app)?;
 
     let sticker_id = format!(
         "sticker-{}-{}",
@@ -312,6 +365,21 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     crate::tool_windows::ensure_sticker_window(app, &sticker)?;
 
     Ok(CapturedSticker { sticker_id })
+}
+
+fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<SnipCaptureState>();
+    let mut frozen = state
+        .frozen_image_png
+        .lock()
+        .map_err(|_| "failed to lock snip background image".to_string())?;
+    let mut error = state
+        .frozen_image_error
+        .lock()
+        .map_err(|_| "failed to lock snip background error".to_string())?;
+    *frozen = None;
+    *error = None;
+    Ok(())
 }
 
 pub fn begin_snip_capture(app: &AppHandle) -> Result<(), String> {

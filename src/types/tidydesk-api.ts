@@ -145,6 +145,12 @@ export interface SnipRect {
   height: number;
 }
 
+export interface SnipBackgroundImageResult {
+  success: boolean;
+  imageDataUrl?: string | null;
+  error?: string;
+}
+
 export interface StickerData {
   id: string;
   imageDataUrl: string;

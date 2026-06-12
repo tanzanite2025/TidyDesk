@@ -3,6 +3,7 @@ import { WorkspaceProvider } from './context/WorkspaceContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { DrawerApp } from './modules/drawer/DrawerApp';
 import { HandleApp } from './modules/handle/HandleApp';
+import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
 import { RailApp } from './modules/rail/RailApp';
 import { SnipOverlayApp } from './modules/stickers/SnipOverlayApp';
 import { StickerApp } from './modules/stickers/StickerApp';
@@ -19,6 +20,8 @@ const App: React.FC = () => {
     content = <RailApp />;
   } else if (windowMode === 'todos') {
     content = <TodoPanelApp />;
+  } else if (windowMode === 'capture') {
+    content = <QuickCaptureApp />;
   } else if (windowMode === 'snip') {
     content = <SnipOverlayApp />;
   } else if (windowMode === 'sticker') {

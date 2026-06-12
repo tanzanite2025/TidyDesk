@@ -32,6 +32,12 @@ export const StickerApp: React.FC = () => {
     }
   };
 
+  const closeSticker = () => {
+    if (!sticker || !nativeClient.isAvailable()) return;
+    if (!confirm('关闭后会删除这张截图贴纸，确定继续？')) return;
+    void nativeClient.stickers.close(sticker.id);
+  };
+
   if (!sticker) {
     return (
       <div className="grid h-screen w-screen place-items-center rounded-lg border border-white/10 bg-[#121620]/95 text-[12px] text-slate-400">
@@ -70,7 +76,7 @@ export const StickerApp: React.FC = () => {
         <button type="button" title="另存为" onClick={() => nativeClient.isAvailable() && nativeClient.stickers.saveAs(sticker.id)} className="rounded-md p-1.5 hover:bg-white/10">
           <Download size={14} />
         </button>
-        <button type="button" title="关闭贴纸" onClick={() => nativeClient.isAvailable() && nativeClient.stickers.close(sticker.id)} className="rounded-md p-1.5 hover:bg-rose-500/20 hover:text-rose-100">
+        <button type="button" title="关闭贴纸" onClick={closeSticker} className="rounded-md p-1.5 hover:bg-rose-500/20 hover:text-rose-100">
           <X size={14} />
         </button>
       </div>

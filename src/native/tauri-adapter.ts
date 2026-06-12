@@ -21,6 +21,7 @@ import type {
   ModuleStatePayload,
   RepairShortcutPayload,
   RepairShortcutResult,
+  SnipBackgroundImageResult,
   SnipRect,
   StickerData,
   StickerPinResult,
@@ -230,10 +231,7 @@ export function createTauriNativeClient(): NativeClient {
       onOpened: callback => onTauriEvent<CaptureOpenedPayload>('capture-opened', callback),
       completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
       cancelSnip: () => invoke('snip_cancel'),
-      getBackgroundImage: async () => {
-        const res = await invoke<{ success: boolean; imageDataUrl: string }>('snip_get_background_image');
-        return res.success ? res.imageDataUrl : null;
-      }
+      getBackgroundImage: () => invoke<SnipBackgroundImageResult>('snip_get_background_image')
     },
     stickers: {
       get: (stickerId: string) => invoke<StickerData | null>('sticker_get', { sticker_id: stickerId }),

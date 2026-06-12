@@ -194,7 +194,10 @@ pub fn read_sticker_state_unlocked(app: &AppHandle) -> Result<StickerStateFile, 
     }
 }
 
-pub fn write_sticker_state_unlocked(app: &AppHandle, state: &StickerStateFile) -> Result<(), String> {
+pub fn write_sticker_state_unlocked(
+    app: &AppHandle,
+    state: &StickerStateFile,
+) -> Result<(), String> {
     ensure_storage_dirs(app)?;
     let path = sticker_state_path(app)?;
     let content = serde_json::to_string_pretty(state)
@@ -265,7 +268,7 @@ pub fn active_monitor(app: &AppHandle) -> Result<MonitorSnapshot, String> {
 
 pub fn snip_open_monitor(app: &AppHandle) -> Result<MonitorSnapshot, String> {
     #[cfg(target_os = "windows")]
-    if let Some(monitor) = cursor_monitor_snapshot()? {
+    if let Some(monitor) = cursor_monitor_snapshot(app)? {
         return Ok(monitor);
     }
 
@@ -273,10 +276,30 @@ pub fn snip_open_monitor(app: &AppHandle) -> Result<MonitorSnapshot, String> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn cursor_monitor_snapshot() -> Result<Option<MonitorSnapshot>, String> {
+pub fn cursor_monitor_snapshot(app: &AppHandle) -> Result<Option<MonitorSnapshot>, String> {
     unsafe {
         let mut point = POINT::default();
         GetCursorPos(&mut point).map_err(|err| format!("failed to read cursor position: {err}"))?;
+
+        let monitors = app.available_monitors().map_err(|err| err.to_string())?;
+        if let Some(monitor) = monitors.into_iter().find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            point.x >= position.x
+                && point.y >= position.y
+                && point.x < position.x + size.width as i32
+                && point.y < position.y + size.height as i32
+        }) {
+            let position = monitor.position();
+            let size = monitor.size();
+            return Ok(Some(MonitorSnapshot {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+                scale_factor: monitor.scale_factor(),
+            }));
+        }
 
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
         if monitor.0.is_null() {
@@ -307,7 +330,10 @@ pub fn cursor_monitor_snapshot() -> Result<Option<MonitorSnapshot>, String> {
     }
 }
 
-pub fn normalize_rect(payload: SnipRectPayload) -> Result<SnipRectPayload, String> {
+pub fn normalize_rect(
+    payload: SnipRectPayload,
+    monitor: &MonitorSnapshot,
+) -> Result<SnipRectPayload, String> {
     if !payload.x.is_finite()
         || !payload.y.is_finite()
         || !payload.width.is_finite()
@@ -318,11 +344,18 @@ pub fn normalize_rect(payload: SnipRectPayload) -> Result<SnipRectPayload, Strin
     if payload.width < 8.0 || payload.height < 8.0 {
         return Err("Snip rectangle is too small".to_string());
     }
+    let max_width = monitor.width as f64 / monitor.scale_factor;
+    let max_height = monitor.height as f64 / monitor.scale_factor;
+    let width = payload.width.round().min(max_width).max(1.0);
+    let height = payload.height.round().min(max_height).max(1.0);
+    let x = payload.x.round().clamp(0.0, (max_width - width).max(0.0));
+    let y = payload.y.round().clamp(0.0, (max_height - height).max(0.0));
+
     Ok(SnipRectPayload {
-        x: payload.x.round(),
-        y: payload.y.round(),
-        width: payload.width.round(),
-        height: payload.height.round(),
+        x,
+        y,
+        width,
+        height,
     })
 }
 

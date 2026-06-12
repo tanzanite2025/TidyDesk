@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { nativeClient } from '../../native/native-client';
 
 type Point = { x: number; y: number };
@@ -57,6 +57,7 @@ export const SnipOverlayApp: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false);
   const [cursorPoint, setCursorPoint] = useState<Point>(centerPoint);
   const [bgImage, setBgImage] = useState<string | null>(null);
+  const [bgError, setBgError] = useState<string | null>(null);
 
   const cancelSnip = () => {
     if (!nativeClient.isAvailable()) return;
@@ -74,13 +75,31 @@ export const SnipOverlayApp: React.FC = () => {
     setEndPoint(null);
   };
 
-  const resetOverlay = () => {
+  const resetOverlay = useCallback(() => {
     setIsDragging(false);
     setIsCapturing(false);
     setStartPoint(null);
     setEndPoint(null);
     setCursorPoint(centerPoint());
-  };
+    setBgImage(null);
+    setBgError(null);
+  }, []);
+
+  const loadBackgroundImage = useCallback(() => {
+    nativeClient.capture.getBackgroundImage().then(result => {
+      if (result.success && result.imageDataUrl) {
+        setBgImage(result.imageDataUrl);
+        setBgError(null);
+      } else {
+        setBgImage(null);
+        setBgError(result.error || '无法获取当前桌面截图，请取消后重试');
+      }
+    }).catch(err => {
+      console.error('[TIDYDESK] Failed to fetch background image:', err);
+      setBgImage(null);
+      setBgError(err instanceof Error ? err.message : String(err));
+    });
+  }, []);
 
   const applySelection = (rect: Rect) => {
     const clamped = clampRectToViewport(rect);
@@ -107,7 +126,10 @@ export const SnipOverlayApp: React.FC = () => {
     let unlisten: (() => void) | undefined;
 
     import('@tauri-apps/api/event')
-      .then(api => api.listen('snip-reset', resetOverlay))
+      .then(api => api.listen('snip-reset', () => {
+        resetOverlay();
+        loadBackgroundImage();
+      }))
       .then(nextUnlisten => {
         if (disposed) nextUnlisten();
         else unlisten = nextUnlisten;
@@ -116,17 +138,13 @@ export const SnipOverlayApp: React.FC = () => {
         console.error('[TIDYDESK] Failed to bind snip reset listener:', error);
       });
 
-    nativeClient.capture.getBackgroundImage().then(img => {
-      setBgImage(img);
-    }).catch(err => {
-      console.error('[TIDYDESK] Failed to fetch background image:', err);
-    });
+    loadBackgroundImage();
 
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [loadBackgroundImage, resetOverlay]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -175,6 +193,10 @@ export const SnipOverlayApp: React.FC = () => {
 
   const completeSelection = async (rect: Rect) => {
     if (isCapturing) return;
+    if (!bgImage) {
+      setBgError('没有可用的桌面截图，无法生成贴纸');
+      return;
+    }
     if (rect.width < 8 || rect.height < 8) {
       clearSelection();
       return;
@@ -236,6 +258,12 @@ export const SnipOverlayApp: React.FC = () => {
     >
       {!selection && (
         <div className="pointer-events-none absolute inset-0 bg-black/40" />
+      )}
+
+      {bgError && (
+        <div className="pointer-events-none absolute left-1/2 top-24 z-10 w-[420px] max-w-[calc(100vw-48px)] -translate-x-1/2 rounded-xl border border-rose-300/25 bg-rose-950/78 px-4 py-3 text-center text-[12px] font-semibold leading-5 text-rose-50 shadow-2xl backdrop-blur-sm">
+          {bgError}
+        </div>
       )}
 
       <div
