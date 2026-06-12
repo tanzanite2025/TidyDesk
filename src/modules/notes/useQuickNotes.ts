@@ -98,8 +98,22 @@ export function useQuickNotes() {
 
     void load();
 
+    const unsubscribeCaptureOpened = nativeClient.capture.onOpened(payload => {
+      if (disposed) return;
+      const text = (payload.clipboardText || '').trim();
+      if (!text) return;
+      setSelectedNoteId(null);
+      setDraftTitle(titleFromContent(text));
+      setDraftContent(text);
+      setDraftPinned(false);
+      setDraftFavorite(false);
+      setError(null);
+      setNotice('已带入当前剪贴板文本');
+    });
+
     return () => {
       disposed = true;
+      unsubscribeCaptureOpened?.();
     };
   }, []);
 
