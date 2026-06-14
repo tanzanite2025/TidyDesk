@@ -22,6 +22,8 @@ import type {
   ModuleStatePayload,
   RepairShortcutPayload,
   RepairShortcutResult,
+  ResidentSettings,
+  ResidentSettingsUpdate,
   SnipBackgroundImageResult,
   SnipRect,
   StickerData,
@@ -238,6 +240,15 @@ export function createTauriNativeClient(): NativeClient {
     toolWindows: {
       openTodo: () => invoke('open_todo_window'),
       closeTodo: () => invoke('close_todo_window')
+    },
+    resident: {
+      getSettings: () => invoke<ResidentSettings>('resident_get_settings'),
+      updateSettings: (payload: ResidentSettingsUpdate) =>
+        invoke<ResidentSettings>('resident_update_settings', { payload }),
+      showHandle: () => invoke('resident_show_handle'),
+      hideHandle: () => invoke('resident_hide_handle'),
+      openSettings: () => invoke('resident_open_settings'),
+      onOpenSettings: callback => onTauriEvent<void>('open-settings-panel', callback)
     },
     clipboard: {
       readText: () => invoke<string>('clipboard_read_text')

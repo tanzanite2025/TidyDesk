@@ -3,6 +3,7 @@ import { useDrawerOperations } from './useDrawerOperations';
 import { SettingsPanel } from '../../components/SettingsPanel';
 import { FileTile } from './FileTile';
 import { QuickNotesPanel } from '../notes/QuickNotesPanel';
+import { nativeClient } from '../../native/native-client';
 import {
   AlertTriangle,
   Check,
@@ -65,6 +66,11 @@ export const DrawerApp: React.FC = () => {
     handleRestoreToDesktop,
     openAppPicker
   } = useDrawerOperations();
+
+  React.useEffect(() => {
+    if (!nativeClient.isAvailable()) return undefined;
+    return nativeClient.resident.onOpenSettings(() => setShowSettings(true));
+  }, [setShowSettings]);
 
   if (windowMode === 'handle' || (!isDrawerExpanded && windowMode !== 'drawer')) {
     return (
