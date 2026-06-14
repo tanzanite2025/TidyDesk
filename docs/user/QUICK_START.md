@@ -8,7 +8,7 @@
 
 ### 下载安装程序
 
-1. 访问 [GitHub Releases](https://github.com/your-github-username/TidyDesk/releases)
+1. 访问 [GitHub Releases](https://github.com/tanzanite2025/TidyDesk/releases)
 2. 下载最新版本的 `TidyDesk-Setup.exe`
 3. 双击运行安装程序
 
@@ -120,7 +120,7 @@ TidyDesk 会自动检测失效的快捷方式：
 
 设置面板显示：
 - 📱 应用名称: TidyDesk
-- 📌 当前版本: v3.0.0
+- 📌 当前版本: 以已安装版本为准
 - 🔧 运行模式: 生产模式
 
 ### 检查更新
@@ -263,13 +263,12 @@ C:\Users\你的用户名\AppData\Roaming\TidyDesk\drawers\
 ## 🆘 需要帮助？
 
 ### 查看文档
-- [完整文档](README.md)
-- [自动更新指南](AUTO_UPDATE_GUIDE.md)
-- [更新日志](CHANGELOG.md)
+- [文档中心](../README.md)
+- [自动更新指南](./AUTO_UPDATE_GUIDE.md)
+- [更新日志](../../CHANGELOG.md)
 
 ### 反馈问题
-- [GitHub Issues](https://github.com/your-github-username/TidyDesk/issues)
-- 邮箱: your-email@example.com
+- [GitHub Issues](https://github.com/tanzanite2025/TidyDesk/issues)
 
 ---
 

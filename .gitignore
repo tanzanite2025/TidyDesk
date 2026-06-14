@@ -160,8 +160,7 @@ public
 /*.yml
 !/.github/**/*.yml
 
-# Tauri PoC build artifacts
+# Tauri build artifacts
 /release/
 /src-tauri/target/
 /src-tauri/sidecars/
-
