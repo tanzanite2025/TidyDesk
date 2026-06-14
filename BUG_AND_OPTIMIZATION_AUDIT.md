@@ -32,6 +32,8 @@
 - App 分类规则已统一到 Rust 应用扫描实现。
 - Updater 安装成功后会 emit `ready-to-restart` 状态，设置面板显示“更新已安装，重启后生效”。
 - Tauri 入口不再使用顶层 `expect`，启动失败会记录错误后退出。
+- 截图贴纸改为默认“先保存为待贴截图”，按 `Ctrl+Alt+V` 才贴到桌面；设置页可恢复“截完图立即贴”。
+- Sticker state 解析失败时会备份损坏文件并重建默认状态；成功截图后也会清理整屏 frozen background 缓存。
 
 ## 严重级别定义
 

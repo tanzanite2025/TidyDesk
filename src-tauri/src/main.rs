@@ -205,6 +205,7 @@ fn main() {
                 .app_name("TidyDesk")
                 .build(),
         )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
@@ -266,6 +267,7 @@ fn main() {
                     std::time::Duration::from_secs(15),
                 );
             }
+            stickers::register_sticker_shortcuts(&handle);
             let _ = ensure_handle_window(&handle);
             if let Ok(bounds) = handle_window_bounds(&handle, false) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);

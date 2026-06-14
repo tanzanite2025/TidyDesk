@@ -10,22 +10,32 @@ use std::sync::{
 };
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_notification::NotificationExt;
 
-// 重新导出底层规则和结构，确保对 main.rs 等外部调用 100% 兼容
 pub use crate::stickers_rules::{
     ensure_storage, mutate_sticker_state, read_sticker_state, upsert_sticker, CapturedSticker,
     SnipRectPayload, StickerDataPayload, StickerPinResultPayload, StickerRecord,
-    StickerUpdatedPayload,
+    StickerUpdatedPayload, StickerWindowBounds,
 };
+
+const PASTE_PENDING_STICKER_SHORTCUT: &str = "ctrl+alt+v";
 
 #[derive(Debug, Default)]
 pub struct StickerStoreState(pub Mutex<()>);
+
+#[derive(Debug, Clone)]
+pub struct PendingSticker {
+    image_path: PathBuf,
+    bounds: StickerWindowBounds,
+}
 
 #[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
     pub frozen_image_path: Mutex<Option<PathBuf>>,
     pub frozen_image_error: Mutex<Option<String>>,
+    pub pending_sticker: Mutex<Option<PendingSticker>>,
 }
 
 fn frozen_background_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -36,6 +46,66 @@ fn frozen_background_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("snip");
     fs::create_dir_all(&dir).map_err(|err| format!("failed to create snip cache dir: {err}"))?;
     Ok(dir.join("background.png"))
+}
+
+fn pending_sticker_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|err| format!("failed to resolve pending sticker cache dir: {err}"))?
+        .join("snip");
+    fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create pending sticker cache dir: {err}"))?;
+    Ok(dir.join("pending-sticker.png"))
+}
+
+pub fn register_sticker_shortcuts(app: &AppHandle) {
+    clear_pending_sticker_cache(app);
+    let result = app.global_shortcut().on_shortcut(
+        PASTE_PENDING_STICKER_SHORTCUT,
+        |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                if let Err(err) = paste_pending_sticker(app) {
+                    eprintln!("[TIDYDESK] Failed to paste pending sticker: {err}");
+                    notify_sticker_message(app, "截图贴纸失败", &err);
+                }
+            }
+        },
+    );
+
+    if let Err(err) = result {
+        eprintln!("[TIDYDESK] Failed to register sticker paste shortcut: {err}");
+    }
+}
+
+fn clear_pending_sticker_cache(app: &AppHandle) {
+    if let Ok(path) = pending_sticker_path(app) {
+        let _ = fs::remove_file(path);
+    }
+    let previous = {
+        let state = app.state::<SnipCaptureState>();
+        state
+            .pending_sticker
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take())
+    };
+    if let Some(previous) = previous {
+        let _ = fs::remove_file(previous.image_path);
+    }
+}
+
+fn notify_sticker_message(app: &AppHandle, title: &str, body: &str) {
+    if let Err(err) = app
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .auto_cancel()
+        .show()
+    {
+        eprintln!("[TIDYDESK] Failed to show sticker notification: {err}");
+    }
 }
 
 pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
@@ -151,6 +221,7 @@ pub async fn snip_complete_selection(
     Ok(json!({
         "success": true,
         "stickerId": result.sticker_id,
+        "pasted": result.pasted,
     }))
 }
 
@@ -321,12 +392,90 @@ pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String
     Ok(json!({ "success": true }))
 }
 
+pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> {
+    let pending = {
+        let state = app.state::<SnipCaptureState>();
+        let mut pending = state
+            .pending_sticker
+            .lock()
+            .map_err(|_| "failed to lock pending sticker".to_string())?;
+        pending.take()
+    };
+    let Some(pending) = pending else {
+        notify_sticker_message(
+            app,
+            "没有待贴截图",
+            "先框选截图，再按 Ctrl+Alt+V 贴到桌面。",
+        );
+        return Ok(None);
+    };
+
+    let png = fs::read(&pending.image_path)
+        .map_err(|err| format!("failed to read pending sticker image: {err}"))?;
+    let _ = fs::remove_file(&pending.image_path);
+    let sticker_id = create_sticker_from_png(app, &png, pending.bounds)?;
+    notify_sticker_message(app, "截图已贴到桌面", "最近一次截图已经生成桌面贴纸。");
+    Ok(Some(sticker_id))
+}
+
+fn create_sticker_from_png(
+    app: &AppHandle,
+    png: &[u8],
+    bounds: StickerWindowBounds,
+) -> Result<String, String> {
+    let sticker_id = format!(
+        "sticker-{}-{}",
+        crate::timestamp_string(),
+        std::process::id()
+    );
+    let image_path = crate::stickers_rules::images_root(app)?.join(format!("{sticker_id}.png"));
+    fs::write(&image_path, png).map_err(|err| format!("failed to write sticker image: {err}"))?;
+
+    let sticker = StickerRecord {
+        id: sticker_id.clone(),
+        image_path: image_path.display().to_string(),
+        bounds,
+        always_on_top: false,
+        created_at: crate::timestamp_string(),
+    };
+
+    mutate_sticker_state(app, |state| {
+        upsert_sticker(state, sticker.clone());
+        Ok(())
+    })?;
+    crate::tool_windows::ensure_sticker_window(app, &sticker)?;
+    Ok(sticker_id)
+}
+
+fn save_pending_sticker(
+    app: &AppHandle,
+    png: &[u8],
+    bounds: StickerWindowBounds,
+) -> Result<(), String> {
+    let image_path = pending_sticker_path(app)?;
+    fs::write(&image_path, png).map_err(|err| format!("failed to write pending sticker: {err}"))?;
+    let state = app.state::<SnipCaptureState>();
+    let mut pending = state
+        .pending_sticker
+        .lock()
+        .map_err(|_| "failed to lock pending sticker".to_string())?;
+    let stored_path = image_path.clone();
+    if let Some(previous) = pending.replace(PendingSticker {
+        image_path: stored_path,
+        bounds,
+    }) {
+        if previous.image_path != image_path {
+            let _ = fs::remove_file(previous.image_path);
+        }
+    }
+    Ok(())
+}
+
 fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<CapturedSticker, String> {
     ensure_storage(app)?;
     let monitor = crate::stickers_rules::active_monitor(app)?;
     let normalized = crate::stickers_rules::normalize_rect(payload, &monitor)?;
 
-    // 我们已经有静默截取的全屏图了，直接在内存中裁剪，无需等待窗口隐藏
     let state = app.state::<SnipCaptureState>();
     let png = {
         let mut frozen = state
@@ -336,6 +485,7 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
         if let Some(image_path) = frozen.take() {
             let png_bytes = fs::read(&image_path)
                 .map_err(|err| format!("failed to read frozen image: {err}"))?;
+            let _ = fs::remove_file(&image_path);
             let img = image::load_from_memory(&png_bytes)
                 .map_err(|err| format!("failed to load frozen image: {err}"))?;
 
@@ -368,29 +518,25 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     crate::tool_windows::close_snip_window(app)?;
     clear_frozen_background(app)?;
 
-    let sticker_id = format!(
-        "sticker-{}-{}",
-        crate::timestamp_string(),
-        std::process::id()
-    );
-    let image_path = crate::stickers_rules::images_root(app)?.join(format!("{sticker_id}.png"));
-    fs::write(&image_path, &png).map_err(|err| format!("failed to write sticker image: {err}"))?;
-
-    let sticker = StickerRecord {
-        id: sticker_id.clone(),
-        image_path: image_path.display().to_string(),
-        bounds: crate::stickers_rules::initial_sticker_bounds(&monitor, &normalized),
-        always_on_top: false,
-        created_at: crate::timestamp_string(),
-    };
-
-    mutate_sticker_state(app, |state| {
-        upsert_sticker(state, sticker.clone());
-        Ok(())
-    })?;
-    crate::tool_windows::ensure_sticker_window(app, &sticker)?;
-
-    Ok(CapturedSticker { sticker_id })
+    let bounds = crate::stickers_rules::initial_sticker_bounds(&monitor, &normalized);
+    if crate::resident::read_resident_settings(app).auto_stick_after_snip {
+        let sticker_id = create_sticker_from_png(app, &png, bounds)?;
+        Ok(CapturedSticker {
+            sticker_id: Some(sticker_id),
+            pasted: true,
+        })
+    } else {
+        save_pending_sticker(app, &png, bounds)?;
+        notify_sticker_message(
+            app,
+            "截图已保存为待贴",
+            "按 Ctrl+Alt+V 时才会把这张截图贴到桌面。",
+        );
+        Ok(CapturedSticker {
+            sticker_id: None,
+            pasted: false,
+        })
+    }
 }
 
 fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
