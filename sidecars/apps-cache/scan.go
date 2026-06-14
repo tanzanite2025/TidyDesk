@@ -76,6 +76,9 @@ func scanMetadata(params scanMetadataParams) (scanMetadataResult, error) {
 		return strings.ToLower(result.Shortcuts[i].Name) < strings.ToLower(result.Shortcuts[j].Name)
 	})
 	result.DurationMs = time.Since(start).Milliseconds()
+	if params.UserDataPath != "" {
+		_ = writeCache(params.UserDataPath, result)
+	}
 	return result, nil
 }
 

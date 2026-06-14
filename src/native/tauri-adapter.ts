@@ -72,6 +72,11 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
   return (api.invoke as TauriInvoke)<T>(command, args);
 }
 
+async function fileUrl(filePath: string): Promise<string> {
+  const api = await import('@tauri-apps/api/core');
+  return api.convertFileSrc(filePath);
+}
+
 function onTauriEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
   let disposed = false;
   let unlisten: (() => void) | undefined;
@@ -98,6 +103,22 @@ function unavailable(feature: string): never {
 async function scanInstalledAppsWithTargets(): Promise<InstalledAppsResult> {
   try {
     const result = await invoke<ScanInstalledResult>('apps_scan_installed');
+    return {
+      success: true,
+      apps: Array.isArray(result.apps) ? result.apps : []
+    };
+  } catch (err) {
+    return {
+      success: false,
+      apps: [],
+      error: err instanceof Error ? err.message : String(err)
+    };
+  }
+}
+
+async function refreshInstalledAppsWithTargets(): Promise<InstalledAppsResult> {
+  try {
+    const result = await invoke<ScanInstalledResult>('apps_refresh_installed');
     return {
       success: true,
       apps: Array.isArray(result.apps) ? result.apps : []
@@ -180,23 +201,15 @@ export function createTauriNativeClient(): NativeClient {
     },
     apps: {
       scanInstalled: scanInstalledAppsWithTargets,
-      refresh: scanInstalledAppsWithTargets,
+      refresh: refreshInstalledAppsWithTargets,
       getCacheInfo: async () => {
         try {
-          const result = await invoke<ScanInstalledResult>('apps_scan_installed');
-          const metadata = result.metadata ?? {};
+          const info = await invoke<Record<string, unknown>>('apps_cache_info');
           return {
             success: true,
             info: {
-              exists: false,
-              valid: false,
-              appCount: Array.isArray(result.apps) ? result.apps.length : 0,
-              lastScanTime: Date.now(),
-              source: 'tauri-sidecar-target-aware',
-              durationMs: metadata.durationMs,
-              scannedPaths: metadata.scannedPaths,
-              shortcutCount: Array.isArray(metadata.shortcuts) ? metadata.shortcuts.length : 0,
-              skippedCount: result.skippedCount
+              ...info,
+              source: 'tauri-sidecar-cache'
             }
           };
         } catch (err) {
@@ -231,10 +244,20 @@ export function createTauriNativeClient(): NativeClient {
       onOpened: callback => onTauriEvent<CaptureOpenedPayload>('capture-opened', callback),
       completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
       cancelSnip: () => invoke('snip_cancel'),
-      getBackgroundImage: () => invoke<SnipBackgroundImageResult>('snip_get_background_image')
+      getBackgroundImage: async () => {
+        const result = await invoke<SnipBackgroundImageResult>('snip_get_background_image');
+        if (result.success && result.imagePath) {
+          return { ...result, imageUrl: await fileUrl(result.imagePath) };
+        }
+        return result;
+      }
     },
     stickers: {
-      get: (stickerId: string) => invoke<StickerData | null>('sticker_get', { sticker_id: stickerId }),
+      get: async (stickerId: string) => {
+        const sticker = await invoke<StickerData | null>('sticker_get', { sticker_id: stickerId });
+        if (!sticker) return null;
+        return { ...sticker, imageUrl: await fileUrl(sticker.imagePath) };
+      },
       togglePin: (stickerId: string) => invoke<StickerPinResult>('sticker_toggle_pin', { sticker_id: stickerId }),
       copy: (stickerId: string) => invoke('sticker_copy', { sticker_id: stickerId }),
       saveAs: (stickerId: string) => invoke('sticker_save_as', { sticker_id: stickerId }),

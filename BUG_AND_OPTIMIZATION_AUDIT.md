@@ -3,6 +3,7 @@
 > 状态：已开始按优先级修复；本文件继续保留后续优化跟踪。
 > 范围：当前 `main` 代码、README、`SECURITY_AND_STRUCTURE_AUDIT.md`、Tauri/Rust 主进程、React 前端、Go sidecar。
 > 说明：PR #4-#9 已处理的测试 IPC 暴露、updater override、App Picker PoC 命名、职责拆分和 README 过期内容，本次不重复列为待修复项。
+> 更新：PR #11 处理第一批数据安全和交互一致性问题；本次继续处理剩余性能/维护性问题。
 
 ## 总体结论
 
@@ -23,6 +24,14 @@
 - Quick Notes 不再在面板加载或新建时自动读取剪贴板；capture 事件不会覆盖已有草稿。
 - Todo 自动保存会等待 IPC 结果，快速切换/关闭详情前会 flush 当前草稿，失败时保留 dirty 状态。
 - 非 Windows fallback 文案已移除 “PoC” 表述。
+- App Picker 已接入 Go sidecar cache：普通打开优先读取有效缓存，刷新按钮才强制重新扫描并更新缓存。
+- Shortcut watcher 已加入退避轮询：有变化时保持 10 秒检查，稳定后逐步退避到 60 秒，降低持续 IO/COM 开销。
+- 截图 overlay 和 sticker 窗口改为通过 Tauri 文件 URL 读取 PNG，取消/完成时清理 frozen background，并对超大截图区域加安全阈值。
+- Drawer/app 图标提取加入 `path + size + modified time` 缓存，减少重复刷新时的 Win32 图标提取成本。
+- Shortcut COM 初始化已封装为 guard，确保成功初始化才对应释放。
+- App 分类规则以 Go sidecar 输出的 category 为准，Rust 不再二次分类。
+- Updater 安装成功后会 emit `ready-to-restart` 状态，设置面板显示“更新已安装，重启后生效”。
+- Tauri 入口不再使用顶层 `expect`，启动失败会记录错误后退出。
 
 ## 严重级别定义
 
@@ -211,6 +220,10 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 - 扫描完成后写入 cache，否则移除 sidecar cache API，避免误导。
 - App Picker UI 区分“缓存读取”和“正在扫描”。
 
+### 处理状态
+
+- 已处理：Rust 命令走 sidecar cache RPC，`scanInstalled` 优先读有效缓存，`refresh` 强制扫描并写入 cache，UI 可显示缓存读取状态。
+
 ## 8. 快捷方式 watcher 采用固定轮询，抽屉多时可能产生持续 IO
 
 **级别：中**
@@ -231,6 +244,10 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 - 轮询作为 fallback，并增加退避策略。
 - 仅对上次异常/变化过的 shortcut 做增量检查。
 - UI 手动“验证所有快捷方式”保留全量检查。
+
+### 处理状态
+
+- 已完成轮询退避策略；事件驱动/更细粒度增量检查可作为后续进一步优化。
 
 ## 9. 截图和贴纸图片通过 base64 data URL 传输，内存占用偏高
 
@@ -261,6 +278,11 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 - 完成选择、取消、窗口关闭时确保清理 frozen background。
 - 对超大截图增加错误提示，例如超过阈值时建议缩小选择区域。
 
+### 处理状态
+
+- 已改为文件路径 + Tauri asset URL，不再向前端传输 base64 data URL。
+- 已在完成/取消时清理 frozen background，并增加截图像素阈值。
+
 ## 10. 抽屉刷新会顺序枚举并提取图标，文件多时 UI 可能卡顿
 
 **级别：中**
@@ -283,6 +305,10 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 - 缓存 icon：key 可用 target path + modified time。
 - 对异常/慢路径设置单项超时，避免一个文件拖慢整个列表。
 
+### 处理状态
+
+- 已加入图标数据缓存，key 使用路径、文件大小和修改时间；异步分阶段加载可作为后续 UI 优化。
+
 ## 11. Shortcut COM 初始化方式在复杂线程环境下可能不稳
 
 **级别：低-中**
@@ -301,6 +327,10 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 - 封装 COM guard，区分 `S_OK`、`S_FALSE`、`RPC_E_CHANGED_MODE`。
 - 只在本次调用确实初始化成功时执行 `CoUninitialize()`。
 - 或将 shortcut 操作集中到专用 STA worker thread。
+
+### 处理状态
+
+- 已封装 COM guard，初始化成功后通过 RAII 对应释放；专用 STA worker 可作为后续进一步隔离方案。
 
 ## 12. Go 与 Rust 的应用分类规则重复，后续容易漂移
 
@@ -322,6 +352,10 @@ shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。
   - sidecar 只输出原始 metadata，Rust 统一分类。
 - 若必须双端存在，抽出共享 JSON 规则文件并加测试验证两边一致。
 
+### 处理状态
+
+- 已选择 Go sidecar 为分类权威来源，Rust 只透传 metadata category，不再维护重复分类规则。
+
 ## 13. Updater 安装成功后状态没有显式 success/重启引导
 
 **级别：低**
@@ -340,6 +374,10 @@ shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。
 - 安装成功后写入并 emit `success` 或 `ready-to-restart` snapshot。
 - UI 明确展示“更新已安装，重启后生效”。
 - 增加失败重试按钮与 release notes 保留。
+
+### 处理状态
+
+- 已增加 `ready-to-restart` snapshot 和设置面板提示；失败重试按钮可后续补充。
 
 ## 14. 非 Windows fallback 文案仍残留 PoC 表述
 
@@ -360,6 +398,10 @@ shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。
 - 改为 “only implemented on Windows”。
 - 若计划跨平台，补充 macOS/Linux 打开文件和 shortcut/bookmark 的实现方案。
 
+### 处理状态
+
+- 已完成文案替换。
+
 ## 15. `main.rs` 末尾仍有顶层 `expect`
 
 **级别：低**
@@ -377,6 +419,10 @@ shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。
 - 短期可保持不动。
 - 后续若引入日志文件，可改为记录启动失败原因并退出。
 
+### 处理状态
+
+- 已移除顶层 `expect`，改为输出明确错误并退出。
+
 ## 推荐修复顺序
 
 ### 第一批：数据安全
@@ -393,17 +439,17 @@ shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。
 
 ### 第三批：性能
 
-1. App Picker 接入真实 cache，避免打开窗口重复扫描。
-2. Shortcut watcher 改事件驱动或增量扫描。
-3. 抽屉 icon 异步缓存。
-4. 截图/贴纸图片避免 base64 大对象传输。
+1. App Picker 接入真实 cache，避免打开窗口重复扫描。（已处理）
+2. Shortcut watcher 改事件驱动或增量扫描。（已加入退避，事件驱动待后续）
+3. 抽屉 icon 异步缓存。（已加入缓存，异步加载待后续）
+4. 截图/贴纸图片避免 base64 大对象传输。（已处理）
 
 ### 第四批：维护性
 
-1. 应用分类规则单一来源。
-2. Shortcut COM guard / 专用 STA worker。
-3. Updater 安装状态补 success/restart。
-4. 清理非 Windows fallback 的 PoC 文案。
+1. 应用分类规则单一来源。（已处理）
+2. Shortcut COM guard / 专用 STA worker。（已加入 guard，STA worker 待后续）
+3. Updater 安装状态补 success/restart。（已处理）
+4. 清理非 Windows fallback 的 PoC 文案。（已处理）
 
 ## 建议新增测试
 

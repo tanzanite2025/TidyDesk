@@ -308,6 +308,22 @@ fn installing_snapshot(metadata: &UpdateMetadata, update: &Update) -> UpdateSnap
     }
 }
 
+fn ready_to_restart_snapshot(metadata: &UpdateMetadata, update: &Update) -> UpdateSnapshot {
+    UpdateSnapshot {
+        state: "ready-to-restart".to_string(),
+        current_version: metadata.version.clone(),
+        available_version: Some(update.version.clone()),
+        release_date: update.date.as_ref().map(ToString::to_string),
+        release_notes: update.body.clone(),
+        percent: Some(100.0),
+        message: Some("Update installed. Restart TidyDesk to finish.".to_string()),
+        reason: None,
+        can_check: false,
+        can_download: false,
+        can_install: false,
+    }
+}
+
 fn default_snapshot(app: &AppHandle) -> UpdateSnapshot {
     let metadata = update_metadata(app);
 
@@ -667,5 +683,6 @@ pub fn updates_install(
         );
     }
 
-    Ok(snapshot)
+    let success = ready_to_restart_snapshot(&metadata, &update);
+    emit_and_store(&app, &state, &success, None)
 }

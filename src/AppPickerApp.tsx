@@ -16,11 +16,12 @@ export const AppPickerApp: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
   const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
-  const isTauriAppPicker = cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
+  const isTauriAppPicker = cacheInfo?.source === 'tauri-sidecar-cache' || cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
 
   useEffect(() => {
     const init = async () => {
       await loadTargetFolder();
+      await loadCacheInfo();
       await loadApps();
       await loadCacheInfo();
     };
@@ -279,7 +280,7 @@ export const AppPickerApp: React.FC = () => {
         {isLoading ? (
           <div className="flex flex-col items-center justify-center py-12 text-slate-500">
             <Loader2 className="animate-spin mb-3" size={32} />
-            <p className="text-sm">正在扫描已安装的应用...</p>
+            <p className="text-sm">{cacheInfo?.valid ? '正在读取应用缓存...' : '正在扫描已安装的应用...'}</p>
           </div>
         ) : filteredApps.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-slate-500">

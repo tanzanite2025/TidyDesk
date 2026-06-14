@@ -10,7 +10,7 @@ interface SettingsPanelProps {
 function updateStatusTone(snapshot: UpdateSnapshot | null) {
   if (!snapshot) return 'border-white/[0.08] bg-white/[0.04] text-slate-300';
   if (snapshot.state === 'available') return 'border-sky-400/20 bg-sky-500/10 text-sky-100';
-  if (snapshot.state === 'up-to-date' || snapshot.state === 'ready-to-install') {
+  if (snapshot.state === 'up-to-date' || snapshot.state === 'ready-to-install' || snapshot.state === 'ready-to-restart') {
     return 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100';
   }
   if (snapshot.state === 'error' || snapshot.state === 'unsupported') {
@@ -160,6 +160,13 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                     <span>正在准备安装更新...</span>
                   </div>
                 )}
+
+                {snapshot?.state === 'ready-to-restart' && (
+                  <div className="flex items-center gap-2 font-semibold">
+                    <Check size={14} />
+                    <span>更新已安装，重启后生效</span>
+                  </div>
+                )}
                 
                 {snapshot?.state === 'error' && (
                   <div>
@@ -191,7 +198,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
             {/* 操作按钮 */}
             <div className="flex gap-2">
-              {snapshot?.canCheck && snapshot.state !== 'checking' && snapshot.state !== 'available' && snapshot.state !== 'downloading' && snapshot.state !== 'ready-to-install' && snapshot.state !== 'installing' && (
+              {snapshot?.canCheck && snapshot.state !== 'checking' && snapshot.state !== 'available' && snapshot.state !== 'downloading' && snapshot.state !== 'ready-to-install' && snapshot.state !== 'installing' && snapshot.state !== 'ready-to-restart' && (
                 <button
                   type="button"
                   onClick={handleCheckForUpdates}

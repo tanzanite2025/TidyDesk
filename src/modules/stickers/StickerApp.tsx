@@ -54,7 +54,7 @@ export const StickerApp: React.FC = () => {
     >
       <div className="absolute inset-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         <img
-          src={sticker.imageDataUrl}
+          src={sticker.imageUrl}
           alt="截图贴纸"
           draggable={false}
           className="h-full w-full select-none object-contain"

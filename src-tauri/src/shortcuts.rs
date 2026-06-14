@@ -9,7 +9,8 @@ use tauri::{AppHandle, Emitter};
 const TARGET_FILE_DELETED_EVENT: &str = "target-file-deleted";
 const TARGET_FILE_RESTORED_EVENT: &str = "target-file-restored";
 const SHORTCUTS_VALIDATED_EVENT: &str = "shortcuts-validated";
-const SHORTCUT_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const SHORTCUT_WATCH_MIN_INTERVAL: Duration = Duration::from_secs(10);
+const SHORTCUT_WATCH_MAX_INTERVAL: Duration = Duration::from_secs(60);
 const SHORTCUT_VALIDATION_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug)]
@@ -18,7 +19,7 @@ struct ShortcutValidationResult {
     target_path: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ShortcutWatchEntry {
     shortcut_count: usize,
     exists: bool,
@@ -331,8 +332,9 @@ fn collect_shortcut_watch_entries(
 fn sync_shortcut_watch_events(
     app: &AppHandle,
     previous: &mut HashMap<String, ShortcutWatchEntry>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let current = collect_shortcut_watch_entries(app)?;
+    let changed = *previous != current;
 
     for (target_path, snapshot) in &current {
         if let Some(prev) = previous.get(target_path) {
@@ -359,7 +361,7 @@ fn sync_shortcut_watch_events(
     }
 
     *previous = current;
-    Ok(())
+    Ok(changed)
 }
 
 pub fn start_shortcut_background_services(app: AppHandle) {
@@ -372,10 +374,20 @@ pub fn start_shortcut_background_services(app: AppHandle) {
             }
         };
         let mut last_validation = Instant::now();
+        let mut watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
 
         loop {
-            if let Err(err) = sync_shortcut_watch_events(&app, &mut previous) {
-                eprintln!("[TIDYDESK] Shortcut watcher sync failed: {err}");
+            match sync_shortcut_watch_events(&app, &mut previous) {
+                Ok(true) => {
+                    watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
+                }
+                Ok(false) => {
+                    watch_interval = (watch_interval * 2).min(SHORTCUT_WATCH_MAX_INTERVAL);
+                }
+                Err(err) => {
+                    eprintln!("[TIDYDESK] Shortcut watcher sync failed: {err}");
+                    watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
+                }
             }
 
             if last_validation.elapsed() >= SHORTCUT_VALIDATION_INTERVAL {
@@ -396,7 +408,7 @@ pub fn start_shortcut_background_services(app: AppHandle) {
                 last_validation = Instant::now();
             }
 
-            std::thread::sleep(SHORTCUT_WATCH_POLL_INTERVAL);
+            std::thread::sleep(watch_interval);
         }
     });
 }
