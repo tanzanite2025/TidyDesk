@@ -28,7 +28,7 @@
 - 新增 Rust command：`todos_create_card` / `todos_update_card` / `todos_delete_card` / `todos_move_card`。
 - 新增 Rust command：`snip_complete_selection` / `snip_cancel`。
 - 新增 Rust command：`sticker_get` / `sticker_toggle_pin` / `sticker_copy` / `sticker_save_as` / `sticker_close`。
-- 新增 Rust command：`open_app_picker_poc` / `close_app_picker_poc`。
+- 新增 Rust command：`open_app_picker` / `close_app_picker`。
 - 新增 Tauri `NativeClient` adapter。
 - 复用现有主界面读取 Tauri app data 下的抽屉目录。
 - 复用 `AppPickerApp` 展示 target-aware 应用列表并复制 `.lnk` 到目标抽屉。

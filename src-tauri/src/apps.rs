@@ -165,7 +165,7 @@ pub fn apps_add_to_drawer(
 }
 
 #[tauri::command]
-pub fn open_app_picker_poc(
+pub fn open_app_picker(
     app: AppHandle,
     state: State<'_, AppPickerTargetState>,
     payload: Option<OpenAppPickerPayload>,
@@ -186,6 +186,6 @@ pub fn apps_get_picker_target(
 }
 
 #[tauri::command]
-pub fn close_app_picker_poc(app: AppHandle) -> Result<(), String> {
+pub fn close_app_picker(app: AppHandle) -> Result<(), String> {
     crate::tool_windows::close_app_picker_window(app)
 }

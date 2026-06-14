@@ -48,8 +48,8 @@ if (typeof window !== 'undefined' && shouldExposeTestBridge) {
     resetWindowState: () => invokeCommand('tests_reset_window_state'),
     openTodoWindow: () => invokeCommand('open_todo_window'),
     closeTodoWindow: () => invokeCommand('close_todo_window'),
-    openAppPicker: payload => dispatchCommand('open_app_picker_poc', { payload }),
-    closeAppPicker: () => dispatchCommand('close_app_picker_poc'),
+    openAppPicker: payload => dispatchCommand('open_app_picker', { payload }),
+    closeAppPicker: () => dispatchCommand('close_app_picker'),
     cancelSnip: () => dispatchCommand('snip_cancel')
   };
 }

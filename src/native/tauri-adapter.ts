@@ -206,8 +206,8 @@ export function createTauriNativeClient(): NativeClient {
           };
         }
       },
-      openPicker: payload => invoke('open_app_picker_poc', { payload }),
-      closePicker: () => invoke('close_app_picker_poc'),
+      openPicker: payload => invoke('open_app_picker', { payload }),
+      closePicker: () => invoke('close_app_picker'),
       getPickerTarget: () => invoke('apps_get_picker_target'),
       onSetTargetFolder: callback => onTauriEvent<string>('set-target-folder', callback),
       addToDrawer: payload => invoke('apps_add_to_drawer', { payload })
