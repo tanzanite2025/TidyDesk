@@ -30,9 +30,9 @@ pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link};
 pub use crate::paths::{drawer_root, is_path_inside, prepare_drawer_storage, timestamp_string};
 
 use apps::{
-    apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_read_cache,
-    apps_refresh_installed, apps_scan_installed, apps_scan_metadata, close_app_picker,
-    open_app_picker, AppPickerTargetState, TrustedShortcutState,
+    apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
+    apps_scan_installed, close_app_picker, open_app_picker, AppPickerTargetState,
+    TrustedShortcutState,
 };
 use commands::clipboard::clipboard_read_text;
 use commands::events::{events_send, UserInteractionState};
@@ -73,8 +73,6 @@ macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
             apps_cache_info,
-            apps_read_cache,
-            apps_scan_metadata,
             apps_scan_installed,
             apps_refresh_installed,
             apps_add_to_drawer,
@@ -132,8 +130,6 @@ macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
             apps_cache_info,
-            apps_read_cache,
-            apps_scan_metadata,
             apps_scan_installed,
             apps_refresh_installed,
             apps_add_to_drawer,

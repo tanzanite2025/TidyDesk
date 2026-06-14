@@ -1,5 +1,6 @@
 import type {
   AddAppToDrawerPayload,
+  AppIconsUpdatedPayload,
   AppPickerTargetResult,
   CacheInfoResult,
   CaptureOpenedPayload,
@@ -87,6 +88,7 @@ export interface NativeAppsClient {
   closePicker: () => Promise<unknown>;
   getPickerTarget: () => Promise<AppPickerTargetResult>;
   onSetTargetFolder: (callback: (targetFolder: string) => void) => (() => void) | undefined;
+  onIconsUpdated: (callback: (payload: AppIconsUpdatedPayload) => void) => (() => void) | undefined;
   addToDrawer: (payload: AddAppToDrawerPayload) => Promise<unknown>;
 }
 

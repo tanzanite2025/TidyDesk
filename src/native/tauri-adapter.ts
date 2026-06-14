@@ -15,6 +15,7 @@ import type {
   CaptureOpenedPayload,
   DesktopFilesResult,
   DrawerStatePayload,
+  AppIconsUpdatedPayload,
   ImportExternalFilesResult,
   InstalledApp,
   InstalledAppsResult,
@@ -223,6 +224,7 @@ export function createTauriNativeClient(): NativeClient {
       closePicker: () => invoke('close_app_picker'),
       getPickerTarget: () => invoke('apps_get_picker_target'),
       onSetTargetFolder: callback => onTauriEvent<string>('set-target-folder', callback),
+      onIconsUpdated: callback => onTauriEvent<AppIconsUpdatedPayload>('apps-icons-updated', callback),
       addToDrawer: payload => invoke('apps_add_to_drawer', { payload })
     },
     windows: {
