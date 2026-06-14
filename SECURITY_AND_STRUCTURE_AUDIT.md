@@ -197,7 +197,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 
 #### `src-tauri/src/main.rs`
 
-当前同时承担：
+原先同时承担：
 
 - module 声明与命令导入
 - IPC 注册
@@ -208,30 +208,31 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - 路径工具函数
 - Tauri builder/setup
 
-建议：
+已处理：
 
-- 拆出 `commands/events.rs`
-- 拆出 `commands/windows.rs`
-- 拆出 `commands/test.rs`
-- 拆出 `paths.rs`
-- `main.rs` 只保留 builder、state 注册、插件和 command wiring
+- 已拆出 `commands/events.rs`
+- 已拆出 `commands/windows.rs`
+- 已拆出 `commands/tests.rs`
+- 已拆出 `commands/clipboard.rs`
+- 已拆出 `paths.rs`
+- `main.rs` 主要保留 builder、state 注册、插件和 command wiring
 
-#### `src-tauri/src/tool_windows.rs`
+#### `src-tauri/src/tool_windows/*`
 
-当前同时管理：
+原先由单个 `tool_windows.rs` 同时管理：
 
 - Todo window
 - App Picker window
 - Snip window
 - Sticker windows
 
-建议：
+已处理：
 
-- 拆为 `windows/todo.rs`
-- 拆为 `windows/app_picker.rs`
-- 拆为 `windows/snip.rs`
-- 拆为 `windows/sticker.rs`
-- 保留公共窗口 helper 在 `windows/mod.rs`
+- 已拆为 `tool_windows/todo.rs`
+- 已拆为 `tool_windows/app_picker.rs`
+- 已拆为 `tool_windows/snip.rs`
+- 已拆为 `tool_windows/sticker.rs`
+- `tool_windows/mod.rs` 只保留公共导出
 
 #### `src-tauri/src/files_rules.rs`
 

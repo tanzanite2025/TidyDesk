@@ -448,7 +448,11 @@ fn animate_window_bounds(
 }
 
 pub fn monitor_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
-    for label in [HANDLE_WINDOW_LABEL, DRAWER_WINDOW_LABEL, "app-picker"] {
+    for label in [
+        HANDLE_WINDOW_LABEL,
+        DRAWER_WINDOW_LABEL,
+        crate::tool_windows::APP_PICKER_WINDOW_LABEL,
+    ] {
         if let Some(window) = app.get_webview_window(label) {
             if let Some(monitor) = window.current_monitor().map_err(|err| err.to_string())? {
                 let position = monitor.position();
