@@ -4,8 +4,8 @@
   "version": "../package.json",
   "identifier": "com.tidydesk.app",
   "build": {
-    "beforeDevCommand": "npm run prepare:tauri-sidecar && npm run dev:web",
-    "beforeBuildCommand": "npm run prepare:tauri-sidecar && npm run build",
+    "beforeDevCommand": "npm run dev:web",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://127.0.0.1:3000",
     "frontendDist": "../dist"
   },
@@ -44,9 +44,7 @@
     "icon": [
       "../build/icon.ico"
     ],
-    "externalBin": [
-      "sidecars/apps-cache/tidydesk-apps-cache"
-    ]
+    "externalBin": []
   },
   "plugins": {
     "updater": {

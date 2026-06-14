@@ -2,16 +2,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
 
-// 重新导出 sidecar 模块和分类模块相关的公共定义与服务，确保对主模块的 API 100% 兼容
 #[allow(unused_imports)]
 pub use crate::apps_classifier::{
     copy_shortcut_to_drawer, InstalledApp, ScanInstalledResult, ScanMetadataResult,
     ShortcutMetadata,
 };
-pub use crate::sidecar_client::{SidecarProbeResult, SidecarState};
+
+const APP_CACHE_VERSION: &str = "rust-app-scan-v1";
+const APP_CACHE_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,9 +63,13 @@ pub struct AppCacheInfo {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppCacheFile {
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    timestamp: Option<i64>,
     #[serde(default)]
     apps: Vec<ShortcutMetadata>,
 }
@@ -111,40 +117,48 @@ fn require_trusted_shortcut(
     }
 }
 
-fn apps_cache_params(app: &AppHandle) -> Result<Value, String> {
-    Ok(serde_json::json!({
-        "userDataPath": app
-            .path()
-            .app_data_dir()
-            .map_err(|err| format!("failed to resolve app data dir: {err}"))?
-            .display()
-            .to_string()
-    }))
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
-fn scan_metadata_params(app: &AppHandle) -> Result<Value, String> {
-    let mut params = crate::apps_classifier::scan_metadata_params();
-    let user_data_path = app
+fn app_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
         .path()
         .app_data_dir()
         .map_err(|err| format!("failed to resolve app data dir: {err}"))?
-        .display()
-        .to_string();
-    params["userDataPath"] = Value::String(user_data_path);
-    Ok(params)
+        .join("cache")
+        .join("apps.json"))
+}
+
+fn load_app_cache(app: &AppHandle) -> Result<Option<AppCacheFile>, String> {
+    let path = app_cache_path(app)?;
+    match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<AppCacheFile>(&content)
+            .map(Some)
+            .map_err(|err| format!("failed to parse app cache: {err}")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("failed to read app cache: {err}")),
+    }
+}
+
+fn write_app_cache(app: &AppHandle, metadata: &ScanMetadataResult) -> Result<(), String> {
+    let path = app_cache_path(app)?;
+    let cache = AppCacheFile {
+        version: Some(APP_CACHE_VERSION.to_string()),
+        timestamp: Some(now_millis()),
+        apps: metadata.shortcuts.clone(),
+    };
+    crate::persistence::atomic_write_json(&path, &cache, "app cache")
 }
 
 fn read_cached_installed_apps(
     app: &AppHandle,
     trusted_shortcuts: &State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
-    let cache_value = crate::sidecar_client::sidecar_request_with_params(
-        app,
-        "apps.readCache",
-        apps_cache_params(app)?,
-    )?;
-    let cache: AppCacheFile = serde_json::from_value(cache_value)
-        .map_err(|err| format!("failed to parse apps.readCache result: {err}"))?;
+    let cache = load_app_cache(app)?.ok_or_else(|| "App cache is missing".to_string())?;
     let metadata = ScanMetadataResult {
         shortcuts: cache.apps,
         scanned_paths: Vec::new(),
@@ -162,13 +176,10 @@ fn scan_installed_apps(
     app: &AppHandle,
     trusted_shortcuts: &State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
-    let metadata_value = crate::sidecar_client::sidecar_request_with_params(
-        app,
-        "apps.scanMetadata",
-        scan_metadata_params(app)?,
-    )?;
-    let metadata: ScanMetadataResult = serde_json::from_value(metadata_value)
-        .map_err(|err| format!("failed to parse apps.scanMetadata result: {err}"))?;
+    let metadata = crate::apps_classifier::scan_shortcut_metadata();
+    if let Err(err) = write_app_cache(app, &metadata) {
+        eprintln!("[TIDYDESK] Failed to write app cache: {err}");
+    }
     let result = crate::apps_classifier::complete_installed_apps(metadata);
     remember_trusted_shortcuts(
         trusted_shortcuts,
@@ -178,32 +189,14 @@ fn scan_installed_apps(
 }
 
 #[tauri::command]
-pub fn probe_go_sidecar(app: AppHandle) -> Result<SidecarProbeResult, String> {
-    let executable_path = crate::sidecar_client::resolve_sidecar_path(&app)?;
-    let ping = crate::sidecar_client::sidecar_request(&app, "ping")?;
-    let version = crate::sidecar_client::sidecar_request(&app, "sidecar.version")?;
-    let health = crate::sidecar_client::sidecar_request(&app, "sidecar.health")?;
-
-    Ok(SidecarProbeResult {
-        executable_path: executable_path.display().to_string(),
-        ping,
-        version,
-        health,
-    })
-}
-
-#[tauri::command]
 pub fn apps_scan_metadata(
     app: AppHandle,
     trusted_shortcuts: State<'_, TrustedShortcutState>,
 ) -> Result<Value, String> {
-    let metadata_value = crate::sidecar_client::sidecar_request_with_params(
-        &app,
-        "apps.scanMetadata",
-        scan_metadata_params(&app)?,
-    )?;
-    let metadata: ScanMetadataResult = serde_json::from_value(metadata_value.clone())
-        .map_err(|err| format!("failed to parse apps.scanMetadata result: {err}"))?;
+    let metadata = crate::apps_classifier::scan_shortcut_metadata();
+    if let Err(err) = write_app_cache(&app, &metadata) {
+        eprintln!("[TIDYDESK] Failed to write app cache: {err}");
+    }
     remember_trusted_shortcuts(
         &trusted_shortcuts,
         metadata
@@ -211,7 +204,7 @@ pub fn apps_scan_metadata(
             .iter()
             .filter_map(|shortcut| shortcut.shortcut_path.clone()),
     )?;
-    Ok(metadata_value)
+    serde_json::to_value(metadata).map_err(|err| format!("failed to serialize app metadata: {err}"))
 }
 
 #[tauri::command]
@@ -249,13 +242,27 @@ pub fn apps_refresh_installed(
 
 #[tauri::command]
 pub fn apps_cache_info(app: AppHandle) -> Result<AppCacheInfo, String> {
-    let value = crate::sidecar_client::sidecar_request_with_params(
-        &app,
-        "apps.cacheInfo",
-        apps_cache_params(&app)?,
-    )?;
-    serde_json::from_value(value)
-        .map_err(|err| format!("failed to parse apps.cacheInfo result: {err}"))
+    let Some(cache) = load_app_cache(&app)? else {
+        return Ok(AppCacheInfo {
+            exists: false,
+            valid: false,
+            app_count: 0,
+            age_minutes: 0,
+            timestamp: None,
+            version: None,
+        });
+    };
+
+    let timestamp = cache.timestamp.unwrap_or_default();
+    let age_millis = now_millis().saturating_sub(timestamp);
+    Ok(AppCacheInfo {
+        exists: true,
+        valid: timestamp > 0 && age_millis < APP_CACHE_TTL_MILLIS,
+        app_count: cache.apps.len(),
+        age_minutes: age_millis / 60_000,
+        timestamp: cache.timestamp,
+        version: cache.version,
+    })
 }
 
 #[tauri::command]

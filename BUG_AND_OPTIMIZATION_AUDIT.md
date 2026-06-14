@@ -1,13 +1,13 @@
 # TidyDesk 潜在 BUG 与优化方向排查
 
 > 状态：已开始按优先级修复；本文件继续保留后续优化跟踪。
-> 范围：当前 `main` 代码、README、`SECURITY_AND_STRUCTURE_AUDIT.md`、Tauri/Rust 主进程、React 前端、Go sidecar。
+> 范围：当前 `main` 代码、README、`SECURITY_AND_STRUCTURE_AUDIT.md`、Tauri/Rust 主进程、React 前端、应用扫描链路。
 > 说明：PR #4-#9 已处理的测试 IPC 暴露、updater override、App Picker PoC 命名、职责拆分和 README 过期内容，本次不重复列为待修复项。
-> 更新：PR #11 处理第一批数据安全和交互一致性问题；本次继续处理剩余性能/维护性问题。
+> 更新：PR #11 处理第一批数据安全和交互一致性问题；PR #12 处理剩余性能/维护性问题；后续 Go sidecar 已迁移为 Rust 后端实现。
 
 ## 总体结论
 
-当前项目职责边界已经比早期清晰：前端模块、Tauri IPC、Rust domain logic、Go sidecar 基本分层明确。当前更值得优先关注的是数据持久化可靠性、桌面文件移动/删除语义、截图/应用扫描性能、以及部分 UI 状态同步边界。
+当前项目职责边界已经比早期清晰：前端模块、Tauri IPC、Rust domain logic 和应用扫描基本分层明确。当前更值得优先关注的是数据持久化可靠性、桌面文件移动/删除语义、截图/应用扫描性能、以及部分 UI 状态同步边界。
 
 建议优先级：
 
@@ -24,12 +24,12 @@
 - Quick Notes 不再在面板加载或新建时自动读取剪贴板；capture 事件不会覆盖已有草稿。
 - Todo 自动保存会等待 IPC 结果，快速切换/关闭详情前会 flush 当前草稿，失败时保留 dirty 状态。
 - 非 Windows fallback 文案已移除 “PoC” 表述。
-- App Picker 已接入 Go sidecar cache：普通打开优先读取有效缓存，刷新按钮才强制重新扫描并更新缓存。
+- App Picker 已接入 Rust app cache：普通打开优先读取有效缓存，刷新按钮才强制重新扫描并更新缓存。
 - Shortcut watcher 已加入退避轮询：有变化时保持 10 秒检查，稳定后逐步退避到 60 秒，降低持续 IO/COM 开销。
 - 截图 overlay 和 sticker 窗口改为通过 Tauri 文件 URL 读取 PNG，取消/完成时清理 frozen background，并对超大截图区域加安全阈值。
 - Drawer/app 图标提取加入 `path + size + modified time` 缓存，减少重复刷新时的 Win32 图标提取成本。
 - Shortcut COM 初始化已封装为 guard，确保成功初始化才对应释放。
-- App 分类规则以 Go sidecar 输出的 category 为准，Rust 不再二次分类。
+- App 分类规则已统一到 Rust 应用扫描实现。
 - Updater 安装成功后会 emit `ready-to-restart` 状态，设置面板显示“更新已安装，重启后生效”。
 - Tauri 入口不再使用顶层 `expect`，启动失败会记录错误后退出。
 
@@ -200,29 +200,29 @@ Todo 编辑器使用 700ms debounce 自动保存。用户输入后如果很快�
 
 - `src/AppPickerApp.tsx:31-86`
 - `src/native/tauri-adapter.ts:181-208`
-- `sidecars/apps-cache/cache.go:41-80`
-- `sidecars/apps-cache/rpc.go:21-38`
+- `src-tauri/src/apps.rs`
+- `src-tauri/src/apps_classifier.rs`
 
 ### 现象
 
-Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的 `getCacheInfo` 实际调用的是 `apps_scan_installed`，也就是再次扫描。
+历史 Go sidecar 已实现过 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的 `getCacheInfo` 曾实际调用 `apps_scan_installed`，也就是再次扫描。
 
 影响：
 
 - 打开 App Picker 时可能先 scan，再为了 cacheInfo 又 scan。
 - UI 的 cache 状态并非真实缓存状态。
-- `cache.go` 目前更像死代码，维护成本上升。
+- cache 实现如果和扫描入口分离，维护成本会上升。
 
 ### 建议
 
-- Rust 增加 `apps_cache_info` / `apps_read_cache` 命令，直接走 sidecar cache RPC。
+- Rust 增加 `apps_cache_info` / `apps_read_cache` 命令，直接读取 Rust app cache。
 - `scanInstalled` 优先读 valid cache；用户点击刷新时才强制 scan。
-- 扫描完成后写入 cache，否则移除 sidecar cache API，避免误导。
+- 扫描完成后写入 cache，避免 cache API 和实际扫描链路脱节。
 - App Picker UI 区分“缓存读取”和“正在扫描”。
 
 ### 处理状态
 
-- 已处理：Rust 命令走 sidecar cache RPC，`scanInstalled` 优先读有效缓存，`refresh` 强制扫描并写入 cache，UI 可显示缓存读取状态。
+- 已处理：Rust 命令直接读写 app cache，`scanInstalled` 优先读有效缓存，`refresh` 强制扫描并写入 cache，UI 可显示缓存读取状态。
 
 ## 8. 快捷方式 watcher 采用固定轮询，抽屉多时可能产生持续 IO
 
@@ -338,23 +338,20 @@ Go sidecar 已实现 `apps.cacheInfo` / `apps.readCache`，但 Tauri adapter 的
 
 ### 位置
 
-- `sidecars/apps-cache/classify.go:5-57`
-- `src-tauri/src/apps_classifier.rs:194-251`
+- `src-tauri/src/apps_classifier.rs`
 
 ### 现象
 
-shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。现在内容相近，但后续新增规则时容易只改一边，导致 metadata category 与最终 installed app category 不一致。
+历史上 shortcut skip/category 规则在 Go sidecar 和 Rust 主进程各维护一份。现在已统一到 Rust 应用扫描实现，避免新增规则时只改一边。
 
 ### 建议
 
-- 选择单一权威分类位置：
-  - sidecar 输出最终 category，Rust 不再二次分类；或
-  - sidecar 只输出原始 metadata，Rust 统一分类。
-- 若必须双端存在，抽出共享 JSON 规则文件并加测试验证两边一致。
+- 保持 Rust 应用扫描为单一权威分类位置。
+- 后续新增分类规则时在 Rust 侧补测试。
 
 ### 处理状态
 
-- 已选择 Go sidecar 为分类权威来源，Rust 只透传 metadata category，不再维护重复分类规则。
+- 已迁移为 Rust 应用扫描分类权威，不再维护 Go/Rust 双端规则。
 
 ## 13. Updater 安装成功后状态没有显式 success/重启引导
 

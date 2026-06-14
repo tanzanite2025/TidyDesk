@@ -209,7 +209,7 @@ export function createTauriNativeClient(): NativeClient {
             success: true,
             info: {
               ...info,
-              source: 'tauri-sidecar-cache'
+              source: 'tauri-rust-cache'
             }
           };
         } catch (err) {

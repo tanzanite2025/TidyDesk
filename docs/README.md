@@ -38,7 +38,7 @@ docs/
 - `docs/user/START_HERE.md` 已从早期“项目完成/首次发布”说明改为当前入口页。
 - `docs/user/AUTO_UPDATE_GUIDE.md` 已从 Electron updater 说明改为 Tauri updater 说明。
 - `docs/development/TAURI_POC.md` 已标记为历史 PoC，不再推荐使用旧 `tauri:poc:*` 命令。
-- `docs/development/GO_SIDECAR_POC.md` 已标记为历史 PoC，并指向当前 Go sidecar 结构。
+- `docs/development/GO_SIDECAR_POC.md` 已标记为历史 PoC；当前应用扫描以 Rust 后端实现为准。
 
 ## 归档规则
 
