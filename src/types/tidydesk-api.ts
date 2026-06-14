@@ -131,6 +131,16 @@ export interface CacheInfoResult {
   error?: string;
 }
 
+export interface ResidentSettings {
+  autostartEnabled: boolean;
+  launchMinimized: boolean;
+}
+
+export interface ResidentSettingsUpdate {
+  autostartEnabled?: boolean;
+  launchMinimized?: boolean;
+}
+
 export interface AppPickerTargetResult {
   targetFolder: string | null;
 }

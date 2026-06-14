@@ -5,7 +5,7 @@
 
 use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 mod apps;
@@ -17,6 +17,7 @@ mod icons;
 mod paths;
 mod persistence;
 mod quick_notes;
+mod resident;
 mod shell;
 mod shortcuts;
 mod stickers;
@@ -50,6 +51,10 @@ use icons::extract_icon_data_url;
 use quick_notes::{
     quick_notes_create_note, quick_notes_delete_note, quick_notes_read_state,
     quick_notes_update_note, QuickNotesStoreState,
+};
+use resident::{
+    resident_get_settings, resident_hide_handle, resident_open_settings, resident_show_handle,
+    resident_update_settings,
 };
 use shell::{apply_window_bounds, ensure_handle_window, handle_window_bounds, ShellState};
 use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
@@ -117,6 +122,11 @@ macro_rules! tidydesk_generate_handler {
             quick_notes_create_note,
             quick_notes_update_note,
             quick_notes_delete_note,
+            resident_get_settings,
+            resident_update_settings,
+            resident_show_handle,
+            resident_hide_handle,
+            resident_open_settings,
             open_todo_window,
             close_todo_window,
             open_app_picker,
@@ -169,6 +179,11 @@ macro_rules! tidydesk_generate_handler {
             quick_notes_create_note,
             quick_notes_update_note,
             quick_notes_delete_note,
+            resident_get_settings,
+            resident_update_settings,
+            resident_show_handle,
+            resident_hide_handle,
+            resident_open_settings,
             open_todo_window,
             close_todo_window,
             open_app_picker,
@@ -179,6 +194,14 @@ macro_rules! tidydesk_generate_handler {
 
 fn main() {
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = crate::resident::show_handle_window(app);
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("TidyDesk")
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
         .manage(TrustedShortcutState::default())
@@ -190,25 +213,53 @@ fn main() {
         .manage(QuickNotesStoreState::default())
         .manage(UpdaterSessionState::default())
         .setup(|app| {
+            let show_handle =
+                MenuItem::with_id(app, "show_handle", "显示桌面把手", true, None::<&str>)?;
+            let hide_handle =
+                MenuItem::with_id(app, "hide_handle", "隐藏到托盘", true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
+            let menu = Menu::with_items(app, &[&show_handle, &hide_handle, &settings, &quit])?;
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip("TidyDesk")
-                .on_menu_event(|app, event| {
-                    if event.id().as_ref() == "quit" {
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show_handle" => {
+                        let _ = crate::resident::show_handle_window(app);
+                    }
+                    "hide_handle" => {
+                        let _ = crate::resident::hide_handle_window(app);
+                    }
+                    "settings" => {
+                        let _ = crate::resident::open_resident_settings(app);
+                    }
+                    "quit" => {
                         app.exit(0);
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let _ = crate::resident::show_handle_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
             let handle = app.handle().clone();
+            let resident_settings = resident::read_resident_settings(&handle);
             let _ = ensure_handle_window(&handle);
             if let Ok(bounds) = handle_window_bounds(&handle, false) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);
             }
-            if let Some(window) = handle.get_webview_window("handle") {
-                let _ = window.show();
-                let _ = window.set_always_on_top(true);
+            if !resident_settings.launch_minimized {
+                if let Some(window) = handle.get_webview_window("handle") {
+                    let _ = window.show();
+                    let _ = window.set_always_on_top(true);
+                }
             }
             let _ = restore_stickers(&handle);
             start_shortcut_background_services(handle.clone());

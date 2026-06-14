@@ -16,6 +16,8 @@ import type {
   RenameItemPayload,
   RepairShortcutPayload,
   RepairShortcutResult,
+  ResidentSettings,
+  ResidentSettingsUpdate,
   RestoreToDesktopPayload,
   RestoreToDesktopResult,
   ShortcutValidationStats,
@@ -104,6 +106,15 @@ export interface NativeToolWindowsClient {
   closeTodo: () => Promise<unknown>;
 }
 
+export interface NativeResidentClient {
+  getSettings: () => Promise<ResidentSettings>;
+  updateSettings: (payload: ResidentSettingsUpdate) => Promise<ResidentSettings>;
+  showHandle: () => Promise<unknown>;
+  hideHandle: () => Promise<unknown>;
+  openSettings: () => Promise<unknown>;
+  onOpenSettings: (callback: () => void) => (() => void) | undefined;
+}
+
 export interface NativeClipboardClient {
   readText: () => Promise<string>;
 }
@@ -147,6 +158,7 @@ export interface NativeClient {
   apps: NativeAppsClient;
   windows: NativeWindowsClient;
   toolWindows: NativeToolWindowsClient;
+  resident: NativeResidentClient;
   clipboard: NativeClipboardClient;
   capture: NativeCaptureClient;
   stickers: NativeStickersClient;
