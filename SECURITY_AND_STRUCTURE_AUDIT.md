@@ -255,9 +255,9 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - 已拆为 `files_rules/shell_open.rs`：打开文件
 - `files_rules/mod.rs` 只保留公共导出
 
-#### `sidecars/apps-cache/main.go`
+#### `sidecars/apps-cache/*.go`
 
-当前同时包含：
+原先由单个 `main.go` 同时包含：
 
 - JSON RPC 协议
 - cache 读写
@@ -266,17 +266,19 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - shortcut 分类
 - 入口函数
 
-建议：
+已处理：
 
-- `rpc.go`
-- `cache.go`
-- `scan.go`
-- `classify.go`
-- `main.go` 只保留启动与循环
+- 已拆为 `rpc.go`
+- 已拆为 `cache.go`
+- 已拆为 `scan.go`
+- 已拆为 `classify.go`
+- 已拆为 `version.go`
+- 已拆为 `types.go`
+- `main.go` 只保留启动与 stdin/stdout 循环
 
 ### 命名问题
 
-以下 App Picker 命名原先带 PoC 语义，功能稳定后建议改为正式命名：
+以下 App Picker 命名已移除 PoC 语义：
 
 - `open_app_picker`
 - `close_app_picker`
@@ -291,7 +293,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 4. 将 `apps_add_to_drawer` 改为扫描结果 ID 导入模式。
 5. 升级 E2E 依赖，消除 audit 告警。
 6. 固定 `@tauri-apps/cli` 版本。
-7. 拆分职责偏宽文件，先 Rust 主进程，再 Go sidecar。
+7. 拆分职责偏宽文件，先 Rust 主进程，再 Go sidecar。（已完成）
 
 ## 审查限制
 
