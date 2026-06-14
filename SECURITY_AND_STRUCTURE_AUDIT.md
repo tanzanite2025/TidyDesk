@@ -274,14 +274,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 
 ### 命名问题
 
-以下命名仍带 PoC 语义：
-
-- `open_app_picker_poc`
-- `close_app_picker_poc`
-- `app-picker-poc`
-- `TidyDesk AppPicker Tauri PoC`
-
-建议在功能稳定后改为：
+以下 App Picker 命名原先带 PoC 语义，功能稳定后建议改为正式命名：
 
 - `open_app_picker`
 - `close_app_picker`

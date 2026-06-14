@@ -16,7 +16,7 @@ export const AppPickerApp: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
   const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
-  const isTauriAppPickerPoc = cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
+  const isTauriAppPicker = cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
 
   useEffect(() => {
     const init = async () => {
@@ -208,10 +208,10 @@ export const AppPickerApp: React.FC = () => {
       {/* 头部 */}
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <h2 className="text-lg font-semibold text-slate-100">{isTauriAppPickerPoc ? 'AppPicker Tauri PoC' : '添加应用'}</h2>
+          <h2 className="text-lg font-semibold text-slate-100">{isTauriAppPicker ? 'App Picker' : '添加应用'}</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {isTauriAppPickerPoc
-              ? 'Tauri AppPicker：扫描应用并添加到抽屉'
+            {isTauriAppPicker
+              ? '扫描应用并添加到抽屉'
               : `选择要添加到 "${targetFolder || '...'}" 的应用`}
           </p>
         </div>
@@ -225,9 +225,9 @@ export const AppPickerApp: React.FC = () => {
         </button>
       </div>
 
-      {isTauriAppPickerPoc && (
+      {isTauriAppPicker && (
         <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-6 py-3 text-xs text-cyan-100">
-          Tauri AppPicker：targetPath 由 Rust 解析，点击条目会复制快捷方式到 "{targetFolder || '收纳抽屉'}"。
+          targetPath 由 Rust 解析，点击条目会复制快捷方式到 "{targetFolder || '收纳抽屉'}"。
         </div>
       )}
 

@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder, Wi
 
 const TODO_WINDOW_LABEL: &str = "todos";
 const TODO_MODULE_ID: &str = "todos";
+pub const APP_PICKER_WINDOW_LABEL: &str = "app-picker";
 
 fn sync_todo_window_closed(app: &AppHandle) -> Result<(), String> {
     let shell = app.state::<ShellState>();
@@ -128,7 +129,7 @@ pub fn open_app_picker_window(
             .clone()
     };
 
-    if let Some(window) = app.get_webview_window("app-picker-poc") {
+    if let Some(window) = app.get_webview_window(APP_PICKER_WINDOW_LABEL) {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
         window
@@ -139,10 +140,10 @@ pub fn open_app_picker_window(
 
     let window = WebviewWindowBuilder::new(
         &app,
-        "app-picker-poc",
+        APP_PICKER_WINDOW_LABEL,
         crate::shell::webview_url_for_mode("app-picker")?,
     )
-    .title("TidyDesk AppPicker Tauri PoC")
+    .title("TidyDesk App Picker")
     .inner_size(920.0, 720.0)
     .resizable(true)
     .center()
@@ -157,7 +158,7 @@ pub fn open_app_picker_window(
 }
 
 pub fn close_app_picker_window(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("app-picker-poc") {
+    if let Some(window) = app.get_webview_window(APP_PICKER_WINDOW_LABEL) {
         window
             .destroy()
             .or_else(|_| window.close())
@@ -314,4 +315,3 @@ fn persist_sticker_window_bounds(app: &AppHandle, sticker_id: &str) -> Result<()
     })?;
     Ok(())
 }
-
