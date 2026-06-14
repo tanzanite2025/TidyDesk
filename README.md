@@ -53,46 +53,104 @@ TidyDesk/
 
 ## 本地开发
 
+所有 npm 命令都在仓库根目录执行，也就是包含 `package.json` 的 `TidyDesk/`：
+
+```powershell
+cd C:\path\to\TidyDesk
+```
+
+如果你在别的目录执行 `npm run dev`，npm 会报 `Could not read package.json`。也可以不切目录，直接写：
+
+```powershell
+npm --prefix C:\path\to\TidyDesk run dev
+```
+
 ### 环境要求
 
 - `Node.js 18+`
-- `Rust` 和 `cargo`
+- `Rust` / `cargo`，并安装 GNU target：`rustup toolchain install stable-x86_64-pc-windows-gnu`
 - `Go 1.20+`
+- `MinGW`，用于 Windows GNU target 的资源编译和链接
 - `Windows 10/11`
 
 ### 安装依赖
 
-```bash
+```powershell
 npm install
 ```
 
-### 前端开发
+### 推荐开发启动
 
-```bash
+日常开发直接使用：
+
+```powershell
 npm run dev
 ```
+
+这条命令会启动完整 Tauri 桌面应用，并自动准备 Go sidecar。等价于：
+
+```powershell
+npm run tauri:dev
+```
+
+### 仅启动前端页面
+
+如果只想看 React/Vite 页面，不启动桌面壳：
+
+```powershell
+npm run dev:web
+```
+
+注意：`dev:web` 只启动浏览器页面，Tauri IPC、窗口控制、文件系统和截图等桌面能力不可用；看到相关报错时请改用 `npm run dev`。
 
 ### Tauri 开发
 
 `npm run tauri:dev` 会先执行 `prepare:tauri-sidecar`，自动编译并复制 sidecar。
 
-```bash
+```powershell
 npm run tauri:dev
 ```
 
 ### 常用检查
 
-```bash
+这些命令也都在仓库根目录执行：
+
+```powershell
 npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-go -C sidecars/apps-cache test ./...
+npm run test:sidecar
+npm run check:rust
 ```
 
-如果只检查 sidecar：
+也可以一条命令跑完常用检查：
 
-```bash
+```powershell
+npm run check
+```
+
+对应的底层命令是：
+
+```powershell
+npm run build
+go -C sidecars/apps-cache test ./...
+npm run prepare:tauri-sidecar
+cargo +stable-x86_64-pc-windows-gnu check --manifest-path src-tauri/Cargo.toml
+```
+
+如果只编译 sidecar：
+
+```powershell
 npm run build:sidecar
 ```
+
+### 常见报错
+
+| 报错/现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `Could not read package.json` | 当前终端不在仓库根目录 | 先 `cd C:\path\to\TidyDesk`，或使用 `npm --prefix C:\path\to\TidyDesk run dev` |
+| `Port 3000 is already in use` | 上一次 Vite/Tauri dev 进程还在运行 | 关闭旧终端或结束占用 3000 端口的 node 进程后重试 |
+| 浏览器页面里出现 Tauri/IPC/window 相关错误 | 启动的是纯前端 `dev:web`，不是桌面应用 | 用 `npm run dev` |
+| `cargo check` 找不到 sidecar 或 target triple 不匹配 | 直接跑了底层 cargo 命令，未准备 Tauri sidecar | 用 `npm run check:rust` |
+| GNU target / MinGW / `windres` 相关错误 | Rust GNU target 或 MinGW 未装好 | 确认已安装 `stable-x86_64-pc-windows-gnu` 和 MinGW；在 Devin 环境中使用已配置好的 `npm run check:rust` |
 
 ## 打包发布
 

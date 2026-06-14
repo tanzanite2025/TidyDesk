@@ -20,18 +20,19 @@
 2. [文档中心](../README.md)
 3. [安全与结构审计](../../SECURITY_AND_STRUCTURE_AUDIT.md)
 
-常用命令：
+常用命令都在仓库根目录（包含 `package.json` 的 `TidyDesk/`）执行：
 
-```bash
+```powershell
 npm install
+npm run dev
 npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-go -C sidecars/apps-cache test ./...
+npm run test:sidecar
+npm run check:rust
 ```
 
 涉及桌面窗口行为时再跑：
 
-```bash
+```powershell
 npm run test:e2e:install
 npm run test:e2e:tauri
 ```
@@ -46,7 +47,7 @@ npm run test:e2e:tauri
 
 核心命令：
 
-```bash
+```powershell
 npm run tauri:bundle
 npm run tauri:build
 npm run tauri:release
