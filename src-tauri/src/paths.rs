@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,15 +20,32 @@ pub fn drawer_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn is_path_inside(child_path: &Path, parent_path: &Path) -> bool {
-    let resolved_child = match child_path.canonicalize() {
-        Ok(path) => path,
-        Err(_) => child_path.to_path_buf(),
-    };
-    let resolved_parent = match parent_path.canonicalize() {
-        Ok(path) => path,
-        Err(_) => parent_path.to_path_buf(),
-    };
+    let resolved_child = resolve_path_for_comparison(child_path);
+    let resolved_parent = resolve_path_for_comparison(parent_path);
     resolved_child.starts_with(resolved_parent)
+}
+
+fn resolve_path_for_comparison(path: &Path) -> PathBuf {
+    if let Ok(resolved) = path.canonicalize() {
+        return resolved;
+    }
+
+    let mut suffix: Vec<OsString> = Vec::new();
+    let mut current = path;
+    while let Some(parent) = current.parent() {
+        if let Some(name) = current.file_name() {
+            suffix.push(name.to_os_string());
+        }
+        if let Ok(mut resolved) = parent.canonicalize() {
+            for part in suffix.iter().rev() {
+                resolved.push(part);
+            }
+            return resolved;
+        }
+        current = parent;
+    }
+
+    path.to_path_buf()
 }
 
 pub fn prepare_drawer_storage(app: &AppHandle) -> Result<(), String> {
