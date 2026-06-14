@@ -43,8 +43,7 @@
     "targets": "nsis",
     "icon": [
       "../build/icon.ico"
-    ],
-    "externalBin": []
+    ]
   },
   "plugins": {
     "updater": {

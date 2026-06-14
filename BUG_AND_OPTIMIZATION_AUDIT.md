@@ -448,6 +448,22 @@ Todo 编辑器使用 700ms debounce 自动保存。用户输入后如果很快�
 3. Updater 安装状态补 success/restart。（已处理）
 4. 清理非 Windows fallback 的 PoC 文案。（已处理）
 
+## Rust-only 应用扫描迁移后的追加审计
+
+### 已发现并处理
+
+- Windows 上 `std::fs::rename` 不能稳定覆盖已存在目标文件，可能导致第二次 cache/state 原子写失败；改为 Windows `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)`，并补充覆盖写测试。
+- Rust app cache 只看 TTL，未校验 cache schema/version；如果后续结构变更，旧 cache 可能被误判为有效。已要求 `version == rust-app-scan-v1`。
+- cache timestamp 没有防未来时间保护；系统时钟异常可能让 cache 长时间有效。已增加未来时间容忍阈值。
+- app cache JSON 损坏时只返回解析错误，没有备份恢复闭环。已改为备份 `.corrupt-<timestamp>.json` 后回退到重新扫描。
+- Tauri bundle 配置中残留空 `externalBin: []`，已移除。
+
+### 后续可优化但不阻塞当前稳定性
+
+- `src-tauri/src/apps_classifier.rs` 同时承担扫描、分类、完成 target/icon、导入复制和测试，后续可拆成 `apps_scan` / `apps_cache` / `apps_classify` / `apps_import`。
+- `apps_scan_metadata` / `apps_read_cache` 当前主要保留兼容和调试价值，前端主链路不直接使用；如果确认没有外部调用，可进一步收窄 IPC 面。
+- 应用扫描和 icon 提取仍是同步命令链路；应用数量很大时可改为后台任务 + 先返回 metadata、再渐进补 icon。
+
 ## 建议新增测试
 
 - Todo：输入后 700ms 内切换卡片，不应丢内容。
