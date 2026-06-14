@@ -367,6 +367,10 @@ export const DrawerApp: React.FC = () => {
                             file={file}
                             onOpen={() => openFile(file.path)}
                             onDelete={() => {
+                              if (file.targetPath?.includes('storage')) {
+                                alert(`"${file.name}" 已由 TidyDesk 收纳。请先点击还原按钮移回桌面，再删除快捷入口。`);
+                                return;
+                              }
                               if (confirm(`删除快捷入口 "${file.name}"？原文件不会被删除。`)) deleteItem(file.id, 'file');
                             }}
                           onRepair={file.isValid === false ? () => handleRepairShortcut(file.id, file.name) : undefined}

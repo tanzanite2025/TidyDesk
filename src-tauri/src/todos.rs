@@ -6,12 +6,11 @@ use tauri::{AppHandle, Emitter, Manager};
 // 重新导出底层定义的类型和辅助方法，确保接口契约完全一致
 #[allow(unused_imports)]
 pub use crate::todos_rules::{
-    create_todo_id, find_todo_card_index, prepend_card_order, remove_card_from_orders,
-    read_todo_index_unlocked, write_todo_index_unlocked, todo_card_path,
-    read_todo_card_content_unlocked, write_todo_card_content_unlocked, safe_todo_title,
-    todo_board_id, todo_column_ids, todo_counts, todo_state_from_index_unlocked,
-    with_todo_store_lock, CreateTodoCardPayload, MoveTodoCardPayload, UpdateTodoCardPayload,
-    insert_card_order,
+    create_todo_id, find_todo_card_index, insert_card_order, prepend_card_order,
+    read_todo_card_content_unlocked, read_todo_index_unlocked, remove_card_from_orders,
+    safe_todo_title, todo_board_id, todo_card_path, todo_column_ids, todo_counts,
+    todo_state_from_index_unlocked, with_todo_store_lock, write_todo_card_content_unlocked,
+    write_todo_index_unlocked, CreateTodoCardPayload, MoveTodoCardPayload, UpdateTodoCardPayload,
 };
 
 #[derive(Debug, Default)]

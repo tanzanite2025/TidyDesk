@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { nativeClient } from '../../native/native-client';
 import type { QuickNote, QuickNotesState } from '../../types/quick-note';
 import {
@@ -23,6 +23,7 @@ export function useQuickNotes() {
   const [sortMode, setSortMode] = useState<SortMode>('updated');
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const draftRef = useRef({ title: '', content: '' });
 
   const selectedNote = useMemo(
     () => notes.find(note => note.id === selectedNoteId) || null,
@@ -40,6 +41,10 @@ export function useQuickNotes() {
     setDraftPinned(activeNote?.pinned || false);
     setDraftFavorite(activeNote?.favorite || false);
   }
+
+  useEffect(() => {
+    draftRef.current = { title: draftTitle, content: draftContent };
+  }, [draftContent, draftTitle]);
 
   async function preloadClipboardDraft(mode: 'auto' | 'manual' = 'manual') {
     setIsImportingClipboard(true);
@@ -80,14 +85,6 @@ export function useQuickNotes() {
         const state = await nativeClient.quickNotes.readState();
         if (disposed) return;
         applyState(state, null);
-        const clipboardText = (await nativeClient.clipboard.readText().catch(() => '')).trim();
-        if (disposed || !clipboardText) return;
-        setSelectedNoteId(null);
-        setDraftTitle(titleFromContent(clipboardText));
-        setDraftContent(clipboardText);
-        setDraftPinned(false);
-        setDraftFavorite(false);
-        setNotice('已自动带入剪贴板内容，可直接保存成记录');
       } catch (err) {
         if (disposed) return;
         setError(`读取快捷记录失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -102,6 +99,10 @@ export function useQuickNotes() {
       if (disposed) return;
       const text = (payload.clipboardText || '').trim();
       if (!text) return;
+      if (draftRef.current.title.trim() || draftRef.current.content.trim()) {
+        setNotice('检测到剪贴板文本，未自动覆盖当前草稿；点击“剪贴板”可导入。');
+        return;
+      }
       setSelectedNoteId(null);
       setDraftTitle(titleFromContent(text));
       setDraftContent(text);
@@ -125,7 +126,6 @@ export function useQuickNotes() {
     setDraftFavorite(false);
     setError(null);
     setNotice(null);
-    void preloadClipboardDraft('manual');
   };
 
   const selectNote = (note: QuickNote) => {

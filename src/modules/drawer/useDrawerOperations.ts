@@ -188,7 +188,7 @@ export function useDrawerOperations() {
     }
 
     await importExternalFiles(filePaths, drawerId);
-    setNotice('已加入抽屉。这里只创建快捷入口，原桌面文件没有移动。');
+    setNotice('已加入抽屉。桌面普通文件会收纳到 TidyDesk storage，外部文件会复制后创建快捷入口。');
   }
 
   async function handleCreateDrawer() {

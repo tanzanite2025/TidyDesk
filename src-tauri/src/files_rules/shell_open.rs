@@ -12,5 +12,5 @@ pub fn open_path_with_shell(path: &Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 pub fn open_path_with_shell(_path: &Path) -> Result<(), String> {
-    Err("Opening files is only implemented for Windows in this PoC".to_string())
+    Err("Opening files is only implemented on Windows".to_string())
 }

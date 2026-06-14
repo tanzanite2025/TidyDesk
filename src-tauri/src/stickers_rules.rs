@@ -200,9 +200,7 @@ pub fn write_sticker_state_unlocked(
 ) -> Result<(), String> {
     ensure_storage_dirs(app)?;
     let path = sticker_state_path(app)?;
-    let content = serde_json::to_string_pretty(state)
-        .map_err(|err| format!("failed to serialize sticker state: {err}"))?;
-    fs::write(path, content).map_err(|err| format!("failed to write sticker state: {err}"))
+    crate::persistence::atomic_write_json(&path, state, "sticker state")
 }
 
 pub fn ensure_storage_dirs(app: &AppHandle) -> Result<(), String> {
