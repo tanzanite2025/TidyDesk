@@ -1,5 +1,4 @@
 use arboard::{Clipboard, ImageData};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rfd::FileDialog;
 use serde_json::{json, Value};
 use std::borrow::Cow;
@@ -25,8 +24,18 @@ pub struct StickerStoreState(pub Mutex<()>);
 #[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
-    pub frozen_image_png: Mutex<Option<Vec<u8>>>,
+    pub frozen_image_path: Mutex<Option<PathBuf>>,
     pub frozen_image_error: Mutex<Option<String>>,
+}
+
+fn frozen_background_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|err| format!("failed to resolve snip cache dir: {err}"))?
+        .join("snip");
+    fs::create_dir_all(&dir).map_err(|err| format!("failed to create snip cache dir: {err}"))?;
+    Ok(dir.join("background.png"))
 }
 
 pub fn restore_stickers(app: &AppHandle) -> Result<(), String> {
@@ -59,20 +68,23 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<SnipCaptureState>();
     match crate::stickers_rules::capture_monitor_region_png(&monitor, &rect) {
         Ok(png) => {
+            let image_path = frozen_background_path(app)?;
+            fs::write(&image_path, png)
+                .map_err(|err| format!("failed to write snip background: {err}"))?;
             let mut frozen = state
-                .frozen_image_png
+                .frozen_image_path
                 .lock()
                 .map_err(|_| "failed to lock snip background image".to_string())?;
             let mut error = state
                 .frozen_image_error
                 .lock()
                 .map_err(|_| "failed to lock snip background error".to_string())?;
-            *frozen = Some(png);
+            *frozen = Some(image_path);
             *error = None;
         }
         Err(err) => {
             let mut frozen = state
-                .frozen_image_png
+                .frozen_image_path
                 .lock()
                 .map_err(|_| "failed to lock snip background image".to_string())?;
             let mut error = state
@@ -101,12 +113,14 @@ pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Resul
     require_snip_window(&window, "snip_get_background_image")?;
     let state = app.state::<SnipCaptureState>();
     let frozen = state
-        .frozen_image_png
+        .frozen_image_path
         .lock()
         .map_err(|_| "failed to lock snip background image".to_string())?;
-    if let Some(png) = frozen.as_ref() {
-        let b64 = format!("data:image/png;base64,{}", BASE64_STANDARD.encode(png));
-        Ok(json!({ "success": true, "imageDataUrl": b64 }))
+    if let Some(image_path) = frozen.as_ref() {
+        Ok(json!({
+            "success": true,
+            "imagePath": image_path.display().to_string()
+        }))
     } else {
         let error = state
             .frozen_image_error
@@ -114,7 +128,7 @@ pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Resul
             .map_err(|_| "failed to lock snip background error".to_string())?;
         Ok(json!({
             "success": false,
-            "imageDataUrl": Value::Null,
+            "imagePath": Value::Null,
             "error": error.as_deref().unwrap_or("No screenshot background is available")
         }))
     }
@@ -164,11 +178,9 @@ pub fn sticker_get(
         return Ok(None);
     }
 
-    let bytes =
-        fs::read(&image_path).map_err(|err| format!("failed to read sticker image: {err}"))?;
     Ok(Some(StickerDataPayload {
         id: sticker.id.clone(),
-        image_data_url: format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes)),
+        image_path: image_path.display().to_string(),
         always_on_top: sticker.always_on_top,
         created_at: sticker.created_at.clone(),
     }))
@@ -318,10 +330,12 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     let state = app.state::<SnipCaptureState>();
     let png = {
         let mut frozen = state
-            .frozen_image_png
+            .frozen_image_path
             .lock()
             .map_err(|_| "failed to lock snip background image".to_string())?;
-        if let Some(png_bytes) = frozen.take() {
+        if let Some(image_path) = frozen.take() {
+            let png_bytes = fs::read(&image_path)
+                .map_err(|err| format!("failed to read frozen image: {err}"))?;
             let img = image::load_from_memory(&png_bytes)
                 .map_err(|err| format!("failed to load frozen image: {err}"))?;
 
@@ -382,14 +396,16 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
 fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<SnipCaptureState>();
     let mut frozen = state
-        .frozen_image_png
+        .frozen_image_path
         .lock()
         .map_err(|_| "failed to lock snip background image".to_string())?;
     let mut error = state
         .frozen_image_error
         .lock()
         .map_err(|_| "failed to lock snip background error".to_string())?;
-    *frozen = None;
+    if let Some(image_path) = frozen.take() {
+        let _ = fs::remove_file(image_path);
+    }
     *error = None;
     Ok(())
 }

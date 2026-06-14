@@ -8,6 +8,7 @@ export type UpdateState =
   | 'downloading'
   | 'ready-to-install'
   | 'installing'
+  | 'ready-to-restart'
   | 'unsupported'
   | 'error';
 export type UpdateIssueReason =

@@ -1,8 +1,11 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use image::{DynamicImage, ImageFormat, RgbaImage};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Gdi::{
@@ -14,13 +17,55 @@ use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_L
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL};
 
 const ICON_SIZE: i32 = 32;
+static ICON_DATA_URL_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
 #[cfg(windows)]
 pub fn extract_icon_data_url(path: &Path) -> Option<String> {
     if !path.exists() {
         return None;
     }
+    if let Some(key) = icon_cache_key(path) {
+        if let Ok(cache) = ICON_DATA_URL_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            if let Some(cached) = cache.get(&key) {
+                return cached.clone();
+            }
+        }
 
+        let extracted = extract_icon_data_url_uncached(path);
+        if let Ok(mut cache) = ICON_DATA_URL_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            cache.insert(key, extracted.clone());
+        }
+        return extracted;
+    }
+
+    extract_icon_data_url_uncached(path)
+}
+
+#[cfg(windows)]
+fn icon_cache_key(path: &Path) -> Option<String> {
+    let metadata = path.metadata().ok()?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    Some(format!(
+        "{}:{}:{}",
+        path.to_string_lossy().to_lowercase(),
+        metadata.len(),
+        modified_ms
+    ))
+}
+
+#[cfg(windows)]
+fn extract_icon_data_url_uncached(path: &Path) -> Option<String> {
     let wide: Vec<u16> = path
         .as_os_str()
         .to_string_lossy()

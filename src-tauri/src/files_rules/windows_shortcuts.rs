@@ -13,6 +13,30 @@ use windows::Win32::System::Com::{
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 #[cfg(windows)]
+struct ComApartment;
+
+#[cfg(windows)]
+impl ComApartment {
+    fn init() -> Result<Self, String> {
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+                .ok()
+                .map_err(|err| format!("failed to initialize COM: {err}"))?;
+        }
+        Ok(Self)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe {
+            CoUninitialize();
+        }
+    }
+}
+
+#[cfg(windows)]
 pub fn create_shortcut_link(shortcut_path: &Path, target_path: &Path) -> Result<(), String> {
     let description = format!(
         "TidyDesk managed file: {}",
@@ -35,14 +59,8 @@ pub fn write_shortcut_link(
     target_path: &Path,
     description: &str,
 ) -> Result<(), String> {
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|err| format!("failed to initialize COM: {err}"))?;
-        let result = write_shortcut_link_with_com(shortcut_path, target_path, description);
-        CoUninitialize();
-        result
-    }
+    let _com = ComApartment::init()?;
+    write_shortcut_link_with_com(shortcut_path, target_path, description)
 }
 
 #[cfg(windows)]
@@ -113,14 +131,8 @@ pub fn write_shortcut_link(
 #[cfg(windows)]
 pub fn resolve_shortcut_target(shortcut_path: &str) -> Result<Option<String>, String> {
     let shortcut_path_wide: Vec<u16> = shortcut_path.encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
-            .ok()
-            .map_err(|err| format!("failed to initialize COM: {err}"))?;
-        let result = resolve_shortcut_target_with_com(&shortcut_path_wide);
-        CoUninitialize();
-        result
-    }
+    let _com = ComApartment::init()?;
+    resolve_shortcut_target_with_com(&shortcut_path_wide)
 }
 
 #[cfg(windows)]

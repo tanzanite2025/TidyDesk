@@ -59,6 +59,7 @@ type cacheInfo struct {
 type scanMetadataParams struct {
 	StartMenuPaths  []string `json:"startMenuPaths"`
 	DesktopPath     string   `json:"desktopPath"`
+	UserDataPath    string   `json:"userDataPath,omitempty"`
 	MaxDepth        int      `json:"maxDepth"`
 	SkipDirectories []string `json:"skipDirectories"`
 }

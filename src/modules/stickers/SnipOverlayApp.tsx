@@ -87,8 +87,8 @@ export const SnipOverlayApp: React.FC = () => {
 
   const loadBackgroundImage = useCallback(() => {
     nativeClient.capture.getBackgroundImage().then(result => {
-      if (result.success && result.imageDataUrl) {
-        setBgImage(result.imageDataUrl);
+      if (result.success && result.imageUrl) {
+        setBgImage(result.imageUrl);
         setBgError(null);
       } else {
         setBgImage(null);

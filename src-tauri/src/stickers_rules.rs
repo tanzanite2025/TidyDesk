@@ -23,6 +23,7 @@ pub const SNIP_WINDOW_LABEL: &str = "snip";
 pub const SNIP_RESET_EVENT: &str = "snip-reset";
 pub const STICKER_WINDOW_PREFIX: &str = "sticker-";
 pub const STICKER_UPDATED_EVENT: &str = "sticker-updated";
+const MAX_CAPTURE_PIXELS: i32 = 33_177_600;
 
 #[derive(Debug, Clone)]
 pub struct MonitorSnapshot {
@@ -68,7 +69,7 @@ pub struct SnipRectPayload {
 #[serde(rename_all = "camelCase")]
 pub struct StickerDataPayload {
     pub id: String,
-    pub image_data_url: String,
+    pub image_path: String,
     pub always_on_top: bool,
     pub created_at: String,
 }
@@ -400,6 +401,10 @@ pub fn capture_monitor_region_png(
     let capture_y = monitor.y + ((rect.y * monitor.scale_factor).round() as i32);
     let capture_width = ((rect.width * monitor.scale_factor).round() as i32).max(1);
     let capture_height = ((rect.height * monitor.scale_factor).round() as i32).max(1);
+    let pixels = capture_width.saturating_mul(capture_height);
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err("Screenshot area is too large to capture safely".to_string());
+    }
 
     unsafe {
         let screen_dc = GetDC(None);

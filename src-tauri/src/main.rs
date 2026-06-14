@@ -31,9 +31,9 @@ pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link};
 pub use crate::paths::{drawer_root, is_path_inside, prepare_drawer_storage, timestamp_string};
 
 use apps::{
-    apps_add_to_drawer, apps_get_picker_target, apps_scan_installed, apps_scan_metadata,
-    close_app_picker, open_app_picker, probe_go_sidecar, AppPickerTargetState, SidecarState,
-    TrustedShortcutState,
+    apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_read_cache,
+    apps_refresh_installed, apps_scan_installed, apps_scan_metadata, close_app_picker,
+    open_app_picker, probe_go_sidecar, AppPickerTargetState, SidecarState, TrustedShortcutState,
 };
 use commands::clipboard::clipboard_read_text;
 use commands::events::{events_send, UserInteractionState};
@@ -74,8 +74,11 @@ macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
             probe_go_sidecar,
+            apps_cache_info,
+            apps_read_cache,
             apps_scan_metadata,
             apps_scan_installed,
+            apps_refresh_installed,
             apps_add_to_drawer,
             files_read_desktop_files,
             files_open,
@@ -131,8 +134,11 @@ macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
             probe_go_sidecar,
+            apps_cache_info,
+            apps_read_cache,
             apps_scan_metadata,
             apps_scan_installed,
+            apps_refresh_installed,
             apps_add_to_drawer,
             files_read_desktop_files,
             files_open,
@@ -179,7 +185,7 @@ macro_rules! tidydesk_generate_handler {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
         .manage(SidecarState::default())
@@ -217,6 +223,9 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tidydesk_generate_handler!())
-        .run(tauri::generate_context!())
-        .expect("failed to run TidyDesk");
+        .run(tauri::generate_context!());
+    if let Err(err) = result {
+        eprintln!("[TIDYDESK] failed to run TidyDesk: {err}");
+        std::process::exit(1);
+    }
 }

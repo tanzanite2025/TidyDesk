@@ -26,6 +26,26 @@ func cachePath(userDataPath string) string {
 	return filepath.Join(userDataPath, "cache", "apps.json")
 }
 
+func writeCache(userDataPath string, result scanMetadataResult) error {
+	apps, err := json.Marshal(result.Shortcuts)
+	if err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(cacheFile{
+		Version:   sidecarVersion,
+		Timestamp: time.Now().UnixMilli(),
+		Apps:      apps,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := cachePath(userDataPath)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0o644)
+}
+
 func loadCache(userDataPath string) (cacheFile, error) {
 	var cache cacheFile
 	content, err := os.ReadFile(cachePath(userDataPath))

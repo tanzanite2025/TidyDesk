@@ -147,13 +147,15 @@ export interface SnipRect {
 
 export interface SnipBackgroundImageResult {
   success: boolean;
-  imageDataUrl?: string | null;
+  imagePath?: string | null;
+  imageUrl?: string | null;
   error?: string;
 }
 
 export interface StickerData {
   id: string;
-  imageDataUrl: string;
+  imagePath: string;
+  imageUrl: string;
   alwaysOnTop: boolean;
   createdAt: string;
 }
