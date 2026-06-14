@@ -16,6 +16,8 @@ pub struct ResidentSettings {
     pub launch_minimized: bool,
     #[serde(default = "default_background_monitor_enabled")]
     pub background_monitor_enabled: bool,
+    #[serde(default = "default_auto_update_check_enabled")]
+    pub auto_update_check_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -24,6 +26,7 @@ pub struct ResidentSettingsSnapshot {
     pub autostart_enabled: bool,
     pub launch_minimized: bool,
     pub background_monitor_enabled: bool,
+    pub auto_update_check_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -35,6 +38,8 @@ pub struct ResidentSettingsUpdate {
     pub launch_minimized: Option<bool>,
     #[serde(default)]
     pub background_monitor_enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_update_check_enabled: Option<bool>,
 }
 
 impl Default for ResidentSettings {
@@ -42,11 +47,16 @@ impl Default for ResidentSettings {
         Self {
             launch_minimized: false,
             background_monitor_enabled: true,
+            auto_update_check_enabled: true,
         }
     }
 }
 
 fn default_background_monitor_enabled() -> bool {
+    true
+}
+
+fn default_auto_update_check_enabled() -> bool {
     true
 }
 
@@ -85,7 +95,16 @@ pub fn resident_update_settings(
         settings.background_monitor_enabled = background_monitor_enabled;
         crate::shortcuts::set_shortcut_background_monitoring(&app, background_monitor_enabled);
     }
-    if payload.launch_minimized.is_some() || payload.background_monitor_enabled.is_some() {
+    if let Some(auto_update_check_enabled) = payload.auto_update_check_enabled {
+        settings.auto_update_check_enabled = auto_update_check_enabled;
+        if auto_update_check_enabled {
+            crate::updates::start_update_auto_check(app.clone(), Duration::from_secs(2));
+        }
+    }
+    if payload.launch_minimized.is_some()
+        || payload.background_monitor_enabled.is_some()
+        || payload.auto_update_check_enabled.is_some()
+    {
         write_resident_settings(&app, &settings)?;
     }
 
@@ -178,6 +197,7 @@ fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapsho
         autostart_enabled,
         launch_minimized: settings.launch_minimized,
         background_monitor_enabled: settings.background_monitor_enabled,
+        auto_update_check_enabled: settings.auto_update_check_enabled,
     })
 }
 

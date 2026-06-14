@@ -6,10 +6,11 @@
 
 TidyDesk 使用 `tauri-plugin-updater`：
 
-- 应用内检查更新。
+- 启动后自动检查更新（同一天最多一次），也支持应用内手动检查。
 - 下载签名更新包。
 - 安装并重启。
 - 展示版本、进度和更新说明。
+- 发现新版本时发送系统通知。
 
 更新包签名由 Tauri updater 公钥校验。公钥可以提交到仓库；需要保密的是签名私钥。
 
@@ -21,6 +22,8 @@ src-tauri/src/updates.rs                   Rust updater command
 src/services/updates/use-update-manager.ts 前端更新状态管理
 scripts/run-tauri-build.cjs                Tauri build 包装脚本
 scripts/generate-tauri-latest-json.cjs     latest.json 生成脚本
+scripts/check-release-version.cjs          package / Cargo / tag 版本一致性检查
+.github/workflows/release.yml              GitHub Release 自动构建和上传
 release-tauri/latest.json                  updater manifest 产物
 ```
 
@@ -50,6 +53,7 @@ release-tauri/latest.json                  updater manifest 产物
 npm install
 npm run build
 npm run check:rust
+npm run tauri:verify-version
 ```
 
 2. 打包安装包和签名：
@@ -78,10 +82,32 @@ npm run tauri:release
 
 `latest.json` 中的下载地址必须能访问到同一个 release 下的安装包。
 
+## GitHub Actions 自动发布
+
+推荐用 tag 触发发布：
+
+```bash
+git tag v3.0.2
+git push origin v3.0.2
+```
+
+`.github/workflows/release.yml` 会执行：
+
+1. 校验 tag、`package.json` 和 `src-tauri/Cargo.toml` 版本一致。
+2. 安装 Node、Rust GNU toolchain 和 MinGW。
+3. 运行 `npm run check`。
+4. 运行 `npm run tauri:release` 生成 `.exe`、`.exe.sig` 和 `latest.json`。
+5. 上传产物到对应 GitHub Release，并标记为 latest。
+
+仓库 Actions secrets 必须配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（无密码私钥可设置为空字符串）
+
 ## 用户更新流程
 
 ```text
-应用启动或用户点击检查更新
+应用启动后自动检查（每日最多一次）或用户点击检查更新
     ↓
 读取 tauri.conf.json 中配置的 latest.json endpoint
     ↓
@@ -92,6 +118,8 @@ npm run tauri:release
 用户点击安装并重启
     ↓
 Tauri updater 安装新版本
+    ↓
+应用请求重启，新版本生效
 ```
 
 ## 开发和测试
@@ -115,6 +143,8 @@ npm run tauri:manifest
 - `src-tauri/tauri.conf.json` 的 updater endpoint 是否可访问。
 - `release-tauri/latest.json` 是否已上传到对应 release。
 - `latest.json` 里的安装包 URL 是否正确。
+- GitHub 最新 release 是否包含 `latest.json`，否则 `/releases/latest/download/latest.json` 会返回 404。
+- tag 是否等于 `v<package.json version>`，否则 workflow 会失败或客户端认为没有新版本。
 - 网络是否能访问 GitHub Releases。
 
 ### 签名校验失败
