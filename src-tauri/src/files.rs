@@ -1,11 +1,13 @@
+use crate::files_rules::*;
+pub use crate::files_rules::{
+    desktop_path, file_storage_root, next_available_path, resolve_drawer_path, safe_drawer_name,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tauri::AppHandle;
-use crate::files_rules::*;
-pub use crate::files_rules::{resolve_drawer_path, file_storage_root, desktop_path, safe_drawer_name, next_available_path};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +60,61 @@ pub struct RenameItemPayload {
 pub struct DeleteItemPayload {
     pub name: String,
     pub parent_folder: Option<String>,
+}
+
+fn managed_storage_target(
+    app: &AppHandle,
+    shortcut_path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    if shortcut_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| !value.eq_ignore_ascii_case("lnk"))
+        .unwrap_or(true)
+    {
+        return Ok(None);
+    }
+
+    let target_path = match crate::resolve_shortcut_target(&shortcut_path.display().to_string()) {
+        Ok(Some(target)) if !target.is_empty() => PathBuf::from(target),
+        Ok(_) | Err(_) => return Ok(None),
+    };
+    if !target_path.exists() {
+        return Ok(None);
+    }
+
+    let storage_root = file_storage_root(app)?;
+    if crate::is_path_inside(&target_path, &storage_root) {
+        Ok(Some(target_path))
+    } else {
+        Ok(None)
+    }
+}
+
+fn ensure_delete_does_not_orphan_managed_storage(
+    app: &AppHandle,
+    target_path: &Path,
+) -> Result<(), String> {
+    let metadata =
+        fs::metadata(target_path).map_err(|err| format!("failed to inspect item: {err}"))?;
+    if metadata.is_dir() {
+        for entry in
+            fs::read_dir(target_path).map_err(|err| format!("failed to read drawer: {err}"))?
+        {
+            let entry = entry.map_err(|err| format!("failed to read drawer entry: {err}"))?;
+            ensure_delete_does_not_orphan_managed_storage(app, &entry.path())?;
+        }
+        return Ok(());
+    }
+
+    if managed_storage_target(app, target_path)?.is_some() {
+        return Err(
+            "该快捷入口指向 TidyDesk storage 中的文件。请先还原到桌面，再删除快捷入口。"
+                .to_string(),
+        );
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,6 +379,7 @@ pub fn drawers_delete_item(
         if !target_path.exists() {
             return Err("Drawer entry does not exist".to_string());
         }
+        ensure_delete_does_not_orphan_managed_storage(&app, &target_path)?;
         let metadata =
             fs::metadata(&target_path).map_err(|err| format!("failed to inspect item: {err}"))?;
         if metadata.is_dir() {
@@ -339,6 +397,7 @@ pub fn drawers_delete_item(
         return Err("Unsafe delete path".to_string());
     }
     if drawer_path.exists() {
+        ensure_delete_does_not_orphan_managed_storage(&app, &drawer_path)?;
         fs::remove_dir_all(drawer_path).map_err(|err| format!("failed to delete drawer: {err}"))?;
     }
     Ok(json!({ "success": true }))
@@ -483,5 +542,3 @@ pub fn files_restore_to_desktop(
         restored_path: destination.display().to_string(),
     })
 }
-
-

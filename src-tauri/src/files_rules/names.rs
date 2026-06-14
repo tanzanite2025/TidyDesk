@@ -81,8 +81,7 @@ pub fn safe_drawer_name(name: &str) -> String {
     value
         .chars()
         .map(|ch| {
-            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
-                || ch.is_control()
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
             {
                 '_'
             } else {

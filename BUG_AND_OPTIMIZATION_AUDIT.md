@@ -1,6 +1,6 @@
 # TidyDesk 潜在 BUG 与优化方向排查
 
-> 状态：只读排查文档，尚未实施修复。
+> 状态：已开始按优先级修复；本文件继续保留后续优化跟踪。
 > 范围：当前 `main` 代码、README、`SECURITY_AND_STRUCTURE_AUDIT.md`、Tauri/Rust 主进程、React 前端、Go sidecar。
 > 说明：PR #4-#9 已处理的测试 IPC 暴露、updater override、App Picker PoC 命名、职责拆分和 README 过期内容，本次不重复列为待修复项。
 
@@ -13,6 +13,16 @@
 1. **先修数据安全类问题**：避免 JSON 损坏后被静默清空、避免直接 `fs::write` 导致半写入、明确“删除快捷入口”是否会处理 storage 原文件。
 2. **再修高频交互 BUG**：Todo 自动保存、快捷记录自动读取剪贴板、桌面文件导入提示与实际行为不一致。
 3. **最后做性能/维护性优化**：App Picker 缓存真正接入、快捷方式 watcher 从轮询改事件/节流、截图/base64 内存优化、分类规则去重。
+
+## 已处理
+
+- Todo / Quick Notes / Sticker state 写入改为同目录临时文件 + sync + rename 的原子写。
+- Todo / Quick Notes 解析到损坏 JSON 时先备份为 `.corrupt-<timestamp>.json`，再重建默认数据。
+- 桌面拖入文件后的提示文案已对齐真实行为：桌面普通文件会收纳到 storage，外部文件会复制后创建快捷入口。
+- 删除 drawer entry / drawer 前会阻止删除指向 TidyDesk storage 的有效快捷入口，避免产生隐藏 orphan 文件。
+- Quick Notes 不再在面板加载或新建时自动读取剪贴板；capture 事件不会覆盖已有草稿。
+- Todo 自动保存会等待 IPC 结果，快速切换/关闭详情前会 flush 当前草稿，失败时保留 dirty 状态。
+- 非 Windows fallback 文案已移除 “PoC” 表述。
 
 ## 严重级别定义
 

@@ -11,7 +11,7 @@ interface TodoContextType {
   cardsByColumn: Record<string, TodoCard[]>;
   refreshTodos: () => Promise<void>;
   createCard: (payload: CreateTodoCardInput) => Promise<TodoCard | null>;
-  updateCard: (payload: UpdateTodoCardInput) => Promise<void>;
+  updateCard: (payload: UpdateTodoCardInput) => Promise<boolean>;
   deleteCard: (cardId: string) => Promise<void>;
   moveCard: (payload: MoveTodoCardInput) => Promise<void>;
   clearError: () => void;
@@ -156,13 +156,15 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   };
 
   const updateCard = async (payload: UpdateTodoCardInput) => {
-    if (!client.isAvailable()) return;
+    if (!client.isAvailable()) return false;
 
     try {
       const state = await client.todos.updateCard(payload);
       applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
     } catch (err) {
       setError(`保存待办失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   };
 

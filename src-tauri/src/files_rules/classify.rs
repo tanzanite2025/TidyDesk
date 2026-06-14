@@ -25,13 +25,7 @@ pub fn path_identity(path: &Path, metadata: &fs::Metadata) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or("item")
         .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch
-            } else {
-                '-'
-            }
-        })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     format!("{}-{}-{file_name}", metadata.len(), modified_at(metadata))
 }

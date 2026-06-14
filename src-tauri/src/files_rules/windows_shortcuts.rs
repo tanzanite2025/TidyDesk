@@ -26,7 +26,7 @@ pub fn create_shortcut_link(shortcut_path: &Path, target_path: &Path) -> Result<
 
 #[cfg(not(windows))]
 pub fn create_shortcut_link(_shortcut_path: &Path, _target_path: &Path) -> Result<(), String> {
-    Err("Creating shortcuts is only implemented for Windows in this PoC".to_string())
+    Err("Creating shortcuts is only implemented on Windows".to_string())
 }
 
 #[cfg(windows)]
@@ -71,8 +71,10 @@ fn write_shortcut_link_with_com(
             .encode_utf16()
             .chain(Some(0))
             .collect();
-        let description_wide: Vec<u16> =
-            format!("{}", description).encode_utf16().chain(Some(0)).collect();
+        let description_wide: Vec<u16> = format!("{}", description)
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
 
         shell_link
             .SetPath(PCWSTR(target_wide.as_ptr()))
@@ -105,7 +107,7 @@ pub fn write_shortcut_link(
     _target_path: &Path,
     _description: &str,
 ) -> Result<(), String> {
-    Err("Creating shortcuts is only implemented for Windows in this PoC".to_string())
+    Err("Creating shortcuts is only implemented on Windows".to_string())
 }
 
 #[cfg(windows)]

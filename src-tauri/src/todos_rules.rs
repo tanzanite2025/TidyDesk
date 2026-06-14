@@ -97,9 +97,22 @@ pub fn create_default_todo_index() -> Value {
 pub fn read_todo_index_unlocked(app: &AppHandle) -> Result<Value, String> {
     ensure_todo_storage_unlocked(app)?;
     let index_path = todo_index_path(app)?;
-    let raw = fs::read_to_string(index_path).unwrap_or_default();
-    let parsed =
-        serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| create_default_todo_index());
+    let raw = match fs::read_to_string(&index_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let index = create_default_todo_index();
+            write_todo_index_unlocked(app, &index)?;
+            return Ok(index);
+        }
+        Err(err) => return Err(format!("failed to read todo index: {err}")),
+    };
+    let parsed = match serde_json::from_str::<Value>(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            crate::persistence::backup_corrupt_file(&index_path, "todo index")?;
+            create_default_todo_index()
+        }
+    };
     let normalized = normalize_todo_index(parsed);
     write_todo_index_unlocked(app, &normalized)?;
     Ok(normalized)
@@ -111,8 +124,7 @@ pub fn write_todo_index_unlocked(app: &AppHandle, index: &Value) -> Result<(), S
     let normalized = normalize_todo_index(index.clone());
     let content = serde_json::to_string_pretty(&normalized)
         .map_err(|err| format!("failed to serialize todo index: {err}"))?;
-    fs::write(todo_index_path(app)?, content)
-        .map_err(|err| format!("failed to write todo index: {err}"))
+    crate::persistence::atomic_write_text(&todo_index_path(app)?, &content, "todo index")
 }
 
 pub fn normalize_todo_index(index: Value) -> Value {
@@ -354,8 +366,11 @@ pub fn write_todo_card_content_unlocked(
 ) -> Result<(), String> {
     fs::create_dir_all(todo_cards_root(app)?)
         .map_err(|err| format!("failed to create todo cards root: {err}"))?;
-    fs::write(todo_card_path(app, card_id)?, content)
-        .map_err(|err| format!("failed to write todo card content: {err}"))
+    crate::persistence::atomic_write_text(
+        &todo_card_path(app, card_id)?,
+        content,
+        "todo card content",
+    )
 }
 
 pub fn safe_todo_title(title: &str, fallback: &str) -> String {

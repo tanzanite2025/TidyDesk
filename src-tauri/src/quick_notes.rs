@@ -161,13 +161,25 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
 
 fn read_quick_notes_unlocked(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
     ensure_quick_notes_storage_unlocked(app)?;
-    let raw = fs::read_to_string(quick_notes_path(app)?).unwrap_or_default();
-    let stored =
-        serde_json::from_str::<StoredQuickNotesFile>(&raw).unwrap_or(StoredQuickNotesFile {
-            _version: QUICK_NOTES_VERSION,
-            notes: Vec::new(),
-        });
-
+    let path = quick_notes_path(app)?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            write_quick_notes_unlocked(app, &[])?;
+            return Ok(Vec::new());
+        }
+        Err(err) => return Err(format!("failed to read quick notes: {err}")),
+    };
+    let stored = match serde_json::from_str::<StoredQuickNotesFile>(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            crate::persistence::backup_corrupt_file(&path, "quick notes")?;
+            StoredQuickNotesFile {
+                _version: QUICK_NOTES_VERSION,
+                notes: Vec::new(),
+            }
+        }
+    };
     let mut notes = stored
         .notes
         .into_iter()
@@ -184,10 +196,7 @@ fn write_quick_notes_unlocked(app: &AppHandle, notes: &[QuickNote]) -> Result<()
         version: QUICK_NOTES_VERSION,
         notes: notes.to_vec(),
     };
-    let content = serde_json::to_string_pretty(&payload)
-        .map_err(|err| format!("failed to serialize quick notes: {err}"))?;
-    fs::write(quick_notes_path(app)?, content)
-        .map_err(|err| format!("failed to write quick notes: {err}"))
+    crate::persistence::atomic_write_json(&quick_notes_path(app)?, &payload, "quick notes")
 }
 
 fn quick_notes_state(app: &AppHandle) -> Result<QuickNotesState, String> {

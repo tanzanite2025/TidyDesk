@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bold, Check, CheckSquare, Edit3, Eye, Heading1, Italic, Link, List, Loader2, Plus, RefreshCw, Table2, Trash2, X } from 'lucide-react';
 import { TodoProvider, useTodos } from '../../context/TodoContext';
 import { nativeClient } from '../../native/native-client';
@@ -84,6 +84,7 @@ const TodoPanelInner: React.FC = () => {
   const [isDirty, setIsDirty] = useState(false);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const draftRef = useRef({ cardId: null as string | null, title: '', content: '' });
 
   const selectedCard = useMemo(() => {
     if (!selectedCardId || !board) return null;
@@ -101,21 +102,42 @@ const TodoPanelInner: React.FC = () => {
   }, [selectedCard?.id]);
 
   useEffect(() => {
+    draftRef.current = { cardId: selectedCardId, title: draftTitle, content: draftContent };
+  }, [draftContent, draftTitle, selectedCardId]);
+
+  const saveDraftForCard = useCallback(async (cardId: string, title: string, content: string) => {
+    const saved = await updateCard({ id: cardId, title, content });
+    const latest = draftRef.current;
+    if (saved && latest.cardId === cardId && latest.title === title && latest.content === content) {
+      setIsDirty(false);
+    }
+    return saved;
+  }, [updateCard]);
+
+  const flushSelectedDraft = async () => {
+    if (!selectedCard || !isDirty) return true;
+    return saveDraftForCard(selectedCard.id, draftTitle, draftContent);
+  };
+
+  useEffect(() => {
     if (!selectedCard || !isDirty) return undefined;
 
+    const cardId = selectedCard.id;
+    const title = draftTitle;
+    const content = draftContent;
     const timer = window.setTimeout(() => {
-      updateCard({ id: selectedCard.id, title: draftTitle, content: draftContent });
-      setIsDirty(false);
+      void saveDraftForCard(cardId, title, content);
     }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [draftContent, draftTitle, isDirty, selectedCard, updateCard]);
+  }, [draftContent, draftTitle, isDirty, saveDraftForCard, selectedCard]);
 
   const submitNewCard = async (event: React.FormEvent) => {
     event.preventDefault();
     const title = newCardTitle.trim();
     if (!title) return;
 
+    await flushSelectedDraft();
     const card = await createCard({ title, content: `# ${title}\n\n- [ ] `, columnId: 'todo' });
     setNewCardTitle('');
     if (card) setSelectedCardId(card.id);
@@ -123,8 +145,7 @@ const TodoPanelInner: React.FC = () => {
 
   const saveNow = async () => {
     if (!selectedCard) return;
-    await updateCard({ id: selectedCard.id, title: draftTitle, content: draftContent });
-    setIsDirty(false);
+    await saveDraftForCard(selectedCard.id, draftTitle, draftContent);
   };
 
   const insertMarkdown = (before: string, after = '', placeholder = '文本') => {
@@ -161,6 +182,12 @@ const TodoPanelInner: React.FC = () => {
 
     await deleteCard(selectedCard.id);
     setSelectedCardId(null);
+  };
+
+  const selectCard = async (cardId: string | null) => {
+    if (cardId === selectedCardId) return;
+    await flushSelectedDraft();
+    setSelectedCardId(cardId);
   };
 
   return (
@@ -225,7 +252,7 @@ const TodoPanelInner: React.FC = () => {
                         key={card.id}
                         card={card}
                         isSelected={card.id === selectedCardId}
-                        onSelect={() => setSelectedCardId(card.id)}
+                        onSelect={() => void selectCard(card.id)}
                         onDragStart={event => {
                           event.dataTransfer.setData('text/plain', card.id);
                           event.dataTransfer.effectAllowed = 'move';
@@ -259,7 +286,7 @@ const TodoPanelInner: React.FC = () => {
               <button type="button" title="删除" onClick={handleDeleteSelected} className="rounded-md p-2 text-slate-500 hover:bg-rose-500/15 hover:text-rose-200">
                 <Trash2 size={14} />
               </button>
-              <button type="button" title="关闭详情" onClick={() => setSelectedCardId(null)} className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100">
+              <button type="button" title="关闭详情" onClick={() => void selectCard(null)} className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100">
                 <X size={14} />
               </button>
             </div>
