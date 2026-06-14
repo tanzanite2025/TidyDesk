@@ -57,7 +57,10 @@ use resident::{
     resident_update_settings,
 };
 use shell::{apply_window_bounds, ensure_handle_window, handle_window_bounds, ShellState};
-use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
+use shortcuts::{
+    shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services,
+    ShortcutWatcherState,
+};
 use stickers::{
     restore_stickers, snip_cancel, snip_complete_selection, snip_get_background_image,
     sticker_close, sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin,
@@ -205,6 +208,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
         .manage(TrustedShortcutState::default())
+        .manage(ShortcutWatcherState::default())
         .manage(ShellState::default())
         .manage(UserInteractionState::default())
         .manage(StickerStoreState::default())
@@ -251,6 +255,10 @@ fn main() {
                 .build(app)?;
             let handle = app.handle().clone();
             let resident_settings = resident::read_resident_settings(&handle);
+            shortcuts::set_shortcut_background_monitoring(
+                &handle,
+                resident_settings.background_monitor_enabled,
+            );
             let _ = ensure_handle_window(&handle);
             if let Ok(bounds) = handle_window_bounds(&handle, false) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);

@@ -134,11 +134,13 @@ export interface CacheInfoResult {
 export interface ResidentSettings {
   autostartEnabled: boolean;
   launchMinimized: boolean;
+  backgroundMonitorEnabled: boolean;
 }
 
 export interface ResidentSettingsUpdate {
   autostartEnabled?: boolean;
   launchMinimized?: boolean;
+  backgroundMonitorEnabled?: boolean;
 }
 
 export interface AppPickerTargetResult {

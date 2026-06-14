@@ -3,15 +3,55 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Condvar, Mutex,
+};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const TARGET_FILE_DELETED_EVENT: &str = "target-file-deleted";
 const TARGET_FILE_RESTORED_EVENT: &str = "target-file-restored";
 const SHORTCUTS_VALIDATED_EVENT: &str = "shortcuts-validated";
 const SHORTCUT_WATCH_MIN_INTERVAL: Duration = Duration::from_secs(10);
 const SHORTCUT_WATCH_MAX_INTERVAL: Duration = Duration::from_secs(60);
+const SHORTCUT_WATCH_EMPTY_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const SHORTCUT_WATCH_PAUSED_INTERVAL: Duration = Duration::from_secs(60);
 const SHORTCUT_VALIDATION_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Debug)]
+pub struct ShortcutWatcherState {
+    enabled: AtomicBool,
+    wake_mutex: Mutex<()>,
+    wake_signal: Condvar,
+}
+
+impl Default for ShortcutWatcherState {
+    fn default() -> Self {
+        Self {
+            enabled: AtomicBool::new(true),
+            wake_mutex: Mutex::new(()),
+            wake_signal: Condvar::new(),
+        }
+    }
+}
+
+impl ShortcutWatcherState {
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Relaxed);
+        self.wake_signal.notify_all();
+    }
+}
+
+#[derive(Debug)]
+struct ShortcutWatchSync {
+    changed: bool,
+    watched_target_count: usize,
+}
 
 #[derive(Debug)]
 struct ShortcutValidationResult {
@@ -332,9 +372,10 @@ fn collect_shortcut_watch_entries(
 fn sync_shortcut_watch_events(
     app: &AppHandle,
     previous: &mut HashMap<String, ShortcutWatchEntry>,
-) -> Result<bool, String> {
+) -> Result<ShortcutWatchSync, String> {
     let current = collect_shortcut_watch_entries(app)?;
     let changed = *previous != current;
+    let watched_target_count = current.len();
 
     for (target_path, snapshot) in &current {
         if let Some(prev) = previous.get(target_path) {
@@ -361,11 +402,41 @@ fn sync_shortcut_watch_events(
     }
 
     *previous = current;
-    Ok(changed)
+    Ok(ShortcutWatchSync {
+        changed,
+        watched_target_count,
+    })
+}
+
+pub fn set_shortcut_background_monitoring(app: &AppHandle, enabled: bool) {
+    app.state::<ShortcutWatcherState>().set_enabled(enabled);
+}
+
+fn next_shortcut_watch_interval(
+    current: Duration,
+    changed: bool,
+    watched_target_count: usize,
+) -> Duration {
+    if watched_target_count == 0 {
+        SHORTCUT_WATCH_EMPTY_INTERVAL
+    } else if changed {
+        SHORTCUT_WATCH_MIN_INTERVAL
+    } else {
+        (current * 2).min(SHORTCUT_WATCH_MAX_INTERVAL)
+    }
+}
+
+fn wait_for_next_cycle(watcher_state: &ShortcutWatcherState, duration: Duration) {
+    let Ok(guard) = watcher_state.wake_mutex.lock() else {
+        std::thread::sleep(duration);
+        return;
+    };
+    let _ = watcher_state.wake_signal.wait_timeout(guard, duration);
 }
 
 pub fn start_shortcut_background_services(app: AppHandle) {
     std::thread::spawn(move || {
+        let watcher_state = app.state::<ShortcutWatcherState>();
         let mut previous = match collect_shortcut_watch_entries(&app) {
             Ok(entries) => entries,
             Err(err) => {
@@ -375,14 +446,56 @@ pub fn start_shortcut_background_services(app: AppHandle) {
         };
         let mut last_validation = Instant::now();
         let mut watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
+        let mut was_enabled = watcher_state.is_enabled();
 
         loop {
+            if !watcher_state.is_enabled() {
+                previous.clear();
+                was_enabled = false;
+                wait_for_next_cycle(&watcher_state, SHORTCUT_WATCH_PAUSED_INTERVAL);
+                continue;
+            }
+
+            if !was_enabled {
+                previous = match collect_shortcut_watch_entries(&app) {
+                    Ok(entries) => entries,
+                    Err(err) => {
+                        eprintln!("[TIDYDESK] Failed to resume shortcut watcher state: {err}");
+                        HashMap::new()
+                    }
+                };
+                last_validation = Instant::now();
+                watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
+                was_enabled = true;
+            }
+
             match sync_shortcut_watch_events(&app, &mut previous) {
-                Ok(true) => {
-                    watch_interval = SHORTCUT_WATCH_MIN_INTERVAL;
-                }
-                Ok(false) => {
-                    watch_interval = (watch_interval * 2).min(SHORTCUT_WATCH_MAX_INTERVAL);
+                Ok(sync) => {
+                    watch_interval = next_shortcut_watch_interval(
+                        watch_interval,
+                        sync.changed,
+                        sync.watched_target_count,
+                    );
+
+                    if sync.watched_target_count > 0
+                        && last_validation.elapsed() >= SHORTCUT_VALIDATION_INTERVAL
+                    {
+                        match shortcuts_validate_all_internal(&app) {
+                            Ok(stats) => {
+                                if stats.repaired > 0 || stats.invalid > 0 {
+                                    if let Err(err) = app.emit(SHORTCUTS_VALIDATED_EVENT, stats) {
+                                        eprintln!(
+                                            "[TIDYDESK] Failed to emit shortcut validation stats: {err}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("[TIDYDESK] Periodic shortcut validation failed: {err}");
+                            }
+                        }
+                        last_validation = Instant::now();
+                    }
                 }
                 Err(err) => {
                     eprintln!("[TIDYDESK] Shortcut watcher sync failed: {err}");
@@ -390,25 +503,40 @@ pub fn start_shortcut_background_services(app: AppHandle) {
                 }
             }
 
-            if last_validation.elapsed() >= SHORTCUT_VALIDATION_INTERVAL {
-                match shortcuts_validate_all_internal(&app) {
-                    Ok(stats) => {
-                        if stats.repaired > 0 || stats.invalid > 0 {
-                            if let Err(err) = app.emit(SHORTCUTS_VALIDATED_EVENT, stats) {
-                                eprintln!(
-                                    "[TIDYDESK] Failed to emit shortcut validation stats: {err}"
-                                );
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        eprintln!("[TIDYDESK] Periodic shortcut validation failed: {err}");
-                    }
-                }
-                last_validation = Instant::now();
-            }
-
-            std::thread::sleep(watch_interval);
+            wait_for_next_cycle(&watcher_state, watch_interval);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_shortcut_watch_uses_idle_interval() {
+        assert_eq!(
+            next_shortcut_watch_interval(SHORTCUT_WATCH_MIN_INTERVAL, false, 0),
+            SHORTCUT_WATCH_EMPTY_INTERVAL
+        );
+    }
+
+    #[test]
+    fn active_shortcut_watch_backs_off_until_max_interval() {
+        assert_eq!(
+            next_shortcut_watch_interval(SHORTCUT_WATCH_MIN_INTERVAL, false, 1),
+            Duration::from_secs(20)
+        );
+        assert_eq!(
+            next_shortcut_watch_interval(SHORTCUT_WATCH_MAX_INTERVAL, false, 1),
+            SHORTCUT_WATCH_MAX_INTERVAL
+        );
+    }
+
+    #[test]
+    fn changed_shortcut_watch_resets_to_min_interval() {
+        assert_eq!(
+            next_shortcut_watch_interval(SHORTCUT_WATCH_MAX_INTERVAL, true, 1),
+            SHORTCUT_WATCH_MIN_INTERVAL
+        );
+    }
 }
