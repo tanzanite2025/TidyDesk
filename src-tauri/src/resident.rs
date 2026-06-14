@@ -12,7 +12,10 @@ const OPEN_SETTINGS_EVENT: &str = "open-settings-panel";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResidentSettings {
+    #[serde(default)]
     pub launch_minimized: bool,
+    #[serde(default = "default_background_monitor_enabled")]
+    pub background_monitor_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -20,6 +23,7 @@ pub struct ResidentSettings {
 pub struct ResidentSettingsSnapshot {
     pub autostart_enabled: bool,
     pub launch_minimized: bool,
+    pub background_monitor_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -29,14 +33,21 @@ pub struct ResidentSettingsUpdate {
     pub autostart_enabled: Option<bool>,
     #[serde(default)]
     pub launch_minimized: Option<bool>,
+    #[serde(default)]
+    pub background_monitor_enabled: Option<bool>,
 }
 
 impl Default for ResidentSettings {
     fn default() -> Self {
         Self {
             launch_minimized: false,
+            background_monitor_enabled: true,
         }
     }
+}
+
+fn default_background_monitor_enabled() -> bool {
+    true
 }
 
 pub fn read_resident_settings(app: &AppHandle) -> ResidentSettings {
@@ -69,6 +80,12 @@ pub fn resident_update_settings(
     let mut settings = read_resident_settings(&app);
     if let Some(launch_minimized) = payload.launch_minimized {
         settings.launch_minimized = launch_minimized;
+    }
+    if let Some(background_monitor_enabled) = payload.background_monitor_enabled {
+        settings.background_monitor_enabled = background_monitor_enabled;
+        crate::shortcuts::set_shortcut_background_monitoring(&app, background_monitor_enabled);
+    }
+    if payload.launch_minimized.is_some() || payload.background_monitor_enabled.is_some() {
         write_resident_settings(&app, &settings)?;
     }
 
@@ -160,6 +177,7 @@ fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapsho
     Ok(ResidentSettingsSnapshot {
         autostart_enabled,
         launch_minimized: settings.launch_minimized,
+        background_monitor_enabled: settings.background_monitor_enabled,
     })
 }
 

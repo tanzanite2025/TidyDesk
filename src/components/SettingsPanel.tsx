@@ -80,7 +80,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-[480px] rounded-xl border border-white/[0.12] bg-[#11131c]/95 shadow-2xl">
+      <div className="max-h-[90vh] w-[480px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#11131c]/95 shadow-2xl">
         {/* 头部 */}
         <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
           <div>
@@ -160,6 +160,25 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                   }`}
                 >
                   {residentSettings?.launchMinimized ? '已开启' : '已关闭'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-[12px] font-semibold text-slate-100">后台快捷方式监控</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">监控抽屉快捷方式目标是否被删除或恢复</div>
+                </div>
+                <button
+                  type="button"
+                  disabled={!residentSettings || isSavingResident}
+                  onClick={() => updateResidentSettings({ backgroundMonitorEnabled: !residentSettings?.backgroundMonitorEnabled })}
+                  className={`min-w-16 rounded-full px-3 py-1.5 text-[11px] font-semibold transition-all disabled:opacity-50 ${
+                    residentSettings?.backgroundMonitorEnabled
+                      ? 'bg-emerald-500/20 text-emerald-100'
+                      : 'bg-white/[0.08] text-slate-400'
+                  }`}
+                >
+                  {residentSettings?.backgroundMonitorEnabled ? '已开启' : '已暂停'}
                 </button>
               </div>
 
