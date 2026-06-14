@@ -64,7 +64,7 @@ npm run tauri:poc:build
 Tauri PoC 需要本机具备：
 
 - Rust toolchain
-- Tauri v2 CLI 可通过 `npx @tauri-apps/cli@2` 获取
+- Tauri v2 CLI 使用根项目 `devDependencies` 中锁定的 `@tauri-apps/cli`
 - Windows WebView2 runtime
 - Go sidecar 可构建
 

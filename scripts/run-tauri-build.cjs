@@ -84,11 +84,21 @@ function applyReleaseBuildStabilityDefaults() {
   }
 }
 
+function localTauriCliPath() {
+  const executableName = process.platform === 'win32' ? 'tauri.cmd' : 'tauri';
+  const executablePath = path.join(__dirname, '..', 'node_modules', '.bin', executableName);
+  if (!fs.existsSync(executablePath)) {
+    throw new Error(`Local Tauri CLI was not found. Run npm install first: ${executablePath}`);
+  }
+  return executablePath;
+}
+
 function main() {
   ensureSigningKeyEnv();
   applyReleaseBuildStabilityDefaults();
 
-  const tauriArgs = ['--yes', '@tauri-apps/cli@2', 'build', ...process.argv.slice(2)];
+  const tauriCommand = localTauriCliPath();
+  const tauriArgs = ['build', ...process.argv.slice(2)];
   const spawnOptions = {
     encoding: 'utf8',
     env: process.env,
@@ -97,10 +107,10 @@ function main() {
   const result = process.platform === 'win32'
     ? spawnSync(
         process.env.ComSpec || 'cmd.exe',
-        ['/d', '/s', '/c', `npx ${tauriArgs.map(quoteForCmd).join(' ')}`],
+        ['/d', '/s', '/c', `${quoteForCmd(tauriCommand)} ${tauriArgs.map(quoteForCmd).join(' ')}`],
         spawnOptions
       )
-    : spawnSync('npx', tauriArgs, spawnOptions);
+    : spawnSync(tauriCommand, tauriArgs, spawnOptions);
 
   if (result.error) {
     throw result.error;
