@@ -168,6 +168,14 @@ npm run tauri:release
 
 当前 `npm run tauri:release` 等价于 `npm run tauri:build`，方便本地和 CI 共用同一条命令。
 
+### 版本一致性检查
+
+```bash
+npm run tauri:verify-version
+```
+
+发布前会校验 `package.json` 和 `src-tauri/Cargo.toml` 版本一致；在 GitHub Actions 发布时还会校验 tag 必须等于 `v<package.json version>`。
+
 ### 打包前必需环境变量
 
 至少需要以下变量之一：
@@ -221,6 +229,12 @@ npm run tauri:release
 - `bundle.createUpdaterArtifacts` 已开启。
 - `npm run tauri:bundle` 会生成安装包和对应 `.sig` 文件。
 - `npm run tauri:build` 会额外生成 `release-tauri/latest.json`。
+- 推送 `v*` tag 会触发 `.github/workflows/release.yml`，自动构建并上传 `.exe`、`.exe.sig` 和 `latest.json` 到 GitHub Release。
+
+GitHub Release workflow 需要在仓库 Settings → Secrets and variables → Actions 中配置：
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`（无密码私钥可设置为空字符串）
 
 ### 主要产物路径
 

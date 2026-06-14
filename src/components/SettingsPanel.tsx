@@ -210,6 +210,25 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
           {/* 更新检查 */}
           <div>
             <h3 className="mb-3 text-[13px] font-semibold text-slate-200">软件更新</h3>
+
+            <div className="mb-3 flex items-center justify-between gap-4 rounded-lg border border-white/[0.08] bg-white/[0.04] p-4">
+              <div>
+                <div className="text-[12px] font-semibold text-slate-100">自动检查更新</div>
+                <div className="mt-0.5 text-[11px] text-slate-500">启动后后台检查；同一天最多自动检查一次</div>
+              </div>
+              <button
+                type="button"
+                disabled={!residentSettings || isSavingResident}
+                onClick={() => updateResidentSettings({ autoUpdateCheckEnabled: !residentSettings?.autoUpdateCheckEnabled })}
+                className={`min-w-16 rounded-full px-3 py-1.5 text-[11px] font-semibold transition-all disabled:opacity-50 ${
+                  residentSettings?.autoUpdateCheckEnabled
+                    ? 'bg-emerald-500/20 text-emerald-100'
+                    : 'bg-white/[0.08] text-slate-400'
+                }`}
+              >
+                {residentSettings?.autoUpdateCheckEnabled ? '已开启' : '已关闭'}
+              </button>
+            </div>
             
             {/* 更新状态显示 */}
             {(snapshot || !isReady) && (

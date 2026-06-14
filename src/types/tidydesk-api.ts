@@ -135,12 +135,14 @@ export interface ResidentSettings {
   autostartEnabled: boolean;
   launchMinimized: boolean;
   backgroundMonitorEnabled: boolean;
+  autoUpdateCheckEnabled: boolean;
 }
 
 export interface ResidentSettingsUpdate {
   autostartEnabled?: boolean;
   launchMinimized?: boolean;
   backgroundMonitorEnabled?: boolean;
+  autoUpdateCheckEnabled?: boolean;
 }
 
 export interface AppPickerTargetResult {

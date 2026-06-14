@@ -21,6 +21,7 @@
     "check:rust": "set \"CARGO_BUILD_TARGET=x86_64-pc-windows-gnu\" && set \"PATH=%USERPROFILE%\\bin;%PATH%\" && cargo +stable-x86_64-pc-windows-gnu check --manifest-path src-tauri/Cargo.toml",
     "check": "npm run build && npm run check:rust",
     "tauri:preflight": "node scripts/check-tauri-release-env.cjs",
+    "tauri:verify-version": "node scripts/check-release-version.cjs",
     "tauri:dev": "set \"RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu\" && set \"CARGO_BUILD_TARGET=x86_64-pc-windows-gnu\" && set \"PATH=%USERPROFILE%\\bin;%PATH%\" && tauri dev",
     "tauri:bundle": "npm run tauri:preflight && node scripts/run-tauri-build.cjs",
     "tauri:manifest": "node scripts/generate-tauri-latest-json.cjs",
