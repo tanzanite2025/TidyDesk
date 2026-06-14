@@ -11,6 +11,7 @@ export const AppPickerApp: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingIcons, setIsLoadingIcons] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [targetFolder, setTargetFolder] = useState<string>('');
   const [error, setError] = useState<string>('');
@@ -61,6 +62,26 @@ export const AppPickerApp: React.FC = () => {
     return undefined;
   }, []);
 
+  useEffect(() => {
+    if (!nativeClient.isAvailable()) return undefined;
+    return nativeClient.apps.onIconsUpdated(payload => {
+      if (payload.icons.length > 0) {
+        const iconByShortcut = new Map(
+          payload.icons.map(update => [update.shortcutPath, update.icon])
+        );
+        setApps(current =>
+          current.map(app => {
+            const icon = iconByShortcut.get(app.shortcutPath);
+            return icon ? { ...app, icon } : app;
+          })
+        );
+      }
+      if (payload.complete) {
+        setIsLoadingIcons(false);
+      }
+    });
+  }, []);
+
   const loadTargetFolder = async () => {
     try {
       if (!nativeClient.isAvailable()) return;
@@ -87,13 +108,18 @@ export const AppPickerApp: React.FC = () => {
 
   const loadApps = async () => {
     setIsLoading(true);
+    setIsLoadingIcons(false);
     try {
       if (!nativeClient.isAvailable()) return;
       const result = await nativeClient.apps.scanInstalled();
       if (result.success) {
         setApps(result.apps);
+        setIsLoadingIcons(result.apps.length > 0);
+      } else {
+        setIsLoadingIcons(false);
       }
     } catch {
+      setIsLoadingIcons(false);
       setError('加载应用列表失败');
     } finally {
       setIsLoading(false);
@@ -102,6 +128,7 @@ export const AppPickerApp: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
+    setIsLoadingIcons(false);
     setError('');
     try {
       if (!nativeClient.isAvailable()) {
@@ -112,15 +139,18 @@ export const AppPickerApp: React.FC = () => {
       const result = await nativeClient.apps.refresh();
       if (result.success) {
         setApps(result.apps);
+        setIsLoadingIcons(result.apps.length > 0);
         setNotice('应用列表已刷新');
         await loadCacheInfo();
         
         // 清除成功提示
         noticeTimerRef.current = setTimeout(() => setNotice(''), 3000);
       } else {
+        setIsLoadingIcons(false);
         setError('刷新失败');
       }
     } catch (err) {
+      setIsLoadingIcons(false);
       setError(`刷新失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsRefreshing(false);
@@ -337,6 +367,7 @@ export const AppPickerApp: React.FC = () => {
         <p className="text-xs text-slate-500">
           找到 {filteredApps.length} 个应用
           {searchQuery && ` (共 ${apps.length} 个)`}
+          {isLoadingIcons && '，图标后台加载中...'}
         </p>
         
         {cacheInfo?.exists && (

@@ -215,7 +215,7 @@ Todo 编辑器使用 700ms debounce 自动保存。用户输入后如果很快�
 
 ### 建议
 
-- Rust 增加 `apps_cache_info` / `apps_read_cache` 命令，直接读取 Rust app cache。
+- Rust 增加 `apps_cache_info`，扫描入口内部直接读取 valid cache，不额外暴露 read-cache IPC。
 - `scanInstalled` 优先读 valid cache；用户点击刷新时才强制 scan。
 - 扫描完成后写入 cache，避免 cache API 和实际扫描链路脱节。
 - App Picker UI 区分“缓存读取”和“正在扫描”。
@@ -457,12 +457,13 @@ Todo 编辑器使用 700ms debounce 自动保存。用户输入后如果很快�
 - cache timestamp 没有防未来时间保护；系统时钟异常可能让 cache 长时间有效。已增加未来时间容忍阈值。
 - app cache JSON 损坏时只返回解析错误，没有备份恢复闭环。已改为备份 `.corrupt-<timestamp>.json` 后回退到重新扫描。
 - Tauri bundle 配置中残留空 `externalBin: []`，已移除。
+- `apps_classifier` 已按 scan/cache/classify/import 拆分，命令层只负责 IPC 编排和 trusted shortcut 状态。
+- 确认前端无 `apps_scan_metadata` / `apps_read_cache` 调用后，已移除这两个 Tauri command 暴露，保留内部 cache helper。
+- App Picker 现在先返回无 icon 的应用列表，后台批量提取 icon 并通过 `apps-icons-updated` 渐进更新。
 
 ### 后续可优化但不阻塞当前稳定性
 
-- `src-tauri/src/apps_classifier.rs` 同时承担扫描、分类、完成 target/icon、导入复制和测试，后续可拆成 `apps_scan` / `apps_cache` / `apps_classify` / `apps_import`。
-- `apps_scan_metadata` / `apps_read_cache` 当前主要保留兼容和调试价值，前端主链路不直接使用；如果确认没有外部调用，可进一步收窄 IPC 面。
-- 应用扫描和 icon 提取仍是同步命令链路；应用数量很大时可改为后台任务 + 先返回 metadata、再渐进补 icon。
+- 如果后续应用数量非常大，可以进一步把 target 解析也改为分页/流式事件；当前已先解决 icon 大对象阻塞首屏的问题。
 
 ## 建议新增测试
 

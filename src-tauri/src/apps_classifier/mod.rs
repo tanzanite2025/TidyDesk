@@ -1,8 +1,15 @@
+mod cache;
+mod classify;
+mod import;
+mod scan;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::path::Path;
+
+pub use cache::{app_cache_info, read_valid_cached_metadata, write_app_cache, AppCacheInfo};
+pub use import::copy_shortcut_to_drawer;
+pub use scan::scan_shortcut_metadata;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +35,7 @@ pub struct ScanMetadataResult {
     pub duration_ms: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledApp {
     pub name: String,
@@ -38,7 +45,7 @@ pub struct InstalledApp {
     pub category: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanInstalledResult {
     pub apps: Vec<InstalledApp>,
@@ -46,62 +53,11 @@ pub struct ScanInstalledResult {
     pub skipped_count: usize,
 }
 
-fn is_lnk_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("lnk"))
-        == Some(true)
-}
-
-pub fn validate_importable_shortcut(shortcut_path: &Path) -> Result<(), String> {
-    if shortcut_path.as_os_str().is_empty() {
-        return Err("Missing shortcut path".to_string());
-    }
-    if !shortcut_path.exists() {
-        return Err("Shortcut does not exist".to_string());
-    }
-    if !is_lnk_path(shortcut_path) {
-        return Err("Only .lnk shortcuts can be added to a drawer".to_string());
-    }
-
-    let display_name = shortcut_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if should_skip_shortcut_name(display_name) {
-        return Err("Installer and uninstaller shortcuts cannot be added to a drawer".to_string());
-    }
-
-    let shortcut_path_string = shortcut_path.to_string_lossy();
-    let target_path = crate::resolve_shortcut_target(shortcut_path_string.as_ref())
-        .map_err(|err| format!("failed to resolve shortcut target: {err}"))?
-        .ok_or_else(|| "Shortcut target could not be resolved".to_string())?;
-    let target = Path::new(&target_path);
-    if !target.exists() {
-        return Err("Shortcut target does not exist".to_string());
-    }
-    if target
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("exe"))
-        != Some(true)
-    {
-        return Err("Only shortcuts targeting .exe files can be added to a drawer".to_string());
-    }
-
-    Ok(())
-}
-
-pub fn copy_shortcut_to_drawer(shortcut_path: &Path, target_dir: &Path) -> Result<PathBuf, String> {
-    validate_importable_shortcut(shortcut_path)?;
-
-    let file_name = shortcut_path
-        .file_name()
-        .ok_or_else(|| "Invalid shortcut path".to_string())?;
-    let destination = crate::files::next_available_path(target_dir, file_name);
-    fs::copy(shortcut_path, &destination)
-        .map_err(|err| format!("failed to copy shortcut to drawer: {err}"))?;
-    Ok(destination)
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIconUpdate {
+    pub shortcut_path: String,
+    pub icon: Option<String>,
 }
 
 pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledResult {
@@ -118,12 +74,7 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
             }
         };
 
-        if Path::new(shortcut_path)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("lnk"))
-            != Some(true)
-        {
+        if !is_lnk_path(Path::new(shortcut_path)) {
             skipped_count += 1;
             continue;
         }
@@ -141,7 +92,7 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
             })
             .unwrap_or_else(|| "Unknown App".to_string());
 
-        if should_skip_shortcut_name(&display_name) {
+        if classify::should_skip_shortcut_name(&display_name) {
             skipped_count += 1;
             continue;
         }
@@ -159,7 +110,6 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
             skipped_count += 1;
             continue;
         }
-
         if target
             .extension()
             .and_then(|ext| ext.to_str())
@@ -181,7 +131,7 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
             name: display_name.clone(),
             shortcut_path: shortcut_path.to_string(),
             target_path: target_path.clone(),
-            icon: crate::icons::extract_icon_data_url(target),
+            icon: None,
             category: shortcut
                 .category
                 .as_deref()
@@ -200,238 +150,26 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
     }
 }
 
-pub fn should_skip_shortcut_name(name: &str) -> bool {
-    let name_lower = name.to_lowercase();
-    name_lower.contains("uninstall")
-        || name_lower.contains("unins")
-        || name_lower.contains("setup")
-        || name_lower.contains("installer")
-}
-
-pub fn scan_shortcut_metadata() -> ScanMetadataResult {
-    let started = Instant::now();
-    let max_depth = 3;
-    let skip_directories = [
-        "Accessories",
-        "Administrative Tools",
-        "Maintenance",
-        "System Tools",
-        "Startup",
-    ]
-    .into_iter()
-    .map(|name| name.to_lowercase())
-    .collect::<HashSet<_>>();
-    let mut shortcuts = Vec::new();
-    let mut scanned_paths = Vec::new();
-    let mut seen_shortcuts = HashSet::new();
-
-    for start_menu_path in start_menu_paths() {
-        let path = PathBuf::from(&start_menu_path);
-        if !path.exists() {
-            continue;
-        }
-        scanned_paths.push(start_menu_path);
-        scan_shortcut_directory(
-            &path,
-            "startMenu",
-            true,
-            0,
-            max_depth,
-            &skip_directories,
-            &mut seen_shortcuts,
-            &mut shortcuts,
-        );
-    }
-
-    let desktop_path = crate::files::desktop_path();
-    if !desktop_path.is_empty() {
-        let path = PathBuf::from(&desktop_path);
-        if path.exists() {
-            scanned_paths.push(desktop_path);
-            scan_shortcut_directory(
-                &path,
-                "desktop",
-                false,
-                0,
-                max_depth,
-                &skip_directories,
-                &mut seen_shortcuts,
-                &mut shortcuts,
-            );
-        }
-    }
-
-    shortcuts.sort_by(|a, b| {
-        a.name
-            .as_deref()
-            .unwrap_or_default()
-            .to_lowercase()
-            .cmp(&b.name.as_deref().unwrap_or_default().to_lowercase())
-    });
-
-    ScanMetadataResult {
-        shortcuts,
-        scanned_paths,
-        duration_ms: started.elapsed().as_millis() as i64,
+pub fn app_icon_update(app: &InstalledApp) -> AppIconUpdate {
+    AppIconUpdate {
+        shortcut_path: app.shortcut_path.clone(),
+        icon: crate::icons::extract_icon_data_url(Path::new(&app.target_path)),
     }
 }
 
-fn scan_shortcut_directory(
-    dir_path: &Path,
-    source: &str,
-    recursive: bool,
-    depth: usize,
-    max_depth: usize,
-    skip_directories: &HashSet<String>,
-    seen_shortcuts: &mut HashSet<String>,
-    shortcuts: &mut Vec<ShortcutMetadata>,
-) {
-    if depth > max_depth {
-        return;
-    }
-
-    let Ok(entries) = fs::read_dir(dir_path) else {
-        return;
-    };
-
-    for entry in entries {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let full_path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-
-        if file_type.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if recursive && !skip_directories.contains(&name.to_lowercase()) {
-                scan_shortcut_directory(
-                    &full_path,
-                    source,
-                    recursive,
-                    depth + 1,
-                    max_depth,
-                    skip_directories,
-                    seen_shortcuts,
-                    shortcuts,
-                );
-            }
-            continue;
-        }
-
-        if !file_type.is_file() || !is_lnk_path(&full_path) {
-            continue;
-        }
-
-        let name = full_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        if name.is_empty() || should_skip_shortcut_name(&name) {
-            continue;
-        }
-
-        let normalized_path = full_path.to_string_lossy().to_lowercase();
-        if !seen_shortcuts.insert(normalized_path) {
-            continue;
-        }
-
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-
-        shortcuts.push(ShortcutMetadata {
-            name: Some(name.clone()),
-            shortcut_path: Some(full_path.display().to_string()),
-            source: Some(source.to_string()),
-            category: Some(categorize_shortcut(&name, &full_path)),
-            size: Some(metadata.len()),
-            modified_at: metadata.modified().ok().and_then(system_time_millis),
-            depth: Some(depth),
-        });
-    }
-}
-
-fn system_time_millis(value: SystemTime) -> Option<i64> {
-    value
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_millis() as i64)
-}
-
-fn categorize_shortcut(name: &str, shortcut_path: &Path) -> String {
-    let name_lower = name.to_lowercase();
-    let path_lower = shortcut_path.to_string_lossy().to_lowercase();
-
-    if name_lower.contains("chrome")
-        || name_lower.contains("firefox")
-        || name_lower.contains("edge")
-        || name_lower.contains("browser")
-    {
-        return "browser".to_string();
-    }
-
-    if name_lower.contains("visual studio")
-        || name_lower.contains("vscode")
-        || name_lower.contains("code")
-        || name_lower.contains("git")
-        || path_lower.contains("\\microsoft vs code\\")
-    {
-        return "development".to_string();
-    }
-
-    if name_lower.contains("word")
-        || name_lower.contains("excel")
-        || name_lower.contains("powerpoint")
-        || name_lower.contains("office")
-        || name_lower.contains("wps")
-    {
-        return "office".to_string();
-    }
-
-    if name_lower.contains("wechat")
-        || name_lower.contains("qq")
-        || name_lower.contains("dingtalk")
-        || name_lower.contains("teams")
-        || name_lower.contains("微信")
-        || name_lower.contains("钉钉")
-    {
-        return "communication".to_string();
-    }
-
-    if name_lower.contains("player")
-        || name_lower.contains("music")
-        || name_lower.contains("video")
-        || name_lower.contains("photoshop")
-    {
-        return "media".to_string();
-    }
-
-    "other".to_string()
-}
-
-pub fn start_menu_paths() -> Vec<String> {
-    let mut paths = Vec::new();
-    if let Ok(program_data) = std::env::var("PROGRAMDATA") {
-        paths.push(format!(
-            "{program_data}\\Microsoft\\Windows\\Start Menu\\Programs"
-        ));
-    }
-    if let Ok(app_data) = std::env::var("APPDATA") {
-        paths.push(format!(
-            "{app_data}\\Microsoft\\Windows\\Start Menu\\Programs"
-        ));
-    }
-    paths
+pub(crate) fn is_lnk_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("lnk"))
+        == Some(true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_test_dir(name: &str) -> PathBuf {

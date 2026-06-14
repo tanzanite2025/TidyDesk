@@ -1,20 +1,17 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, State};
+use std::path::Path;
+use tauri::{AppHandle, Emitter, State};
 
 #[allow(unused_imports)]
 pub use crate::apps_classifier::{
-    copy_shortcut_to_drawer, InstalledApp, ScanInstalledResult, ScanMetadataResult,
-    ShortcutMetadata,
+    copy_shortcut_to_drawer, AppCacheInfo, AppIconUpdate, InstalledApp, ScanInstalledResult,
+    ScanMetadataResult,
 };
 
-const APP_CACHE_VERSION: &str = "rust-app-scan-v1";
-const APP_CACHE_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
-const APP_CACHE_FUTURE_TOLERANCE_MILLIS: i64 = 5 * 60 * 1000;
+const APP_ICON_UPDATE_EVENT: &str = "apps-icons-updated";
+const APP_ICON_BATCH_SIZE: usize = 12;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,31 +45,11 @@ pub struct AppPickerTargetState(pub std::sync::Mutex<String>);
 #[derive(Debug, Default)]
 pub struct TrustedShortcutState(pub std::sync::Mutex<HashSet<String>>);
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AppCacheInfo {
-    pub exists: bool,
-    #[serde(default)]
-    pub valid: bool,
-    #[serde(default)]
-    pub app_count: usize,
-    #[serde(default)]
-    pub age_minutes: i64,
-    #[serde(default)]
-    pub timestamp: Option<i64>,
-    #[serde(default)]
-    pub version: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AppCacheFile {
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    timestamp: Option<i64>,
-    #[serde(default)]
-    apps: Vec<ShortcutMetadata>,
+pub struct AppIconsUpdatedPayload {
+    pub icons: Vec<AppIconUpdate>,
+    pub complete: bool,
 }
 
 fn shortcut_key(shortcut_path: &Path) -> Result<String, String> {
@@ -118,172 +95,102 @@ fn require_trusted_shortcut(
     }
 }
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+fn emit_icon_batch(app: &AppHandle, icons: Vec<AppIconUpdate>, complete: bool) {
+    if let Err(err) = app.emit(
+        APP_ICON_UPDATE_EVENT,
+        AppIconsUpdatedPayload { icons, complete },
+    ) {
+        eprintln!("[TIDYDESK] Failed to emit app icon update: {err}");
+    }
 }
 
-fn app_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("failed to resolve app data dir: {err}"))?
-        .join("cache")
-        .join("apps.json"))
-}
+fn spawn_app_icon_updates(app: &AppHandle, apps: &[InstalledApp]) {
+    if apps.is_empty() {
+        emit_icon_batch(app, Vec::new(), true);
+        return;
+    }
 
-fn load_app_cache(app: &AppHandle) -> Result<Option<AppCacheFile>, String> {
-    let path = app_cache_path(app)?;
-    match fs::read_to_string(&path) {
-        Ok(content) => match serde_json::from_str::<AppCacheFile>(&content) {
-            Ok(cache) => Ok(Some(cache)),
-            Err(err) => {
-                let backup_path = crate::persistence::backup_corrupt_file(&path, "app cache")?;
-                eprintln!(
-                    "[TIDYDESK] Backed up corrupt app cache to {}: {err}",
-                    backup_path.display()
-                );
-                Ok(None)
+    let app_handle = app.clone();
+    let apps = apps.to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut batch = Vec::new();
+        for installed_app in apps {
+            let update = crate::apps_classifier::app_icon_update(&installed_app);
+            if update.icon.is_some() {
+                batch.push(update);
             }
-        },
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("failed to read app cache: {err}")),
-    }
-}
 
-fn app_cache_validity(cache: &AppCacheFile, now: i64) -> (bool, i64) {
-    let timestamp = cache.timestamp.unwrap_or_default();
-    let age_millis = now.saturating_sub(timestamp);
-    let version_valid = cache.version.as_deref() == Some(APP_CACHE_VERSION);
-    let timestamp_valid =
-        timestamp > 0 && timestamp <= now.saturating_add(APP_CACHE_FUTURE_TOLERANCE_MILLIS);
-    (
-        version_valid && timestamp_valid && age_millis < APP_CACHE_TTL_MILLIS,
-        age_millis,
-    )
-}
-
-fn write_app_cache(app: &AppHandle, metadata: &ScanMetadataResult) -> Result<(), String> {
-    let path = app_cache_path(app)?;
-    let cache = AppCacheFile {
-        version: Some(APP_CACHE_VERSION.to_string()),
-        timestamp: Some(now_millis()),
-        apps: metadata.shortcuts.clone(),
-    };
-    crate::persistence::atomic_write_json(&path, &cache, "app cache")
-}
-
-fn read_cached_installed_apps(
-    app: &AppHandle,
-    trusted_shortcuts: &State<'_, TrustedShortcutState>,
-) -> Result<ScanInstalledResult, String> {
-    let cache = load_app_cache(app)?.ok_or_else(|| "App cache is missing".to_string())?;
-    let metadata = ScanMetadataResult {
-        shortcuts: cache.apps,
-        scanned_paths: Vec::new(),
-        duration_ms: 0,
-    };
-    let result = crate::apps_classifier::complete_installed_apps(metadata);
-    remember_trusted_shortcuts(
-        trusted_shortcuts,
-        result.apps.iter().map(|app| app.shortcut_path.clone()),
-    )?;
-    Ok(result)
-}
-
-fn scan_installed_apps(
-    app: &AppHandle,
-    trusted_shortcuts: &State<'_, TrustedShortcutState>,
-) -> Result<ScanInstalledResult, String> {
-    let metadata = crate::apps_classifier::scan_shortcut_metadata();
-    if let Err(err) = write_app_cache(app, &metadata) {
-        eprintln!("[TIDYDESK] Failed to write app cache: {err}");
-    }
-    let result = crate::apps_classifier::complete_installed_apps(metadata);
-    remember_trusted_shortcuts(
-        trusted_shortcuts,
-        result.apps.iter().map(|app| app.shortcut_path.clone()),
-    )?;
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn apps_scan_metadata(
-    app: AppHandle,
-    trusted_shortcuts: State<'_, TrustedShortcutState>,
-) -> Result<Value, String> {
-    let metadata = crate::apps_classifier::scan_shortcut_metadata();
-    if let Err(err) = write_app_cache(&app, &metadata) {
-        eprintln!("[TIDYDESK] Failed to write app cache: {err}");
-    }
-    remember_trusted_shortcuts(
-        &trusted_shortcuts,
-        metadata
-            .shortcuts
-            .iter()
-            .filter_map(|shortcut| shortcut.shortcut_path.clone()),
-    )?;
-    serde_json::to_value(metadata).map_err(|err| format!("failed to serialize app metadata: {err}"))
-}
-
-#[tauri::command]
-pub fn apps_scan_installed(
-    app: AppHandle,
-    trusted_shortcuts: State<'_, TrustedShortcutState>,
-) -> Result<ScanInstalledResult, String> {
-    if let Ok(cache_info) = apps_cache_info(app.clone()) {
-        if cache_info.exists && cache_info.valid {
-            return read_cached_installed_apps(&app, &trusted_shortcuts);
+            if batch.len() >= APP_ICON_BATCH_SIZE {
+                emit_icon_batch(&app_handle, std::mem::take(&mut batch), false);
+            }
         }
+
+        emit_icon_batch(&app_handle, batch, true);
+    });
+}
+
+fn complete_installed_apps(
+    app: &AppHandle,
+    trusted_shortcuts: &State<'_, TrustedShortcutState>,
+    metadata: ScanMetadataResult,
+) -> Result<ScanInstalledResult, String> {
+    let result = crate::apps_classifier::complete_installed_apps(metadata);
+    remember_trusted_shortcuts(
+        trusted_shortcuts,
+        result.apps.iter().map(|app| app.shortcut_path.clone()),
+    )?;
+    spawn_app_icon_updates(app, &result.apps);
+    Ok(result)
+}
+
+fn scan_installed_metadata(app: &AppHandle) -> ScanMetadataResult {
+    let metadata = crate::apps_classifier::scan_shortcut_metadata();
+    if let Err(err) = crate::apps_classifier::write_app_cache(app, &metadata) {
+        eprintln!("[TIDYDESK] Failed to write app cache: {err}");
     }
-    scan_installed_apps(&app, &trusted_shortcuts)
+    metadata
+}
+
+async fn read_cached_metadata_background(
+    app: AppHandle,
+) -> Result<Option<ScanMetadataResult>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::apps_classifier::read_valid_cached_metadata(&app)
+    })
+    .await
+    .map_err(|err| format!("app cache task failed: {err}"))?
+}
+
+async fn scan_installed_metadata_background(app: AppHandle) -> Result<ScanMetadataResult, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(scan_installed_metadata(&app)))
+        .await
+        .map_err(|err| format!("app scan task failed: {err}"))?
 }
 
 #[tauri::command]
-pub fn apps_read_cache(
+pub async fn apps_scan_installed(
     app: AppHandle,
     trusted_shortcuts: State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
-    let cache_info = apps_cache_info(app.clone())?;
-    if !cache_info.exists || !cache_info.valid {
-        return Err("App cache is missing or expired".to_string());
+    if let Some(metadata) = read_cached_metadata_background(app.clone()).await? {
+        return complete_installed_apps(&app, &trusted_shortcuts, metadata);
     }
-    read_cached_installed_apps(&app, &trusted_shortcuts)
+    let metadata = scan_installed_metadata_background(app.clone()).await?;
+    complete_installed_apps(&app, &trusted_shortcuts, metadata)
 }
 
 #[tauri::command]
-pub fn apps_refresh_installed(
+pub async fn apps_refresh_installed(
     app: AppHandle,
     trusted_shortcuts: State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
-    scan_installed_apps(&app, &trusted_shortcuts)
+    let metadata = scan_installed_metadata_background(app.clone()).await?;
+    complete_installed_apps(&app, &trusted_shortcuts, metadata)
 }
 
 #[tauri::command]
 pub fn apps_cache_info(app: AppHandle) -> Result<AppCacheInfo, String> {
-    let Some(cache) = load_app_cache(&app)? else {
-        return Ok(AppCacheInfo {
-            exists: false,
-            valid: false,
-            app_count: 0,
-            age_minutes: 0,
-            timestamp: None,
-            version: None,
-        });
-    };
-
-    let now = now_millis();
-    let (valid, age_millis) = app_cache_validity(&cache, now);
-    Ok(AppCacheInfo {
-        exists: true,
-        valid,
-        app_count: cache.apps.len(),
-        age_minutes: age_millis / 60_000,
-        timestamp: cache.timestamp,
-        version: cache.version,
-    })
+    crate::apps_classifier::app_cache_info(&app)
 }
 
 #[tauri::command]
@@ -328,49 +235,4 @@ pub fn apps_get_picker_target(
 #[tauri::command]
 pub fn close_app_picker(app: AppHandle) -> Result<(), String> {
     crate::tool_windows::close_app_picker_window(app)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cache_with(version: Option<&str>, timestamp: Option<i64>) -> AppCacheFile {
-        AppCacheFile {
-            version: version.map(str::to_string),
-            timestamp,
-            apps: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn app_cache_validity_requires_current_version_and_sane_timestamp() {
-        let now = 1_700_000_000_000;
-        assert!(
-            app_cache_validity(
-                &cache_with(Some(APP_CACHE_VERSION), Some(now - 60_000)),
-                now,
-            )
-            .0
-        );
-
-        assert!(!app_cache_validity(&cache_with(Some("0.1.0"), Some(now - 60_000)), now).0);
-        assert!(!app_cache_validity(&cache_with(Some(APP_CACHE_VERSION), Some(0)), now).0);
-        assert!(
-            !app_cache_validity(
-                &cache_with(
-                    Some(APP_CACHE_VERSION),
-                    Some(now + APP_CACHE_FUTURE_TOLERANCE_MILLIS + 1),
-                ),
-                now,
-            )
-            .0
-        );
-        assert!(
-            !app_cache_validity(
-                &cache_with(Some(APP_CACHE_VERSION), Some(now - APP_CACHE_TTL_MILLIS)),
-                now,
-            )
-            .0
-        );
-    }
 }

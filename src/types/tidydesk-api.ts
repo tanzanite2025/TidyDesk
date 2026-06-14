@@ -104,6 +104,16 @@ export interface InstalledAppsResult {
   error?: string;
 }
 
+export interface AppIconUpdate {
+  shortcutPath: string;
+  icon: string | null;
+}
+
+export interface AppIconsUpdatedPayload {
+  icons: AppIconUpdate[];
+  complete?: boolean;
+}
+
 export interface AppCacheInfo {
   exists?: boolean;
   valid?: boolean;
