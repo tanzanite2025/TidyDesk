@@ -14,6 +14,7 @@ pub use crate::apps_classifier::{
 
 const APP_CACHE_VERSION: &str = "rust-app-scan-v1";
 const APP_CACHE_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
+const APP_CACHE_FUTURE_TOLERANCE_MILLIS: i64 = 5 * 60 * 1000;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,12 +137,32 @@ fn app_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn load_app_cache(app: &AppHandle) -> Result<Option<AppCacheFile>, String> {
     let path = app_cache_path(app)?;
     match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str::<AppCacheFile>(&content)
-            .map(Some)
-            .map_err(|err| format!("failed to parse app cache: {err}")),
+        Ok(content) => match serde_json::from_str::<AppCacheFile>(&content) {
+            Ok(cache) => Ok(Some(cache)),
+            Err(err) => {
+                let backup_path = crate::persistence::backup_corrupt_file(&path, "app cache")?;
+                eprintln!(
+                    "[TIDYDESK] Backed up corrupt app cache to {}: {err}",
+                    backup_path.display()
+                );
+                Ok(None)
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(format!("failed to read app cache: {err}")),
     }
+}
+
+fn app_cache_validity(cache: &AppCacheFile, now: i64) -> (bool, i64) {
+    let timestamp = cache.timestamp.unwrap_or_default();
+    let age_millis = now.saturating_sub(timestamp);
+    let version_valid = cache.version.as_deref() == Some(APP_CACHE_VERSION);
+    let timestamp_valid =
+        timestamp > 0 && timestamp <= now.saturating_add(APP_CACHE_FUTURE_TOLERANCE_MILLIS);
+    (
+        version_valid && timestamp_valid && age_millis < APP_CACHE_TTL_MILLIS,
+        age_millis,
+    )
 }
 
 fn write_app_cache(app: &AppHandle, metadata: &ScanMetadataResult) -> Result<(), String> {
@@ -253,11 +274,11 @@ pub fn apps_cache_info(app: AppHandle) -> Result<AppCacheInfo, String> {
         });
     };
 
-    let timestamp = cache.timestamp.unwrap_or_default();
-    let age_millis = now_millis().saturating_sub(timestamp);
+    let now = now_millis();
+    let (valid, age_millis) = app_cache_validity(&cache, now);
     Ok(AppCacheInfo {
         exists: true,
-        valid: timestamp > 0 && age_millis < APP_CACHE_TTL_MILLIS,
+        valid,
         app_count: cache.apps.len(),
         age_minutes: age_millis / 60_000,
         timestamp: cache.timestamp,
@@ -307,4 +328,49 @@ pub fn apps_get_picker_target(
 #[tauri::command]
 pub fn close_app_picker(app: AppHandle) -> Result<(), String> {
     crate::tool_windows::close_app_picker_window(app)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache_with(version: Option<&str>, timestamp: Option<i64>) -> AppCacheFile {
+        AppCacheFile {
+            version: version.map(str::to_string),
+            timestamp,
+            apps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn app_cache_validity_requires_current_version_and_sane_timestamp() {
+        let now = 1_700_000_000_000;
+        assert!(
+            app_cache_validity(
+                &cache_with(Some(APP_CACHE_VERSION), Some(now - 60_000)),
+                now,
+            )
+            .0
+        );
+
+        assert!(!app_cache_validity(&cache_with(Some("0.1.0"), Some(now - 60_000)), now).0);
+        assert!(!app_cache_validity(&cache_with(Some(APP_CACHE_VERSION), Some(0)), now).0);
+        assert!(
+            !app_cache_validity(
+                &cache_with(
+                    Some(APP_CACHE_VERSION),
+                    Some(now + APP_CACHE_FUTURE_TOLERANCE_MILLIS + 1),
+                ),
+                now,
+            )
+            .0
+        );
+        assert!(
+            !app_cache_validity(
+                &cache_with(Some(APP_CACHE_VERSION), Some(now - APP_CACHE_TTL_MILLIS)),
+                now,
+            )
+            .0
+        );
+    }
 }
