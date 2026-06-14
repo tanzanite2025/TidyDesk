@@ -2,7 +2,7 @@
 
 审查时间：2026-06-14
 
-审查范围：根项目依赖、Tauri 配置、Rust 命令层、React 前端桥接、Go sidecar、构建/发布脚本与文件职责划分。
+审查范围：根项目依赖、Tauri 配置、Rust 命令层、React 前端桥接、应用扫描、构建/发布脚本与文件职责划分。
 
 本次只做静态审查和依赖审计记录，未修改功能代码。
 
@@ -180,8 +180,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - 文件抽屉路径有 `safe_drawer_name`、`safe_drawer_entry_name`、`is_path_inside` 等边界校验。
 - 托管文件恢复要求目标位于 TidyDesk storage 内。
 - Todo、Quick Notes、Stickers 本地状态写入均有互斥锁，降低多窗口并发覆盖风险。
-- Go sidecar 使用 stdin/stdout JSON RPC，未开放网络端口。
-- sidecar 请求有超时、串行 worker 和自动重启逻辑。
+- 应用扫描已内聚到 Rust 后端，不再需要额外 sidecar 进程或 JSON-RPC 链路。
 - updater 默认内置 GitHub Releases endpoint 和公钥校验。
 
 ## 文件职责评估
@@ -191,7 +190,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - `src/modules/*`：前端按用户功能拆分为 drawer、todos、notes、stickers、capture、handle、rail。
 - `src/native/*`：前端 Tauri adapter 与 NativeClient 类型边界较清楚。
 - `src-tauri/src/apps.rs`、`files.rs`、`todos.rs`、`quick_notes.rs`、`stickers.rs`、`updates.rs`：Rust 命令层按领域拆分，基本可读。
-- `sidecars/apps-cache`：Go sidecar 聚焦应用扫描，不承担 UI 或主进程职责。
+- `src-tauri/src/apps*.rs`：Rust 后端聚焦应用扫描、cache、分类和导入抽屉，不承担 UI 窗口职责。
 
 ### 职责偏宽的部分
 
@@ -255,9 +254,9 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - 已拆为 `files_rules/shell_open.rs`：打开文件
 - `files_rules/mod.rs` 只保留公共导出
 
-#### `sidecars/apps-cache/*.go`
+#### 应用扫描链路
 
-原先由单个 `main.go` 同时包含：
+原先 Go sidecar 由单个 `main.go` 同时包含：
 
 - JSON RPC 协议
 - cache 读写
@@ -268,13 +267,9 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 
 已处理：
 
-- 已拆为 `rpc.go`
-- 已拆为 `cache.go`
-- 已拆为 `scan.go`
-- 已拆为 `classify.go`
-- 已拆为 `version.go`
-- 已拆为 `types.go`
-- `main.go` 只保留启动与 stdin/stdout 循环
+- 已移除 Go sidecar、sidecar 构建脚本和 Tauri `externalBin`
+- 应用扫描、cache、分类和导入抽屉统一在 Rust/Tauri 后端实现
+- 前端仍通过同一组 Tauri commands 访问应用扫描能力
 
 ### 命名问题
 
@@ -293,7 +288,7 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 4. 将 `apps_add_to_drawer` 改为扫描结果 ID 导入模式。
 5. 升级 E2E 依赖，消除 audit 告警。
 6. 固定 `@tauri-apps/cli` 版本。
-7. 拆分职责偏宽文件，先 Rust 主进程，再 Go sidecar。（已完成）
+7. 拆分职责偏宽文件，并移除 Go sidecar 冗余链路。（已完成）
 
 ## 审查限制
 

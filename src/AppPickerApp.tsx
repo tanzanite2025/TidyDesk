@@ -16,7 +16,7 @@ export const AppPickerApp: React.FC = () => {
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
   const [cacheInfo, setCacheInfo] = useState<AppCacheInfo | null>(null);
-  const isTauriAppPicker = cacheInfo?.source === 'tauri-sidecar-cache' || cacheInfo?.source === 'tauri-sidecar-metadata' || cacheInfo?.source === 'tauri-sidecar-target-aware';
+  const isTauriAppPicker = cacheInfo?.source === 'tauri-rust-cache';
 
   useEffect(() => {
     const init = async () => {

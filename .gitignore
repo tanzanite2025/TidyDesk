@@ -163,4 +163,3 @@ public
 # Tauri build artifacts
 /release/
 /src-tauri/target/
-/src-tauri/sidecars/

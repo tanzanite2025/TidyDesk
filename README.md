@@ -1,12 +1,12 @@
 # TidyDesk
 
-TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React + TypeScript + Rust` 构建，并通过 Go sidecar 扫描本机已安装应用。它的目标不是强行搬走你的文件，而是提供抽屉入口、待办、便签和截图贴纸这些轻量工作流，让桌面更干净，同时尽量降低误操作风险。
+TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React + TypeScript + Rust` 构建，并由 Rust 后端扫描本机已安装应用。它的目标不是强行搬走你的文件，而是提供抽屉入口、待办、便签和截图贴纸这些轻量工作流，让桌面更干净，同时尽量降低误操作风险。
 
 ## 当前能力
 
 - 桌面抽屉：把桌面文件收纳到抽屉中，默认优先创建快捷方式入口，避免直接破坏原始文件布局。
 - 快捷方式体检：检测失效快捷方式，支持批量校验、有限自动修复和事件提示。
-- 已安装应用导入：通过 Go sidecar 扫描开始菜单和桌面快捷方式，并加入抽屉。
+- 已安装应用导入：通过 Rust 后端扫描开始菜单和桌面快捷方式，并加入抽屉。
 - Todo 面板：独立待办窗口，支持列管理和 Markdown 内容编辑。
 - Quick Notes：抽屉侧栏快速记录便签。
 - 截图贴纸：支持框选截图、生成贴纸、置顶、复制和另存。
@@ -17,7 +17,6 @@ TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React
 - 前端：`React 18`、`TypeScript`、`Vite`、`Tailwind CSS`
 - 桌面容器：`Tauri 2`
 - 原生逻辑：`Rust`
-- 应用扫描 sidecar：`Go`
 - 桌面 smoke 测试：`tauri-driver` + `WebDriverIO`
 
 ## 目录结构
@@ -35,7 +34,6 @@ TidyDesk/
 │  │  ├─ files_rules/       文件分类、路径清洗、storage、shortcut、shell open
 │  │  └─ tool_windows/      Todo / App Picker / Snip / Sticker 窗口生命周期
 │  └─ tauri.conf.json
-├─ sidecars/apps-cache/     Go sidecar：RPC、cache、scan、classify
 ├─ e2e-tests/               Tauri 窗口 smoke 测试
 ├─ scripts/                 构建与发布脚本
 ├─ build/                   图标等构建资源
@@ -49,7 +47,7 @@ TidyDesk/
 - `src-tauri/src/commands/*` 是 IPC 边界；具体业务逻辑下沉到 `apps.rs`、`files.rs`、`todos.rs` 等领域文件。
 - `src-tauri/src/files_rules/*` 拆分文件分类、路径安全、托管 storage、Windows `.lnk` 和 shell open。
 - `src-tauri/src/tool_windows/*` 分别管理 Todo、App Picker、截图遮罩和贴纸窗口。
-- `sidecars/apps-cache/*` 只负责已安装应用扫描相关的 JSON-RPC、cache 和 shortcut metadata，不管理 UI 窗口。
+- `src-tauri/src/apps*.rs` 负责已安装应用扫描、cache、分类和导入抽屉，不再依赖额外 sidecar 进程。
 
 ## 本地开发
 
@@ -69,7 +67,6 @@ npm --prefix C:\path\to\TidyDesk run dev
 
 - `Node.js 18+`
 - `Rust` / `cargo`，并安装 GNU target：`rustup toolchain install stable-x86_64-pc-windows-gnu`
-- `Go 1.20+`
 - `MinGW`，用于 Windows GNU target 的资源编译和链接
 - `Windows 10/11`
 
@@ -87,7 +84,7 @@ npm install
 npm run dev
 ```
 
-这条命令会启动完整 Tauri 桌面应用，并自动准备 Go sidecar。等价于：
+这条命令会启动完整 Tauri 桌面应用。等价于：
 
 ```powershell
 npm run tauri:dev
@@ -105,7 +102,7 @@ npm run dev:web
 
 ### Tauri 开发
 
-`npm run tauri:dev` 会先执行 `prepare:tauri-sidecar`，自动编译并复制 sidecar。
+`npm run tauri:dev` 会启动 Vite dev server，并运行 Rust/Tauri 桌面进程。
 
 ```powershell
 npm run tauri:dev
@@ -117,7 +114,6 @@ npm run tauri:dev
 
 ```powershell
 npm run build
-npm run test:sidecar
 npm run check:rust
 ```
 
@@ -131,15 +127,7 @@ npm run check
 
 ```powershell
 npm run build
-go -C sidecars/apps-cache test ./...
-npm run prepare:tauri-sidecar
 cargo +stable-x86_64-pc-windows-gnu check --manifest-path src-tauri/Cargo.toml
-```
-
-如果只编译 sidecar：
-
-```powershell
-npm run build:sidecar
 ```
 
 ### 常见报错
@@ -149,7 +137,7 @@ npm run build:sidecar
 | `Could not read package.json` | 当前终端不在仓库根目录 | 先 `cd C:\path\to\TidyDesk`，或使用 `npm --prefix C:\path\to\TidyDesk run dev` |
 | `Port 3000 is already in use` | 上一次 Vite/Tauri dev 进程还在运行 | 关闭旧终端或结束占用 3000 端口的 node 进程后重试 |
 | 浏览器页面里出现 Tauri/IPC/window 相关错误 | 启动的是纯前端 `dev:web`，不是桌面应用 | 用 `npm run dev` |
-| `cargo check` 找不到 sidecar 或 target triple 不匹配 | 直接跑了底层 cargo 命令，未准备 Tauri sidecar | 用 `npm run check:rust` |
+| `cargo check` target triple 不匹配 | 直接跑了底层 cargo 命令，未带 Windows GNU target | 用 `npm run check:rust` |
 | GNU target / MinGW / `windres` 相关错误 | Rust GNU target 或 MinGW 未装好 | 确认已安装 `stable-x86_64-pc-windows-gnu` 和 MinGW；在 Devin 环境中使用已配置好的 `npm run check:rust` |
 
 ## 打包发布
@@ -258,7 +246,7 @@ npm run tauri:release
 - updater 不允许通过普通运行时环境变量覆盖公钥；真正需要保密的是签名私钥，不是公钥。
 - `stickers`、`todos`、`quick notes` 的本地状态写入已经串行化，降低多窗口同时写入导致的数据覆盖风险。
 - 抽屉动画线程现在带有代际取消，避免旧动画继续改窗口位置。
-- sidecar 访问改为后台 worker 串行处理，并带超时与自动重启，避免坏进程长期把扫描功能拖死。
+- 应用扫描已内聚到 Rust 后端，避免 sidecar 进程/RPC/target triple 复制带来的额外失败点。
 - 生产包已启用显式 CSP，限制脚本、对象、frame 和跨源连接范围。
 
 ## 文档入口
@@ -271,7 +259,7 @@ npm run tauri:release
 ## 当前已知限制
 
 - 快捷方式自动修复仍然是启发式能力，只会在“唯一候选”时自动执行，不能替代人工确认。
-- 当前已经补上 sidecar 超时/重启、“应用扫描 -> 导入抽屉”以及首批 Tauri 多窗口 smoke 自动化，但截图成图、恢复链路和更多异常路径还可以继续扩展。
+- 当前已经补上“应用扫描 -> 导入抽屉”以及首批 Tauri 多窗口 smoke 自动化，但截图成图、恢复链路和更多异常路径还可以继续扩展。
 - Tauri E2E 依赖 `tauri-driver` 和与本机 Edge 主版本匹配的 WebDriver，首次运行前需要单独准备。
 
 ## Tauri UI 自动化
@@ -332,14 +320,12 @@ npm run test:e2e:tauri
 
 ```bash
 npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-go -C sidecars/apps-cache test ./...
+npm run check:rust
 ```
 
-涉及发布、updater、sidecar 或窗口行为时，再补充对应专项检查：
+涉及发布、updater 或窗口行为时，再补充对应专项检查：
 
 ```bash
-npm run build:sidecar
 npm run tauri:bundle
 npm run test:e2e:tauri
 ```

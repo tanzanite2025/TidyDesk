@@ -1,10 +1,10 @@
 # Go Sidecar PoC（历史归档说明）
 
-这份文档原本用于验证 Go sidecar 通过 stdio JSON-RPC 提供应用 cache / shortcut metadata 的可行性。当前 Go sidecar 已经进入主线实现，不再是 Electron 实验路径。
+这份文档原本用于验证 Go sidecar 通过 stdio JSON-RPC 提供应用 cache / shortcut metadata 的可行性。当前主线已迁移为 Rust 后端直接扫描/cache，不再保留 Go sidecar 运行链路。
 
 ## 当前状态
 
-当前 sidecar 位于 `sidecars/apps-cache/`，职责已拆分为：
+历史 sidecar 曾位于 `sidecars/apps-cache/`，职责曾拆分为：
 
 ```text
 sidecars/apps-cache/
@@ -17,12 +17,7 @@ sidecars/apps-cache/
 └── classify.go   shortcut skip/category heuristics
 ```
 
-当前可用命令：
-
-```bash
-go -C sidecars/apps-cache test ./...
-npm run build:sidecar
-```
+当前主线不再提供旧的 Go sidecar 测试/构建命令。
 
 ## 仍有参考价值的内容
 

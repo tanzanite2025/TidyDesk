@@ -26,7 +26,6 @@
 npm install
 npm run dev
 npm run build
-npm run test:sidecar
 npm run check:rust
 ```
 
@@ -64,4 +63,4 @@ npm run tauri:release
 
 `docs/archive/` 下的大量 release、hotfix、阶段性测试和排障文档只保留历史上下文，不建议作为当前开发入口。
 
-`docs/development/*POC*.md` 也只保留 PoC 背景：Tauri 和 Go sidecar 已经进入主线实现，当前命令以 README 为准。
+`docs/development/*POC*.md` 也只保留 PoC 背景：Tauri 和应用扫描已经进入 Rust 主线实现，当前命令以 README 为准。

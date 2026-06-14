@@ -19,7 +19,6 @@ mod persistence;
 mod quick_notes;
 mod shell;
 mod shortcuts;
-mod sidecar_client;
 mod stickers;
 mod stickers_rules;
 mod todos;
@@ -33,7 +32,7 @@ pub use crate::paths::{drawer_root, is_path_inside, prepare_drawer_storage, time
 use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_read_cache,
     apps_refresh_installed, apps_scan_installed, apps_scan_metadata, close_app_picker,
-    open_app_picker, probe_go_sidecar, AppPickerTargetState, SidecarState, TrustedShortcutState,
+    open_app_picker, AppPickerTargetState, TrustedShortcutState,
 };
 use commands::clipboard::clipboard_read_text;
 use commands::events::{events_send, UserInteractionState};
@@ -73,7 +72,6 @@ use updates::{
 macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
-            probe_go_sidecar,
             apps_cache_info,
             apps_read_cache,
             apps_scan_metadata,
@@ -133,7 +131,6 @@ macro_rules! tidydesk_generate_handler {
 macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
-            probe_go_sidecar,
             apps_cache_info,
             apps_read_cache,
             apps_scan_metadata,
@@ -188,7 +185,6 @@ fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
-        .manage(SidecarState::default())
         .manage(TrustedShortcutState::default())
         .manage(ShellState::default())
         .manage(UserInteractionState::default())

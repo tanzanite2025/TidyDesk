@@ -49,8 +49,7 @@ release-tauri/latest.json                  updater manifest 产物
 ```bash
 npm install
 npm run build
-cargo check --manifest-path src-tauri/Cargo.toml
-go -C sidecars/apps-cache test ./...
+npm run check:rust
 ```
 
 2. 打包安装包和签名：
