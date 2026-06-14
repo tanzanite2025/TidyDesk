@@ -90,7 +90,8 @@ pub struct StickerUpdatedPayload {
 
 #[derive(Debug)]
 pub struct CapturedSticker {
-    pub sticker_id: String,
+    pub sticker_id: Option<String>,
+    pub pasted: bool,
 }
 
 pub fn ensure_storage(app: &AppHandle) -> Result<(), String> {
@@ -185,9 +186,20 @@ pub fn read_sticker_state(app: &AppHandle) -> Result<StickerStateFile, String> {
 
 pub fn read_sticker_state_unlocked(app: &AppHandle) -> Result<StickerStateFile, String> {
     let path = sticker_state_path(app)?;
-    match fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content)
-            .map_err(|err| format!("failed to parse sticker state: {err}")),
+    match fs::read_to_string(&path) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(state) => Ok(state),
+            Err(err) => {
+                let backup_path = crate::persistence::backup_corrupt_file(&path, "sticker state")?;
+                eprintln!(
+                    "[TIDYDESK] Backed up corrupt sticker state to {}: {err}",
+                    backup_path.display()
+                );
+                Ok(StickerStateFile {
+                    stickers: Vec::new(),
+                })
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(StickerStateFile {
             stickers: Vec::new(),
         }),

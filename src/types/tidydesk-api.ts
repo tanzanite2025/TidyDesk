@@ -136,6 +136,7 @@ export interface ResidentSettings {
   launchMinimized: boolean;
   backgroundMonitorEnabled: boolean;
   autoUpdateCheckEnabled: boolean;
+  autoStickAfterSnip: boolean;
 }
 
 export interface ResidentSettingsUpdate {
@@ -143,6 +144,7 @@ export interface ResidentSettingsUpdate {
   launchMinimized?: boolean;
   backgroundMonitorEnabled?: boolean;
   autoUpdateCheckEnabled?: boolean;
+  autoStickAfterSnip?: boolean;
 }
 
 export interface AppPickerTargetResult {

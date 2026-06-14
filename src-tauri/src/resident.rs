@@ -18,6 +18,8 @@ pub struct ResidentSettings {
     pub background_monitor_enabled: bool,
     #[serde(default = "default_auto_update_check_enabled")]
     pub auto_update_check_enabled: bool,
+    #[serde(default)]
+    pub auto_stick_after_snip: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -27,6 +29,7 @@ pub struct ResidentSettingsSnapshot {
     pub launch_minimized: bool,
     pub background_monitor_enabled: bool,
     pub auto_update_check_enabled: bool,
+    pub auto_stick_after_snip: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -40,6 +43,8 @@ pub struct ResidentSettingsUpdate {
     pub background_monitor_enabled: Option<bool>,
     #[serde(default)]
     pub auto_update_check_enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_stick_after_snip: Option<bool>,
 }
 
 impl Default for ResidentSettings {
@@ -48,6 +53,7 @@ impl Default for ResidentSettings {
             launch_minimized: false,
             background_monitor_enabled: true,
             auto_update_check_enabled: true,
+            auto_stick_after_snip: false,
         }
     }
 }
@@ -101,9 +107,13 @@ pub fn resident_update_settings(
             crate::updates::start_update_auto_check(app.clone(), Duration::from_secs(2));
         }
     }
+    if let Some(auto_stick_after_snip) = payload.auto_stick_after_snip {
+        settings.auto_stick_after_snip = auto_stick_after_snip;
+    }
     if payload.launch_minimized.is_some()
         || payload.background_monitor_enabled.is_some()
         || payload.auto_update_check_enabled.is_some()
+        || payload.auto_stick_after_snip.is_some()
     {
         write_resident_settings(&app, &settings)?;
     }
@@ -198,6 +208,7 @@ fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapsho
         launch_minimized: settings.launch_minimized,
         background_monitor_enabled: settings.background_monitor_enabled,
         auto_update_check_enabled: settings.auto_update_check_enabled,
+        auto_stick_after_snip: settings.auto_stick_after_snip,
     })
 }
 
