@@ -24,6 +24,8 @@ declare global {
   }
 }
 
+const shouldExposeTestBridge = import.meta.env.DEV || import.meta.env.VITE_TIDYDESK_E2E === '1';
+
 async function invokeCommand(command: string, args?: Record<string, unknown>) {
   const api = await import('@tauri-apps/api/core');
   await api.invoke(command, args);
@@ -36,7 +38,7 @@ function dispatchCommand(command: string, args?: Record<string, unknown>) {
   return Promise.resolve();
 }
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && shouldExposeTestBridge) {
   window.__TIDYDESK_TEST__ = {
     isTauriAvailable: () => nativeClient.isAvailable(),
     openFilesDrawer: () => invokeCommand('tests_open_files_drawer'),

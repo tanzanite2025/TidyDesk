@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 mod apps;
 mod apps_classifier;
@@ -35,7 +35,7 @@ pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link};
 use apps::{
     apps_add_to_drawer, apps_get_picker_target, apps_scan_installed, apps_scan_metadata,
     close_app_picker_poc, open_app_picker_poc, probe_go_sidecar, AppPickerTargetState,
-    SidecarState,
+    SidecarState, TrustedShortcutState,
 };
 use files::{
     drawers_create, drawers_delete_item, drawers_rename_item, files_import_external_files,
@@ -53,9 +53,9 @@ use shell::{
 };
 use shortcuts::{shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services};
 use stickers::{
-    open_snip_window, restore_stickers, snip_cancel, snip_complete_selection, snip_get_background_image, sticker_close,
-    sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin, SnipCaptureState,
-    StickerStoreState,
+    open_snip_window, restore_stickers, snip_cancel, snip_complete_selection,
+    snip_get_background_image, sticker_close, sticker_copy, sticker_get, sticker_save_as,
+    sticker_toggle_pin, SnipCaptureState, StickerStoreState,
 };
 use todos::{
     todos_create_card, todos_delete_card, todos_get_counts, todos_move_card, todos_read_state,
@@ -196,8 +196,22 @@ fn windows_control(
     Ok(json!({ "success": true }))
 }
 
+fn require_command_window(
+    window: &WebviewWindow,
+    allowed_labels: &[&str],
+    command: &str,
+) -> Result<(), String> {
+    let label = window.label();
+    if allowed_labels.iter().any(|allowed| *allowed == label) {
+        Ok(())
+    } else {
+        Err(format!("{command} is not available from window `{label}`"))
+    }
+}
+
 #[tauri::command]
-fn clipboard_read_text() -> Result<String, String> {
+fn clipboard_read_text(window: WebviewWindow) -> Result<String, String> {
+    require_command_window(&window, &["main", "capture"], "clipboard_read_text")?;
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|err| format!("failed to access system clipboard: {err}"))?;
     match clipboard.get_text() {
@@ -206,6 +220,7 @@ fn clipboard_read_text() -> Result<String, String> {
     }
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 #[tauri::command]
 fn tests_open_files_drawer(
     app: AppHandle,
@@ -218,6 +233,7 @@ fn tests_open_files_drawer(
     Ok(json!({ "success": true }))
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 #[tauri::command]
 fn tests_collapse_drawer(
     app: AppHandle,
@@ -227,12 +243,14 @@ fn tests_collapse_drawer(
     Ok(json!({ "success": true }))
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 #[tauri::command]
 fn tests_start_snip(app: AppHandle) -> Result<Value, String> {
     open_snip_window(&app)?;
     Ok(json!({ "success": true }))
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 fn window_debug_snapshot(app: &AppHandle, label: &str) -> Value {
     if let Some(window) = app.get_webview_window(label) {
         let visible = window.is_visible().unwrap_or(false);
@@ -256,6 +274,7 @@ fn window_debug_snapshot(app: &AppHandle, label: &str) -> Value {
     }
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 #[tauri::command]
 fn tests_get_window_snapshot(
     app: AppHandle,
@@ -278,6 +297,7 @@ fn tests_get_window_snapshot(
     }))
 }
 
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
 #[tauri::command]
 fn tests_reset_window_state(
     app: AppHandle,
@@ -352,46 +372,10 @@ pub fn prepare_drawer_storage(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-
-
-fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
-        .manage(SidecarState::default())
-        .manage(ShellState::default())
-        .manage(UserInteractionState::default())
-        .manage(StickerStoreState::default())
-        .manage(SnipCaptureState::default())
-        .manage(TodoStoreState::default())
-        .manage(QuickNotesStoreState::default())
-        .manage(UpdaterSessionState::default())
-        .setup(|app| {
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
-            let _tray = TrayIconBuilder::new()
-                .menu(&menu)
-                .tooltip("TidyDesk")
-                .on_menu_event(|app, event| {
-                    if event.id().as_ref() == "quit" {
-                        app.exit(0);
-                    }
-                })
-                .build(app)?;
-            let handle = app.handle().clone();
-            let _ = ensure_handle_window(&handle);
-            if let Ok(bounds) = handle_window_bounds(&handle, false) {
-                let _ = apply_window_bounds(&handle, "handle", bounds);
-            }
-            if let Some(window) = handle.get_webview_window("handle") {
-                let _ = window.show();
-                let _ = window.set_always_on_top(true);
-            }
-            let _ = restore_stickers(&handle);
-            start_shortcut_background_services(handle.clone());
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
+#[cfg(any(debug_assertions, feature = "e2e-tests"))]
+macro_rules! tidydesk_generate_handler {
+    () => {
+        tauri::generate_handler![
             probe_go_sidecar,
             apps_scan_metadata,
             apps_scan_installed,
@@ -441,7 +425,101 @@ fn main() {
             close_todo_window,
             open_app_picker_poc,
             close_app_picker_poc
-        ])
+        ]
+    };
+}
+
+#[cfg(not(any(debug_assertions, feature = "e2e-tests")))]
+macro_rules! tidydesk_generate_handler {
+    () => {
+        tauri::generate_handler![
+            probe_go_sidecar,
+            apps_scan_metadata,
+            apps_scan_installed,
+            apps_add_to_drawer,
+            files_read_desktop_files,
+            files_open,
+            files_import_external_files,
+            files_restore_to_desktop,
+            shortcuts_validate_all,
+            shortcuts_repair,
+            drawers_create,
+            drawers_rename_item,
+            drawers_delete_item,
+            apps_get_picker_target,
+            windows_control,
+            clipboard_read_text,
+            events_send,
+            snip_complete_selection,
+            snip_cancel,
+            snip_get_background_image,
+            sticker_get,
+            sticker_toggle_pin,
+            sticker_copy,
+            sticker_save_as,
+            sticker_close,
+            updates_get_metadata,
+            updates_get_state,
+            updates_check,
+            updates_download,
+            updates_install,
+            todos_read_state,
+            todos_get_counts,
+            todos_create_card,
+            todos_update_card,
+            todos_delete_card,
+            todos_move_card,
+            quick_notes_read_state,
+            quick_notes_create_note,
+            quick_notes_update_note,
+            quick_notes_delete_note,
+            open_todo_window,
+            close_todo_window,
+            open_app_picker_poc,
+            close_app_picker_poc
+        ]
+    };
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
+        .manage(SidecarState::default())
+        .manage(TrustedShortcutState::default())
+        .manage(ShellState::default())
+        .manage(UserInteractionState::default())
+        .manage(StickerStoreState::default())
+        .manage(SnipCaptureState::default())
+        .manage(TodoStoreState::default())
+        .manage(QuickNotesStoreState::default())
+        .manage(UpdaterSessionState::default())
+        .setup(|app| {
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&quit])?;
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("TidyDesk")
+                .on_menu_event(|app, event| {
+                    if event.id().as_ref() == "quit" {
+                        app.exit(0);
+                    }
+                })
+                .build(app)?;
+            let handle = app.handle().clone();
+            let _ = ensure_handle_window(&handle);
+            if let Ok(bounds) = handle_window_bounds(&handle, false) {
+                let _ = apply_window_bounds(&handle, "handle", bounds);
+            }
+            if let Some(window) = handle.get_webview_window("handle") {
+                let _ = window.show();
+                let _ = window.set_always_on_top(true);
+            }
+            let _ = restore_stickers(&handle);
+            start_shortcut_background_services(handle.clone());
+            Ok(())
+        })
+        .invoke_handler(tidydesk_generate_handler!())
         .run(tauri::generate_context!())
         .expect("failed to run TidyDesk");
 }

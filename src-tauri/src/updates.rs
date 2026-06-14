@@ -15,6 +15,7 @@ const UPDATER_CHANNEL_ENV: &str = "TIDYDESK_UPDATER_CHANNEL";
 const UPDATER_ENDPOINTS_ENV: &str = "TIDYDESK_UPDATER_ENDPOINTS";
 const UPDATER_PUBLIC_KEY_ENV: &str = "TIDYDESK_UPDATER_PUBLIC_KEY";
 const UPDATER_PUBLIC_KEY_FILE_ENV: &str = "TIDYDESK_UPDATER_PUBLIC_KEY_FILE";
+const ALLOWED_UPDATER_CHANNELS: [&str; 2] = ["stable", "beta"];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,14 +77,31 @@ struct ResolvedUpdaterConfig {
 }
 
 fn current_channel() -> String {
-    env::var(UPDATER_CHANNEL_ENV)
+    let configured = env::var(UPDATER_CHANNEL_ENV)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_UPDATER_CHANNEL.to_string())
+        .unwrap_or_else(|| DEFAULT_UPDATER_CHANNEL.to_string());
+
+    if ALLOWED_UPDATER_CHANNELS
+        .iter()
+        .any(|channel| channel.eq_ignore_ascii_case(&configured))
+    {
+        configured.to_ascii_lowercase()
+    } else {
+        DEFAULT_UPDATER_CHANNEL.to_string()
+    }
+}
+
+fn updater_runtime_overrides_allowed() -> bool {
+    cfg!(any(debug_assertions, feature = "e2e-tests"))
 }
 
 fn resolve_public_key_override() -> Result<Option<String>, String> {
+    if !updater_runtime_overrides_allowed() {
+        return Ok(None);
+    }
+
     if let Ok(value) = env::var(UPDATER_PUBLIC_KEY_ENV) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -104,6 +122,10 @@ fn resolve_public_key_override() -> Result<Option<String>, String> {
 }
 
 fn resolve_endpoints_override() -> Result<Option<Vec<Url>>, String> {
+    if !updater_runtime_overrides_allowed() {
+        return Ok(None);
+    }
+
     let raw = match env::var(UPDATER_ENDPOINTS_ENV) {
         Ok(value) => value,
         Err(_) => return Ok(None),

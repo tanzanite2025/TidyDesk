@@ -20,7 +20,7 @@
     "build:sidecar": "go -C sidecars/apps-cache build -o tidydesk-apps-cache.exe .",
     "prepare:tauri-sidecar": "node scripts/prepare-tauri-sidecar.cjs",
     "tauri:preflight": "node scripts/check-tauri-release-env.cjs",
-    "tauri:dev": "npx --yes @tauri-apps/cli@2 dev",
+    "tauri:dev": "tauri dev",
     "tauri:bundle": "npm run tauri:preflight && node scripts/run-tauri-build.cjs",
     "tauri:manifest": "node scripts/generate-tauri-latest-json.cjs",
     "tauri:build": "npm run tauri:bundle && npm run tauri:manifest",
@@ -36,6 +36,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "2.11.2",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^6.0.2",

@@ -10,7 +10,7 @@ use std::sync::{
     Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 // 重新导出底层规则和结构，确保对 main.rs 等外部调用 100% 兼容
 pub use crate::stickers_rules::{
@@ -87,8 +87,18 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
     crate::tool_windows::open_snip_window(app)
 }
 
+fn require_snip_window(window: &WebviewWindow, command: &str) -> Result<(), String> {
+    let label = window.label();
+    if label == "snip" {
+        Ok(())
+    } else {
+        Err(format!("{command} is not available from window `{label}`"))
+    }
+}
+
 #[tauri::command]
-pub fn snip_get_background_image(app: AppHandle) -> Result<Value, String> {
+pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Result<Value, String> {
+    require_snip_window(&window, "snip_get_background_image")?;
     let state = app.state::<SnipCaptureState>();
     let frozen = state
         .frozen_image_png
@@ -112,9 +122,11 @@ pub fn snip_get_background_image(app: AppHandle) -> Result<Value, String> {
 
 #[tauri::command]
 pub async fn snip_complete_selection(
+    window: WebviewWindow,
     app: AppHandle,
     payload: SnipRectPayload,
 ) -> Result<Value, String> {
+    require_snip_window(&window, "snip_complete_selection")?;
     begin_snip_capture(&app)?;
     let app_handle = app.clone();
     let capture_result =

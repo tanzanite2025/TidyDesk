@@ -12,7 +12,7 @@ const rootDir = path.resolve(__dirname, '..');
 const isWindows = process.platform === 'win32';
 const appBinaryName = isWindows ? 'tidydesk.exe' : 'tidydesk';
 const tauriAppPath = path.join(rootDir, 'src-tauri', 'target', 'release', appBinaryName);
-const tauriCliCommand = 'npx';
+const tauriCliCommand = path.join(rootDir, 'node_modules', '.bin', isWindows ? 'tauri.cmd' : 'tauri');
 const tauriDriverCommand = process.env.TAURI_DRIVER_PATH || 'tauri-driver';
 const repoEdgeDriverPath = path.join(rootDir, isWindows ? 'msedgedriver.exe' : 'msedgedriver');
 const edgeDriverPath =
@@ -47,7 +47,8 @@ function ensureTauriAppBuilt() {
     return;
   }
 
-  run(tauriCliCommand, ['--yes', '@tauri-apps/cli@2', 'build', '--no-bundle', '--ci']);
+  process.env.VITE_TIDYDESK_E2E = '1';
+  run(tauriCliCommand, ['build', '--features', 'e2e-tests', '--no-bundle', '--ci']);
 }
 
 function ensureDriverHints() {
