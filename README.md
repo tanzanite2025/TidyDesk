@@ -18,20 +18,38 @@ TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React
 - 桌面容器：`Tauri 2`
 - 原生逻辑：`Rust`
 - 应用扫描 sidecar：`Go`
+- 桌面 smoke 测试：`tauri-driver` + `WebDriverIO`
 
 ## 目录结构
 
 ```text
 TidyDesk/
 ├─ src/                     React 前端
-├─ src-tauri/               Tauri / Rust 代码
+│  ├─ modules/              drawer / rail / handle / todos / notes / stickers
+│  ├─ native/               前端到 Tauri IPC 的 adapter
+│  ├─ services/             前端服务，例如 updater 状态管理
+│  └─ types/                共享 TypeScript 类型
+├─ src-tauri/               Tauri / Rust 后端
 │  ├─ src/
+│  │  ├─ commands/          IPC 命令分组
+│  │  ├─ files_rules/       文件分类、路径清洗、storage、shortcut、shell open
+│  │  └─ tool_windows/      Todo / App Picker / Snip / Sticker 窗口生命周期
 │  └─ tauri.conf.json
-├─ sidecars/apps-cache/     Go sidecar 源码
+├─ sidecars/apps-cache/     Go sidecar：RPC、cache、scan、classify
+├─ e2e-tests/               Tauri 窗口 smoke 测试
 ├─ scripts/                 构建与发布脚本
 ├─ build/                   图标等构建资源
-└─ docs/                    补充文档
+└─ docs/                    用户文档、开发说明、历史归档
 ```
+
+## 职责边界
+
+- `src/modules/*` 只负责 UI 和用户交互流程。
+- `src/native/*` 只负责把前端调用转成 Tauri command，不直接实现系统能力。
+- `src-tauri/src/commands/*` 是 IPC 边界；具体业务逻辑下沉到 `apps.rs`、`files.rs`、`todos.rs` 等领域文件。
+- `src-tauri/src/files_rules/*` 拆分文件分类、路径安全、托管 storage、Windows `.lnk` 和 shell open。
+- `src-tauri/src/tool_windows/*` 分别管理 Todo、App Picker、截图遮罩和贴纸窗口。
+- `sidecars/apps-cache/*` 只负责已安装应用扫描相关的 JSON-RPC、cache 和 shortcut metadata，不管理 UI 窗口。
 
 ## 本地开发
 
@@ -67,6 +85,13 @@ npm run tauri:dev
 ```bash
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
+go -C sidecars/apps-cache test ./...
+```
+
+如果只检查 sidecar：
+
+```bash
+npm run build:sidecar
 ```
 
 ## 打包发布
@@ -171,17 +196,25 @@ npm run tauri:release
 
 - 文件收纳默认优先创建快捷方式入口，而不是直接覆盖原始文件。
 - Rust 命令层对抽屉目录、恢复目录和托管存储目录做了路径边界校验。
+- 生产测试 IPC 被限定在 debug/test 场景，避免 release 包暴露测试能力。
+- updater 不允许通过普通运行时环境变量覆盖公钥；真正需要保密的是签名私钥，不是公钥。
 - `stickers`、`todos`、`quick notes` 的本地状态写入已经串行化，降低多窗口同时写入导致的数据覆盖风险。
 - 抽屉动画线程现在带有代际取消，避免旧动画继续改窗口位置。
 - sidecar 访问改为后台 worker 串行处理，并带超时与自动重启，避免坏进程长期把扫描功能拖死。
 - 生产包已启用显式 CSP，限制脚本、对象、frame 和跨源连接范围。
-- updater 使用公钥校验更新包签名；真正需要保密的是签名私钥，不是公钥。
+
+## 文档入口
+
+- [文档中心](docs/README.md)：当前用户文档、开发文档和历史归档入口。
+- [快速开始](docs/user/QUICK_START.md)：安装后如何使用抽屉、快捷方式、更新。
+- [自动更新指南](docs/user/AUTO_UPDATE_GUIDE.md)：Tauri updater 发布和排障。
+- [安全与结构审计](SECURITY_AND_STRUCTURE_AUDIT.md)：已处理的安全/结构问题和剩余建议。
 
 ## 当前已知限制
 
 - 快捷方式自动修复仍然是启发式能力，只会在“唯一候选”时自动执行，不能替代人工确认。
 - 当前已经补上 sidecar 超时/重启、“应用扫描 -> 导入抽屉”以及首批 Tauri 多窗口 smoke 自动化，但截图成图、恢复链路和更多异常路径还可以继续扩展。
-- 多窗口能力边界还可以继续细化到 Tauri capability 级别，后续仍值得补。
+- Tauri E2E 依赖 `tauri-driver` 和与本机 Edge 主版本匹配的 WebDriver，首次运行前需要单独准备。
 
 ## Tauri UI 自动化
 
@@ -237,11 +270,18 @@ npm run test:e2e:tauri
 
 ## 建议回归检查
 
-每次改动后，至少建议跑下面两条：
+每次改动后，至少建议跑：
 
 ```bash
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml apps::tests -- --nocapture
+go -C sidecars/apps-cache test ./...
+```
+
+涉及发布、updater、sidecar 或窗口行为时，再补充对应专项检查：
+
+```bash
+npm run build:sidecar
+npm run tauri:bundle
 npm run test:e2e:tauri
 ```
