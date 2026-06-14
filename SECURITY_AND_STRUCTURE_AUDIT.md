@@ -234,9 +234,9 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - 已拆为 `tool_windows/sticker.rs`
 - `tool_windows/mod.rs` 只保留公共导出
 
-#### `src-tauri/src/files_rules.rs`
+#### `src-tauri/src/files_rules/*`
 
-当前同时包含：
+原先由单个 `files_rules.rs` 同时包含：
 
 - 文件分类
 - 桌面保护项规则
@@ -246,13 +246,14 @@ TidyDesk 没有发现已提交的私钥、token 或明显的远程后端类漏�
 - Windows COM 快捷方式创建/解析
 - Shell 打开文件
 
-建议：
+已处理：
 
-- `files/names.rs`：命名与路径清洗
-- `files/storage.rs`：storage/import/restore
-- `files/classify.rs`：扩展名分类
-- `windows_shortcuts.rs`：COM shortcut 创建/解析
-- `shell_open.rs`：打开文件
+- 已拆为 `files_rules/names.rs`：命名与路径清洗
+- 已拆为 `files_rules/storage.rs`：storage 与抽屉快捷方式导入
+- 已拆为 `files_rules/classify.rs`：扩展名分类与文件元数据展示 helper
+- 已拆为 `files_rules/windows_shortcuts.rs`：COM shortcut 创建/解析
+- 已拆为 `files_rules/shell_open.rs`：打开文件
+- `files_rules/mod.rs` 只保留公共导出
 
 #### `sidecars/apps-cache/main.go`
 
