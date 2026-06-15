@@ -268,7 +268,7 @@ GitHub Release workflow 需要在仓库 Settings → Secrets and variables → A
 - [文档中心](docs/README.md)：当前用户文档、开发文档和历史归档入口。
 - [快速开始](docs/user/QUICK_START.md)：安装后如何使用抽屉、快捷方式、更新。
 - [自动更新指南](docs/user/AUTO_UPDATE_GUIDE.md)：Tauri updater 发布和排障。
-- [安全与结构审计](SECURITY_AND_STRUCTURE_AUDIT.md)：已处理的安全/结构问题和剩余建议。
+- [当前优化和 BUG 审计](docs/development/CURRENT_SOFTWARE_OPTIMIZATION_AND_BUG_AUDIT.md)：稳定性、性能和维护性优化建议。
 
 ## 当前已知限制
 

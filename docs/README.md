@@ -8,18 +8,17 @@
 
 1. [快速开始](./user/QUICK_START.md) - 安装后如何使用抽屉、快捷方式、更新。
 2. [自动更新指南](./user/AUTO_UPDATE_GUIDE.md) - 如何检查更新、发布签名更新包、排查更新失败。
-3. [从这里开始](./user/START_HERE.md) - 按用户/维护者/开发者角色选择文档入口。
 
 ### 开发者
 
 1. [主项目 README](../README.md) - 当前架构、目录职责、开发/构建/测试命令。
-2. [安全与结构审计](../SECURITY_AND_STRUCTURE_AUDIT.md) - 已完成的安全修复和结构拆分记录。
+2. [当前优化和 BUG 审计](./development/CURRENT_SOFTWARE_OPTIMIZATION_AND_BUG_AUDIT.md) - 稳定性、性能和维护性优化建议。
 3. [更新日志](../CHANGELOG.md) - 版本变化和历史功能记录。
 
 ### 发布维护
 
 - [自动更新指南](./user/AUTO_UPDATE_GUIDE.md)
-- [v3.4.1 发布说明](./releases/v3.4.1/RELEASE_NOTES.md)
+- [v3.4.1 历史发布说明](./releases/v3.4.1/RELEASE_NOTES.md) - 历史资料，可能包含 Electron 时代路径。
 - [历史发布文档](./archive/)
 
 ## 当前文档分区
@@ -35,7 +34,7 @@ docs/
 
 ## 已清理的过期内容
 
-- `docs/user/START_HERE.md` 已从早期“项目完成/首次发布”说明改为当前入口页。
+- 早期 `START_HERE.md` 不再作为入口；当前入口统一收敛到本页和快速开始。
 - `docs/user/AUTO_UPDATE_GUIDE.md` 已从 Electron updater 说明改为 Tauri updater 说明。
 - `docs/development/TAURI_POC.md` 已标记为历史 PoC，不再推荐使用旧 `tauri:poc:*` 命令。
 - `docs/development/GO_SIDECAR_POC.md` 已标记为历史 PoC；当前应用扫描以 Rust 后端实现为准。
