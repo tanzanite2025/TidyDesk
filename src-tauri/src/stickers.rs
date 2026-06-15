@@ -351,31 +351,72 @@ pub fn sticker_save_as(app: AppHandle, sticker_id: String) -> Result<Value, Stri
 #[tauri::command]
 pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String> {
     ensure_storage(&app)?;
-    let removed = mutate_sticker_state(&app, |state| {
-        let removed = state
-            .stickers
-            .iter()
-            .find(|item| item.id == sticker_id)
-            .cloned();
-        state.stickers.retain(|item| item.id != sticker_id);
-        Ok(removed)
-    })?;
+    let state = read_sticker_state(&app)?;
+    let sticker = state
+        .stickers
+        .iter()
+        .find(|item| item.id == sticker_id)
+        .cloned();
 
-    if let Some(window) =
-        app.get_webview_window(&crate::stickers_rules::sticker_window_label(&sticker_id))
-    {
-        window.close().map_err(|err| err.to_string())?;
+    let Some(sticker) = sticker else {
+        close_sticker_window_if_present(&app, &sticker_id)?;
+        return Ok(json!({ "success": true }));
+    };
+
+    close_sticker_window_if_present(&app, &sticker_id)?;
+
+    let image_path = PathBuf::from(&sticker.image_path);
+    let staged_delete_path = if image_path.exists() {
+        let delete_path = staged_sticker_delete_path(&image_path, &sticker_id);
+        fs::rename(&image_path, &delete_path)
+            .map_err(|err| format!("failed to stage sticker image deletion: {err}"))?;
+        Some(delete_path)
+    } else {
+        None
+    };
+
+    if let Err(err) = mutate_sticker_state(&app, |state| {
+        state.stickers.retain(|item| item.id != sticker_id);
+        Ok(())
+    }) {
+        if let Some(delete_path) = &staged_delete_path {
+            let _ = fs::rename(delete_path, &image_path);
+        }
+        let _ = crate::tool_windows::ensure_sticker_window(&app, &sticker);
+        return Err(err);
     }
 
-    if let Some(sticker) = removed {
-        let image_path = PathBuf::from(sticker.image_path);
-        if image_path.exists() {
-            fs::remove_file(&image_path)
-                .map_err(|err| format!("failed to delete sticker image: {err}"))?;
+    if let Some(delete_path) = staged_delete_path {
+        if let Err(err) = fs::remove_file(&delete_path) {
+            eprintln!(
+                "[TIDYDESK] Failed to remove staged sticker image {}: {err}",
+                delete_path.display()
+            );
         }
     }
 
     Ok(json!({ "success": true }))
+}
+
+fn close_sticker_window_if_present(app: &AppHandle, sticker_id: &str) -> Result<(), String> {
+    if let Some(window) =
+        app.get_webview_window(&crate::stickers_rules::sticker_window_label(sticker_id))
+    {
+        window.close().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn staged_sticker_delete_path(image_path: &Path, sticker_id: &str) -> PathBuf {
+    let file_name = image_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("sticker.png");
+    image_path.with_file_name(format!(
+        "{file_name}.{}.{}.deleting",
+        crate::stickers_rules::sanitize_sticker_id(sticker_id),
+        crate::timestamp_string()
+    ))
 }
 
 pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> {
