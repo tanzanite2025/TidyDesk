@@ -9,7 +9,13 @@ import React, {
 } from 'react';
 import { nativeClient } from '../native/native-client';
 import { DesktopHealthInfo, TidyFile, TidyFolder } from '../types/file';
-import type { FileIconResult, ImportExternalFilesResult, ImportSkippedReason, WindowAction } from '../types/tidydesk-api';
+import type {
+  FileIconRequest,
+  FileIconResult,
+  ImportExternalFilesResult,
+  ImportSkippedReason,
+  WindowAction
+} from '../types/tidydesk-api';
 import { calculateDesktopHealth, generateSimulatedFiles, proposeTidyActions } from '../utils/tidyEngine';
 
 interface WorkspaceContextType {
@@ -121,6 +127,22 @@ function mergeFileIcons(files: TidyFile[], icons: FileIconResult[]): TidyFile[] 
   });
 }
 
+const FILE_ICON_BATCH_SIZE = 100;
+
+async function loadFileIcons(files: TidyFile[]): Promise<FileIconResult[]> {
+  const requests: FileIconRequest[] = files.map(file => ({
+    id: file.id,
+    path: file.path,
+    targetPath: file.targetPath
+  }));
+  const results: FileIconResult[] = [];
+  for (let start = 0; start < requests.length; start += FILE_ICON_BATCH_SIZE) {
+    const batch = requests.slice(start, start + FILE_ICON_BATCH_SIZE);
+    results.push(...(await nativeClient.files.readIcons(batch)));
+  }
+  return results;
+}
+
 export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [files, setFiles] = useState<TidyFile[]>([]);
   const [folders, setFolders] = useState<TidyFolder[]>([]);
@@ -139,8 +161,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
         setFiles(nextFiles);
         setFolders(data.folders || []);
         setSelectedFileId(null);
-        void nativeClient.files
-          .readIcons(nextFiles.map(file => ({ id: file.id, path: file.path, targetPath: file.targetPath })))
+        void loadFileIcons(nextFiles)
           .then(icons => {
             setFiles(current => mergeFileIcons(current, icons));
           })
