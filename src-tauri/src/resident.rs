@@ -93,7 +93,7 @@ pub fn resident_update_settings(
         }
     }
 
-    let mut settings = read_resident_settings(&app);
+    let mut settings = load_resident_settings(&app)?;
     if let Some(launch_minimized) = payload.launch_minimized {
         settings.launch_minimized = launch_minimized;
     }
@@ -197,7 +197,7 @@ pub fn open_resident_settings(app: &AppHandle) -> Result<(), String> {
 }
 
 fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapshot, String> {
-    let settings = read_resident_settings(app);
+    let settings = load_resident_settings(app)?;
     let autostart_enabled = app
         .autolaunch()
         .is_enabled()
