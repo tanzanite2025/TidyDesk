@@ -71,7 +71,16 @@ pub fn todos_create_card(app: AppHandle, payload: CreateTodoCardPayload) -> Resu
         prepend_card_order(&mut index, &column_id, &card_id)?;
         index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
         write_todo_card_content_unlocked(&app, &card_id, &content)?;
-        write_todo_index_unlocked(&app, &index)?;
+        if let Err(err) = write_todo_index_unlocked(&app, &index) {
+            if let Err(remove_err) = fs::remove_file(todo_card_path(&app, &card_id)?) {
+                if remove_err.kind() != std::io::ErrorKind::NotFound {
+                    return Err(format!(
+                        "{err}; additionally failed to remove orphan todo card content: {remove_err}"
+                    ));
+                }
+            }
+            return Err(err);
+        }
         let counts = todo_counts(&index);
         let state = todo_state_from_index_unlocked(&app, &index, counts.clone())?;
         Ok((state, counts))
