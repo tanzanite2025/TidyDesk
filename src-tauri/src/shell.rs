@@ -74,18 +74,20 @@ pub fn apply_drawer_state(
         set_handle_always_on_top(app, false)?;
         animate_window_bounds(
             app.clone(),
-            DRAWER_WINDOW_LABEL,
-            drawer_start,
-            drawer_target,
-            false,
-            animation_generation,
-        );
-        animate_window_bounds(
-            app.clone(),
-            HANDLE_WINDOW_LABEL,
-            handle_from,
-            handle_to,
-            false,
+            vec![
+                WindowBoundsAnimation {
+                    label: DRAWER_WINDOW_LABEL,
+                    from: drawer_start,
+                    to: drawer_target,
+                    hide_after: false,
+                },
+                WindowBoundsAnimation {
+                    label: HANDLE_WINDOW_LABEL,
+                    from: handle_from,
+                    to: handle_to,
+                    hide_after: false,
+                },
+            ],
             animation_generation,
         );
         update_shell_state(app, shell, true, next_active_module)?;
@@ -93,28 +95,26 @@ pub fn apply_drawer_state(
         let drawer_from = drawer_window_bounds(app)?;
         let drawer_target = drawer_hidden_bounds(app, &drawer_from)?;
         apply_window_bounds(app, DRAWER_WINDOW_LABEL, drawer_from.clone())?;
+        let mut animations = Vec::new();
         if app.get_webview_window(DRAWER_WINDOW_LABEL).is_some() {
-            animate_window_bounds(
-                app.clone(),
-                DRAWER_WINDOW_LABEL,
-                drawer_from,
-                drawer_target,
-                true,
-                animation_generation,
-            );
+            animations.push(WindowBoundsAnimation {
+                label: DRAWER_WINDOW_LABEL,
+                from: drawer_from,
+                to: drawer_target,
+                hide_after: true,
+            });
         }
         if let Some(window) = app.get_webview_window(HANDLE_WINDOW_LABEL) {
             window.show().map_err(|err| err.to_string())?;
         }
         set_handle_always_on_top(app, true)?;
-        animate_window_bounds(
-            app.clone(),
-            HANDLE_WINDOW_LABEL,
-            handle_from,
-            handle_to,
-            false,
-            animation_generation,
-        );
+        animations.push(WindowBoundsAnimation {
+            label: HANDLE_WINDOW_LABEL,
+            from: handle_from,
+            to: handle_to,
+            hide_after: false,
+        });
+        animate_window_bounds(app.clone(), animations, animation_generation);
         let active_module = previous.active_module;
         let next_module = if active_module.as_deref() == Some("files") {
             None
@@ -399,15 +399,25 @@ fn interpolate_bounds(from: &ShellBounds, to: &ShellBounds, progress: f64) -> Sh
     }
 }
 
-fn animate_window_bounds(
-    app: AppHandle,
-    label: &str,
+#[derive(Clone)]
+struct WindowBoundsAnimation {
+    label: &'static str,
     from: ShellBounds,
     to: ShellBounds,
     hide_after: bool,
+}
+
+struct WindowBoundsAnimationFrame {
+    label: &'static str,
+    bounds: ShellBounds,
+    hide_after: bool,
+}
+
+fn animate_window_bounds(
+    app: AppHandle,
+    animations: Vec<WindowBoundsAnimation>,
     animation_generation: u64,
 ) {
-    let label = label.to_string();
     std::thread::spawn(move || {
         for step in 0..=DRAWER_ANIMATION_STEPS {
             if app
@@ -420,10 +430,16 @@ fn animate_window_bounds(
             }
 
             let progress = step as f64 / DRAWER_ANIMATION_STEPS as f64;
-            let bounds = interpolate_bounds(&from, &to, progress);
+            let frames = animations
+                .iter()
+                .map(|animation| WindowBoundsAnimationFrame {
+                    label: animation.label,
+                    bounds: interpolate_bounds(&animation.from, &animation.to, progress),
+                    hide_after: animation.hide_after,
+                })
+                .collect::<Vec<_>>();
             let app_handle = app.clone();
             let app_lookup = app_handle.clone();
-            let window_label = label.clone();
             let _ = app_handle.run_on_main_thread(move || {
                 if app_lookup
                     .state::<ShellState>()
@@ -434,11 +450,15 @@ fn animate_window_bounds(
                     return;
                 }
 
-                if let Some(window) = app_lookup.get_webview_window(&window_label) {
-                    let _ = window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
-                    let _ = window.set_size(PhysicalSize::new(bounds.width, bounds.height));
-                    if hide_after && step == DRAWER_ANIMATION_STEPS {
-                        let _ = window.hide();
+                for frame in frames {
+                    if let Some(window) = app_lookup.get_webview_window(frame.label) {
+                        let _ = window
+                            .set_position(PhysicalPosition::new(frame.bounds.x, frame.bounds.y));
+                        let _ = window
+                            .set_size(PhysicalSize::new(frame.bounds.width, frame.bounds.height));
+                        if frame.hide_after && step == DRAWER_ANIMATION_STEPS {
+                            let _ = window.hide();
+                        }
                     }
                 }
             });
