@@ -224,8 +224,20 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn load_resident_settings(app: &AppHandle) -> Result<ResidentSettings, String> {
     let path = settings_path(app)?;
     match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content)
-            .map_err(|err| format!("failed to parse resident settings: {err}")),
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(settings) => Ok(settings),
+            Err(err) => {
+                let backup_path =
+                    crate::persistence::backup_corrupt_file(&path, "resident settings")?;
+                eprintln!(
+                    "[TIDYDESK] Backed up corrupt resident settings to {}: {err}",
+                    backup_path.display()
+                );
+                let settings = ResidentSettings::default();
+                crate::persistence::atomic_write_json(&path, &settings, "resident settings")?;
+                Ok(settings)
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(ResidentSettings::default()),
         Err(err) => Err(format!("failed to read resident settings: {err}")),
     }
