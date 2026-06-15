@@ -23,6 +23,7 @@ pub struct DesktopFile {
     pub is_simulated: bool,
     pub parent_id: Option<String>,
     pub is_valid: Option<bool>,
+    pub is_managed: bool,
     pub target_path: Option<String>,
     pub icon: Option<String>,
 }
@@ -209,6 +210,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
 
     let desktop_path = PathBuf::from(desktop_path());
     let drawer_root = crate::drawer_root(&app)?;
+    let storage_root = file_storage_root(&app)?;
     let mut files = Vec::new();
     let mut folders = Vec::new();
     let mut file_counter = 0usize;
@@ -246,6 +248,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                 is_simulated: false,
                 parent_id: None,
                 is_valid: None,
+                is_managed: false,
                 target_path: None,
                 icon: None,
             });
@@ -296,6 +299,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
             let extension = file_extension(&entry_path);
             let mut display_name = entry_name.clone();
             let mut is_valid = None;
+            let mut is_managed = false;
             let mut target_path = None;
 
             if extension.eq_ignore_ascii_case(".lnk") {
@@ -313,6 +317,10 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                         .map(|value| Path::new(value).exists())
                         .unwrap_or(false),
                 );
+                is_managed = resolved
+                    .as_deref()
+                    .map(|value| crate::is_path_inside(Path::new(value), &storage_root))
+                    .unwrap_or(false);
                 target_path = resolved;
             }
 
@@ -331,6 +339,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                 is_simulated: false,
                 parent_id: Some(folder_id.clone()),
                 is_valid,
+                is_managed,
                 target_path,
                 icon: None,
             });

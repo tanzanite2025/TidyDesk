@@ -20,6 +20,7 @@ export interface TidyFile {
   parentId: string | null;
   realHandle?: FileSystemFileHandle;
   isValid?: boolean;
+  isManaged?: boolean;
   targetPath?: string;
   icon?: string;
 }
