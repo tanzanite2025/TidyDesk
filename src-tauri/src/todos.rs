@@ -127,13 +127,45 @@ pub fn todos_update_card(app: AppHandle, payload: UpdateTodoCardPayload) -> Resu
         if let Some(archived) = payload.archived {
             index["cards"][card_index]["archived"] = json!(archived);
         }
+        let content_path = if payload.content.is_some() {
+            Some(todo_card_path(&app, &payload.id)?)
+        } else {
+            None
+        };
+        let staged_content_path = if let Some(content_path) = &content_path {
+            stage_todo_card_content_delete(content_path, &payload.id)?
+        } else {
+            None
+        };
         if let Some(content) = payload.content {
-            write_todo_card_content_unlocked(&app, &payload.id, &content)?;
+            if let Err(err) = write_todo_card_content_unlocked(&app, &payload.id, &content) {
+                if let Some(content_path) = &content_path {
+                    let _ = rollback_todo_card_content_update(
+                        content_path,
+                        staged_content_path.as_deref(),
+                    );
+                }
+                return Err(err);
+            }
         }
 
         index["cards"][card_index]["updatedAt"] = json!(now.clone());
         index["boards"][0]["updatedAt"] = json!(now);
-        write_todo_index_unlocked(&app, &index)?;
+        if let Err(err) = write_todo_index_unlocked(&app, &index) {
+            if let Some(content_path) = &content_path {
+                if let Err(restore_err) =
+                    rollback_todo_card_content_update(content_path, staged_content_path.as_deref())
+                {
+                    return Err(format!(
+                        "{err}; additionally failed to restore todo card content: {restore_err}"
+                    ));
+                }
+            }
+            return Err(err);
+        }
+        if let Some(staged_path) = staged_content_path {
+            remove_staged_todo_card_content(&staged_path);
+        }
         let counts = todo_counts(&index);
         let state = todo_state_from_index_unlocked(&app, &index, counts.clone())?;
         Ok((state, counts))
@@ -161,12 +193,7 @@ pub fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value, Strin
             return Err(err);
         }
         if let Some(staged_path) = staged_content_path {
-            if let Err(err) = fs::remove_file(&staged_path) {
-                eprintln!(
-                    "[TIDYDESK] Failed to remove staged todo content {}: {err}",
-                    staged_path.display()
-                );
-            }
+            remove_staged_todo_card_content(&staged_path);
         }
         let counts = todo_counts(&index);
         let state = todo_state_from_index_unlocked(&app, &index, counts.clone())?;
@@ -237,6 +264,31 @@ fn stage_todo_card_content_delete(
         Ok(_) => Err("todo card content path is not a file".to_string()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(format!("failed to inspect todo card content: {err}")),
+    }
+}
+
+fn rollback_todo_card_content_update(
+    card_path: &Path,
+    staged_path: Option<&Path>,
+) -> Result<(), String> {
+    match fs::remove_file(card_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to remove new todo card content: {err}")),
+    }
+    if let Some(staged_path) = staged_path {
+        fs::rename(staged_path, card_path)
+            .map_err(|err| format!("failed to restore previous todo card content: {err}"))?;
+    }
+    Ok(())
+}
+
+fn remove_staged_todo_card_content(staged_path: &Path) {
+    if let Err(err) = fs::remove_file(staged_path) {
+        eprintln!(
+            "[TIDYDESK] Failed to remove staged todo content {}: {err}",
+            staged_path.display()
+        );
     }
 }
 
