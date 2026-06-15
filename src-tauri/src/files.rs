@@ -1,6 +1,7 @@
 use crate::files_rules::*;
 pub use crate::files_rules::{
-    desktop_path, file_storage_root, next_available_path, resolve_drawer_path, safe_drawer_name,
+    desktop_path, file_storage_root, move_path_with_fallback, next_available_path,
+    resolve_drawer_path, safe_drawer_name,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -579,8 +580,7 @@ pub fn files_restore_to_desktop(
         .file_name()
         .ok_or_else(|| "Invalid target file name".to_string())?;
     let destination = next_available_path(&desktop_path, file_name);
-    fs::rename(&target_path, &destination)
-        .map_err(|err| format!("failed to restore file to desktop: {err}"))?;
+    move_path_with_fallback(&target_path, &destination, "file to desktop")?;
     fs::remove_file(&shortcut_path).map_err(|err| format!("failed to remove shortcut: {err}"))?;
 
     if let Some(storage_dir) = target_path.parent() {
