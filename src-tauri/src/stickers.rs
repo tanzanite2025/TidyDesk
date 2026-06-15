@@ -194,8 +194,16 @@ pub async fn snip_complete_selection(
     let capture_result =
         tauri::async_runtime::spawn_blocking(move || capture_selection(&app_handle, payload)).await;
     finish_snip_capture(&app);
-    let result = capture_result.map_err(|err| err.to_string())??;
-    crate::shell::recover_shell_windows(&app)?;
+    let result = capture_result
+        .map_err(|err| err.to_string())
+        .and_then(|result| result);
+    if let Err(cleanup_err) = cleanup_after_snip_selection(&app) {
+        if result.is_ok() {
+            return Err(cleanup_err);
+        }
+        eprintln!("[TIDYDESK] Failed to clean up snip selection: {cleanup_err}");
+    }
+    let result = result?;
     Ok(json!({
         "success": true,
         "stickerId": result.sticker_id,
@@ -388,12 +396,23 @@ pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> 
         return Ok(None);
     };
 
-    let png = fs::read(&pending.image_path)
-        .map_err(|err| format!("failed to read pending sticker image: {err}"))?;
-    let _ = fs::remove_file(&pending.image_path);
-    let sticker_id = create_sticker_from_png(app, &png, pending.bounds)?;
-    notify_sticker_message(app, "截图已贴到桌面", "最近一次截图已经生成桌面贴纸。");
-    Ok(Some(sticker_id))
+    let result = (|| {
+        let png = fs::read(&pending.image_path)
+            .map_err(|err| format!("failed to read pending sticker image: {err}"))?;
+        create_sticker_from_png(app, &png, pending.bounds.clone())
+    })();
+
+    match result {
+        Ok(sticker_id) => {
+            remove_pending_file_if_current_slot_empty(app, &pending.image_path)?;
+            notify_sticker_message(app, "截图已贴到桌面", "最近一次截图已经生成桌面贴纸。");
+            Ok(Some(sticker_id))
+        }
+        Err(err) => {
+            restore_pending_sticker(app, pending)?;
+            Err(err)
+        }
+    }
 }
 
 fn create_sticker_from_png(
@@ -421,8 +440,42 @@ fn create_sticker_from_png(
         upsert_sticker(state, sticker.clone());
         Ok(())
     })?;
-    crate::tool_windows::ensure_sticker_window(app, &sticker)?;
+    if let Err(err) = crate::tool_windows::ensure_sticker_window(app, &sticker) {
+        let _ = mutate_sticker_state(app, |state| {
+            state.stickers.retain(|item| item.id != sticker_id);
+            Ok(())
+        });
+        let _ = fs::remove_file(&image_path);
+        return Err(err);
+    }
     Ok(sticker_id)
+}
+
+fn restore_pending_sticker(app: &AppHandle, pending_sticker: PendingSticker) -> Result<(), String> {
+    let state = app.state::<SnipCaptureState>();
+    let mut pending = state
+        .pending_sticker
+        .lock()
+        .map_err(|_| "failed to lock pending sticker".to_string())?;
+    if pending.is_none() {
+        *pending = Some(pending_sticker);
+    }
+    Ok(())
+}
+
+fn remove_pending_file_if_current_slot_empty(
+    app: &AppHandle,
+    image_path: &Path,
+) -> Result<(), String> {
+    let state = app.state::<SnipCaptureState>();
+    let pending = state
+        .pending_sticker
+        .lock()
+        .map_err(|_| "failed to lock pending sticker".to_string())?;
+    if pending.is_none() {
+        let _ = fs::remove_file(image_path);
+    }
+    Ok(())
 }
 
 fn save_pending_sticker(
@@ -532,6 +585,24 @@ fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
     }
     *error = None;
     Ok(())
+}
+
+fn cleanup_after_snip_selection(app: &AppHandle) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(err) = crate::tool_windows::close_snip_window(app) {
+        errors.push(err);
+    }
+    if let Err(err) = clear_frozen_background(app) {
+        errors.push(err);
+    }
+    if let Err(err) = crate::shell::recover_shell_windows(app) {
+        errors.push(err);
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 pub fn begin_snip_capture(app: &AppHandle) -> Result<(), String> {
