@@ -69,10 +69,14 @@ pub fn create_drawer_shortcut(
         .map_err(|err| format!("failed to create storage dir: {err}"))?;
     let storage_path = storage_dir.join(item_name);
 
-    if is_from_desktop {
-        move_path_with_fallback(source_path, &storage_path, "file to storage")?;
+    let storage_result = if is_from_desktop {
+        move_path_with_fallback(source_path, &storage_path, "file to storage")
     } else {
-        copy_path_verified(source_path, &storage_path, "file to storage")?;
+        copy_path_verified(source_path, &storage_path, "file to storage")
+    };
+    if let Err(err) = storage_result {
+        let _ = remove_empty_dir(&storage_dir);
+        return Err(err);
     }
 
     let shortcut_file_name = format!("{}.lnk", item_name.to_string_lossy());
@@ -83,6 +87,7 @@ pub fn create_drawer_shortcut(
         } else {
             let _ = remove_path(&storage_path);
         }
+        let _ = remove_empty_dir(&storage_dir);
         return Err(err);
     }
 
@@ -173,6 +178,15 @@ fn remove_path(path: &Path) -> std::io::Result<()> {
         Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
         Ok(_) => fs::remove_file(path),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn remove_empty_dir(path: &Path) -> std::io::Result<()> {
+    match fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
         Err(err) => Err(err),
     }
 }
