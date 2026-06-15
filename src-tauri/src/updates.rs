@@ -194,10 +194,30 @@ fn read_auto_update_check_state(app: &AppHandle) -> UpdateAutoCheckState {
     let Ok(path) = auto_update_check_state_path(app) else {
         return UpdateAutoCheckState::default();
     };
-    let Ok(contents) = fs::read_to_string(path) else {
+    let Ok(contents) = fs::read_to_string(&path) else {
         return UpdateAutoCheckState::default();
     };
-    serde_json::from_str(&contents).unwrap_or_default()
+    match serde_json::from_str(&contents) {
+        Ok(state) => state,
+        Err(err) => {
+            match crate::persistence::backup_corrupt_file(&path, "updater auto-check state") {
+                Ok(backup_path) => eprintln!(
+                    "[TIDYDESK] Backed up corrupt updater auto-check state to {}: {err}",
+                    backup_path.display()
+                ),
+                Err(backup_err) => eprintln!(
+                    "[TIDYDESK] Failed to back up corrupt updater auto-check state: {backup_err}"
+                ),
+            }
+            let state = UpdateAutoCheckState::default();
+            if let Err(write_err) =
+                crate::persistence::atomic_write_json(&path, &state, "updater auto-check state")
+            {
+                eprintln!("[TIDYDESK] Failed to rewrite updater auto-check state: {write_err}");
+            }
+            state
+        }
+    }
 }
 
 fn should_run_auto_update_check(app: &AppHandle) -> bool {
