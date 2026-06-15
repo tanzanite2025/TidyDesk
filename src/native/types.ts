@@ -7,6 +7,11 @@ import type {
   DesktopFilesResult,
   DeleteItemPayload,
   DrawerStatePayload,
+  HotkeyBindingUpdatePayload,
+  HotkeyBindingValidationPayload,
+  HotkeySettings,
+  HotkeyUpdateResult,
+  HotkeyValidationResult,
   ImportExternalFilesResult,
   ImportExternalFilesPayload,
   InstalledAppsResult,
@@ -115,6 +120,13 @@ export interface NativeResidentClient {
   onOpenSettings: (callback: () => void) => (() => void) | undefined;
 }
 
+export interface NativeHotkeysClient {
+  getSettings: () => Promise<HotkeySettings>;
+  validateBinding: (payload: HotkeyBindingValidationPayload) => Promise<HotkeyValidationResult>;
+  updateBinding: (payload: HotkeyBindingUpdatePayload) => Promise<HotkeyUpdateResult>;
+  resetDefaults: () => Promise<HotkeyUpdateResult>;
+}
+
 export interface NativeClipboardClient {
   readText: () => Promise<string>;
 }
@@ -159,6 +171,7 @@ export interface NativeClient {
   windows: NativeWindowsClient;
   toolWindows: NativeToolWindowsClient;
   resident: NativeResidentClient;
+  hotkeys: NativeHotkeysClient;
   clipboard: NativeClipboardClient;
   capture: NativeCaptureClient;
   stickers: NativeStickersClient;

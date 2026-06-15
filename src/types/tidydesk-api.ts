@@ -161,6 +161,52 @@ export interface ResidentSettingsUpdate {
   autoStickAfterSnip?: boolean;
 }
 
+export type HotkeyAction = 'paste_pending_sticker';
+
+export type HotkeyRegistrationStatus = 'registered' | 'conflict' | 'disabled' | 'unset';
+
+export interface HotkeyBinding {
+  action: HotkeyAction;
+  label: string;
+  accelerator: string | null;
+  displayAccelerator: string | null;
+  enabled: boolean;
+  status: HotkeyRegistrationStatus;
+  statusMessage: string | null;
+}
+
+export interface HotkeySettings {
+  version: number;
+  bindings: HotkeyBinding[];
+}
+
+export interface HotkeyBindingUpdatePayload {
+  action: HotkeyAction;
+  accelerator: string | null;
+  enabled: boolean;
+}
+
+export interface HotkeyBindingValidationPayload {
+  action: HotkeyAction;
+  accelerator: string | null;
+  enabled: boolean;
+}
+
+export interface HotkeyValidationResult {
+  valid: boolean;
+  reason: string | null;
+  message: string;
+  normalizedAccelerator: string | null;
+  displayAccelerator: string | null;
+}
+
+export interface HotkeyUpdateResult {
+  success: boolean;
+  reason: string | null;
+  message: string;
+  settings: HotkeySettings;
+}
+
 export interface AppPickerTargetResult {
   targetFolder: string | null;
 }
