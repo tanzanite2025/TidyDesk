@@ -35,7 +35,6 @@ export interface DesktopFilesResult {
 export interface FileIconRequest {
   id: string;
   path: string;
-  targetPath?: string | null;
 }
 
 export interface FileIconResult {

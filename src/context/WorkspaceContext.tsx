@@ -132,8 +132,7 @@ const FILE_ICON_BATCH_SIZE = 100;
 async function loadFileIcons(files: TidyFile[]): Promise<FileIconResult[]> {
   const requests: FileIconRequest[] = files.map(file => ({
     id: file.id,
-    path: file.path,
-    targetPath: file.targetPath
+    path: file.path
   }));
   const results: FileIconResult[] = [];
   for (let start = 0; start < requests.length; start += FILE_ICON_BATCH_SIZE) {
