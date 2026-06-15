@@ -15,6 +15,11 @@ import type {
   CaptureOpenedPayload,
   DesktopFilesResult,
   DrawerStatePayload,
+  HotkeyBindingUpdatePayload,
+  HotkeyBindingValidationPayload,
+  HotkeySettings,
+  HotkeyUpdateResult,
+  HotkeyValidationResult,
   AppIconsUpdatedPayload,
   ImportExternalFilesResult,
   InstalledApp,
@@ -249,6 +254,14 @@ export function createTauriNativeClient(): NativeClient {
       hideHandle: () => invoke('resident_hide_handle'),
       openSettings: () => invoke('resident_open_settings'),
       onOpenSettings: callback => onTauriEvent<void>('open-settings-panel', callback)
+    },
+    hotkeys: {
+      getSettings: () => invoke<HotkeySettings>('hotkeys_get_settings'),
+      validateBinding: (payload: HotkeyBindingValidationPayload) =>
+        invoke<HotkeyValidationResult>('hotkeys_validate_binding', { payload }),
+      updateBinding: (payload: HotkeyBindingUpdatePayload) =>
+        invoke<HotkeyUpdateResult>('hotkeys_update_binding', { payload }),
+      resetDefaults: () => invoke<HotkeyUpdateResult>('hotkeys_reset_defaults')
     },
     clipboard: {
       readText: () => invoke<string>('clipboard_read_text')

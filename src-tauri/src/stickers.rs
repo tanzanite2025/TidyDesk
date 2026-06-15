@@ -10,7 +10,6 @@ use std::sync::{
 };
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 
 pub use crate::stickers_rules::{
@@ -18,8 +17,6 @@ pub use crate::stickers_rules::{
     SnipRectPayload, StickerDataPayload, StickerPinResultPayload, StickerRecord,
     StickerUpdatedPayload, StickerWindowBounds,
 };
-
-const PASTE_PENDING_STICKER_SHORTCUT: &str = "ctrl+alt+v";
 
 #[derive(Debug, Default)]
 pub struct StickerStoreState(pub Mutex<()>);
@@ -59,26 +56,7 @@ fn pending_sticker_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("pending-sticker.png"))
 }
 
-pub fn register_sticker_shortcuts(app: &AppHandle) {
-    clear_pending_sticker_cache(app);
-    let result = app.global_shortcut().on_shortcut(
-        PASTE_PENDING_STICKER_SHORTCUT,
-        |app, _shortcut, event| {
-            if event.state == ShortcutState::Pressed {
-                if let Err(err) = paste_pending_sticker(app) {
-                    eprintln!("[TIDYDESK] Failed to paste pending sticker: {err}");
-                    notify_sticker_message(app, "截图贴纸失败", &err);
-                }
-            }
-        },
-    );
-
-    if let Err(err) = result {
-        eprintln!("[TIDYDESK] Failed to register sticker paste shortcut: {err}");
-    }
-}
-
-fn clear_pending_sticker_cache(app: &AppHandle) {
+pub(crate) fn clear_pending_sticker_cache(app: &AppHandle) {
     if let Ok(path) = pending_sticker_path(app) {
         let _ = fs::remove_file(path);
     }
@@ -95,7 +73,7 @@ fn clear_pending_sticker_cache(app: &AppHandle) {
     }
 }
 
-fn notify_sticker_message(app: &AppHandle, title: &str, body: &str) {
+pub(crate) fn notify_sticker_message(app: &AppHandle, title: &str, body: &str) {
     if let Err(err) = app
         .notification()
         .builder()
@@ -405,7 +383,7 @@ pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> 
         notify_sticker_message(
             app,
             "没有待贴截图",
-            "先框选截图，再按 Ctrl+Alt+V 贴到桌面。",
+            "先框选截图，再按设置中的贴图快捷键贴到桌面。",
         );
         return Ok(None);
     };

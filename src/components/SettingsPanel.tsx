@@ -2,8 +2,9 @@
 import { X, Download, RefreshCw, Check, AlertCircle } from 'lucide-react';
 import { useUpdateManager } from '../services/updates/use-update-manager';
 import { nativeClient } from '../native/native-client';
-import type { ResidentSettings, ResidentSettingsUpdate } from '../types/tidydesk-api';
+import type { HotkeySettings, ResidentSettings, ResidentSettingsUpdate } from '../types/tidydesk-api';
 import type { UpdateSnapshot } from '../types/update';
+import { HotkeySettingsDialog } from './HotkeySettingsDialog';
 
 interface SettingsPanelProps {
   onClose: () => void;
@@ -25,6 +26,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
   const [residentSettings, setResidentSettings] = React.useState<ResidentSettings | null>(null);
   const [residentError, setResidentError] = React.useState('');
   const [isSavingResident, setIsSavingResident] = React.useState(false);
+  const [showHotkeySettings, setShowHotkeySettings] = React.useState(false);
+  const [pasteHotkeyDisplay, setPasteHotkeyDisplay] = React.useState('Ctrl+Alt+V');
   // 获取应用版本
   // 监听更新状态
   const {
@@ -50,6 +53,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
         setResidentError(`驻留设置加载失败: ${err instanceof Error ? err.message : String(err)}`);
       });
   }, []);
+
+  const applyHotkeySettings = React.useCallback((settings: HotkeySettings) => {
+    const binding = settings.bindings.find(item => item.action === 'paste_pending_sticker');
+    setPasteHotkeyDisplay(binding?.displayAccelerator || '未设置');
+  }, []);
+
+  React.useEffect(() => {
+    if (!nativeClient.isAvailable()) return;
+    nativeClient.hotkeys
+      .getSettings()
+      .then(applyHotkeySettings)
+      .catch(() => {});
+  }, [applyHotkeySettings]);
 
   const updateResidentSettings = async (payload: ResidentSettingsUpdate) => {
     setIsSavingResident(true);
@@ -80,6 +96,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      {showHotkeySettings && (
+        <HotkeySettingsDialog
+          onClose={() => setShowHotkeySettings(false)}
+          onSaved={applyHotkeySettings}
+        />
+      )}
       <div className="max-h-[90vh] w-[480px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#11131c]/95 shadow-2xl">
         {/* 头部 */}
         <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
@@ -129,7 +151,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 <div>
                   <div className="text-[12px] font-semibold text-slate-100">截完图立即贴到桌面</div>
                   <div className="mt-0.5 text-[11px] text-slate-500">
-                    默认关闭；关闭后按 Ctrl+Alt+V 才会把最近截图贴到桌面
+                    默认关闭；关闭后按设置的贴图快捷键把最近截图贴到桌面
                   </div>
                 </div>
                 <button
@@ -146,8 +168,17 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
                 </button>
               </div>
 
-              <div className="rounded-lg border border-white/[0.08] bg-slate-950/35 px-3 py-2 text-[11px] text-slate-400">
-                贴图快捷键：<span className="font-semibold text-slate-200">Ctrl+Alt+V</span>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.08] bg-slate-950/35 px-3 py-2 text-[11px] text-slate-400">
+                <div>
+                  贴图快捷键：<span className="font-semibold text-slate-200">{pasteHotkeyDisplay}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHotkeySettings(true)}
+                  className="rounded-md border border-white/[0.08] px-2 py-1 text-slate-300 hover:bg-white/[0.08] hover:text-slate-100"
+                >
+                  修改快捷键
+                </button>
               </div>
             </div>
           </div>

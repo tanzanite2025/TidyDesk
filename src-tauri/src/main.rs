@@ -13,6 +13,7 @@ mod apps_classifier;
 mod commands;
 mod files;
 mod files_rules;
+mod hotkeys;
 mod icons;
 mod paths;
 mod persistence;
@@ -46,6 +47,10 @@ use commands::windows::windows_control;
 use files::{
     drawers_create, drawers_delete_item, drawers_rename_item, files_import_external_files,
     files_open, files_read_desktop_files, files_restore_to_desktop,
+};
+use hotkeys::{
+    hotkeys_get_settings, hotkeys_reset_defaults, hotkeys_update_binding, hotkeys_validate_binding,
+    HotkeyRuntimeState,
 };
 use icons::extract_icon_data_url;
 use quick_notes::{
@@ -130,6 +135,10 @@ macro_rules! tidydesk_generate_handler {
             resident_show_handle,
             resident_hide_handle,
             resident_open_settings,
+            hotkeys_get_settings,
+            hotkeys_validate_binding,
+            hotkeys_update_binding,
+            hotkeys_reset_defaults,
             open_todo_window,
             close_todo_window,
             open_app_picker,
@@ -187,6 +196,10 @@ macro_rules! tidydesk_generate_handler {
             resident_show_handle,
             resident_hide_handle,
             resident_open_settings,
+            hotkeys_get_settings,
+            hotkeys_validate_binding,
+            hotkeys_update_binding,
+            hotkeys_reset_defaults,
             open_todo_window,
             close_todo_window,
             open_app_picker,
@@ -218,6 +231,7 @@ fn main() {
         .manage(TodoStoreState::default())
         .manage(QuickNotesStoreState::default())
         .manage(UpdaterSessionState::default())
+        .manage(HotkeyRuntimeState::default())
         .setup(|app| {
             let show_handle =
                 MenuItem::with_id(app, "show_handle", "显示桌面把手", true, None::<&str>)?;
@@ -267,7 +281,7 @@ fn main() {
                     std::time::Duration::from_secs(15),
                 );
             }
-            stickers::register_sticker_shortcuts(&handle);
+            hotkeys::register_configured_hotkeys(&handle);
             let _ = ensure_handle_window(&handle);
             if let Ok(bounds) = handle_window_bounds(&handle, false) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);
