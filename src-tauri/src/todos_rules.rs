@@ -240,17 +240,18 @@ pub fn todo_state_from_index_unlocked(
 ) -> Result<Value, String> {
     let cards = index["cards"]
         .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .iter()
-        .map(|card| {
-            let mut next = card.clone();
-            let card_id = next["id"].as_str().unwrap_or_default().to_string();
-            next["content"] =
-                json!(read_todo_card_content_unlocked(app, &card_id).unwrap_or_default());
-            next
+        .map(|cards| {
+            cards
+                .iter()
+                .map(|card| {
+                    let mut next = card.clone();
+                    let card_id = next["id"].as_str().unwrap_or_default().to_string();
+                    next["content"] = json!(read_todo_card_content_unlocked(app, &card_id)?);
+                    Ok(next)
+                })
+                .collect::<Result<Vec<_>, String>>()
         })
-        .collect::<Vec<_>>();
+        .unwrap_or_else(|| Ok(Vec::new()))?;
     Ok(json!({
         "activeBoardId": index["activeBoardId"],
         "boards": index["boards"],
@@ -263,7 +264,7 @@ pub fn todo_counts(index: &Value) -> Value {
     let mut total = 0;
     let mut open = 0;
     let mut done = 0;
-    for card in index["cards"].as_array().unwrap_or(&Vec::new()) {
+    for card in index["cards"].as_array().into_iter().flatten() {
         if card["archived"].as_bool().unwrap_or(false) {
             continue;
         }
