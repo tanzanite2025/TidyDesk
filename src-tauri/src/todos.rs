@@ -1,5 +1,6 @@
 use serde_json::{json, Value};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -143,12 +144,21 @@ pub fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value, Strin
         remove_card_from_orders(&mut index, &card_id)?;
         index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
         let card_path = todo_card_path(&app, &card_id)?;
-        if let Err(err) = fs::remove_file(card_path) {
-            if err.kind() != std::io::ErrorKind::NotFound {
-                return Err(format!("failed to delete todo card content: {err}"));
+        let staged_content_path = stage_todo_card_content_delete(&card_path, &card_id)?;
+        if let Err(err) = write_todo_index_unlocked(&app, &index) {
+            if let Some(staged_path) = &staged_content_path {
+                let _ = fs::rename(staged_path, &card_path);
+            }
+            return Err(err);
+        }
+        if let Some(staged_path) = staged_content_path {
+            if let Err(err) = fs::remove_file(&staged_path) {
+                eprintln!(
+                    "[TIDYDESK] Failed to remove staged todo content {}: {err}",
+                    staged_path.display()
+                );
             }
         }
-        write_todo_index_unlocked(&app, &index)?;
         let counts = todo_counts(&index);
         let state = todo_state_from_index_unlocked(&app, &index, counts.clone())?;
         Ok((state, counts))
@@ -202,4 +212,46 @@ fn emit_todo_counts(app: &AppHandle, counts: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn stage_todo_card_content_delete(
+    card_path: &Path,
+    card_id: &str,
+) -> Result<Option<PathBuf>, String> {
+    match fs::metadata(card_path) {
+        Ok(metadata) if metadata.is_file() => {
+            let staged_path = staged_todo_card_delete_path(card_path, card_id);
+            fs::rename(card_path, &staged_path)
+                .map_err(|err| format!("failed to stage todo card content deletion: {err}"))?;
+            Ok(Some(staged_path))
+        }
+        Ok(_) => Err("todo card content path is not a file".to_string()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("failed to inspect todo card content: {err}")),
+    }
+}
+
+fn staged_todo_card_delete_path(card_path: &Path, card_id: &str) -> PathBuf {
+    let file_name = card_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("todo-card.md");
+    card_path.with_file_name(format!(
+        "{file_name}.{}.{}.deleting",
+        safe_todo_card_delete_suffix(card_id),
+        crate::timestamp_string()
+    ))
+}
+
+fn safe_todo_card_delete_suffix(card_id: &str) -> String {
+    card_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
