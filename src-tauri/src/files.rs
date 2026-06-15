@@ -140,9 +140,33 @@ pub struct ImportedFileResult {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub enum ImportSkippedReason {
+    Missing,
+    AlreadyInDrawer,
+    Protected,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSkippedFileResult {
+    pub source: String,
+    pub reason: ImportSkippedReason,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFailedFileResult {
+    pub source: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportExternalFilesResult {
     pub success: bool,
     pub added: Vec<ImportedFileResult>,
+    pub skipped: Vec<ImportSkippedFileResult>,
+    pub failed: Vec<ImportFailedFileResult>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,48 +457,81 @@ pub fn files_import_external_files(
     if payload.file_paths.len() > 100 {
         return Err("Too many files (max 100 per batch)".to_string());
     }
-    for file_path in &payload.file_paths {
-        if file_path.trim().is_empty() || file_path.len() > 260 {
-            return Err("Invalid file path".to_string());
-        }
-    }
-
     crate::prepare_drawer_storage(&app)?;
     let target_dir = resolve_drawer_path(&app, payload.target_folder.as_deref().unwrap_or(""))?;
     fs::create_dir_all(&target_dir).map_err(|err| format!("failed to create drawer: {err}"))?;
     let drawer_root = crate::drawer_root(&app)?;
     let mut added = Vec::new();
+    let mut skipped = Vec::new();
+    let mut failed = Vec::new();
 
     for file_path in payload.file_paths {
-        let source_path = PathBuf::from(file_path);
-        if !source_path.exists() {
-            continue;
-        }
-        let resolved_source = source_path
-            .canonicalize()
-            .map_err(|err| format!("failed to resolve source path: {err}"))?;
-        if crate::is_path_inside(&resolved_source, &drawer_root) {
-            continue;
-        }
-        let source_name = resolved_source
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| "Invalid source file name".to_string())?;
-        if is_protected_desktop_item(source_name) {
+        if file_path.trim().is_empty() || file_path.len() > 260 {
+            failed.push(ImportFailedFileResult {
+                source: file_path,
+                error: "Invalid file path".to_string(),
+            });
             continue;
         }
 
-        let shortcut = create_drawer_shortcut(&app, &resolved_source, &target_dir)?;
-        added.push(ImportedFileResult {
-            source: resolved_source.display().to_string(),
-            shortcut: shortcut.display().to_string(),
-            mode: "shortcut".to_string(),
-        });
+        let source_path = PathBuf::from(file_path);
+        if !source_path.exists() {
+            skipped.push(ImportSkippedFileResult {
+                source: source_path.display().to_string(),
+                reason: ImportSkippedReason::Missing,
+            });
+            continue;
+        }
+        let resolved_source = match source_path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                failed.push(ImportFailedFileResult {
+                    source: source_path.display().to_string(),
+                    error: format!("failed to resolve source path: {err}"),
+                });
+                continue;
+            }
+        };
+        if crate::is_path_inside(&resolved_source, &drawer_root) {
+            skipped.push(ImportSkippedFileResult {
+                source: resolved_source.display().to_string(),
+                reason: ImportSkippedReason::AlreadyInDrawer,
+            });
+            continue;
+        }
+        let Some(source_name) = resolved_source.file_name().and_then(|value| value.to_str()) else {
+            failed.push(ImportFailedFileResult {
+                source: resolved_source.display().to_string(),
+                error: "Invalid source file name".to_string(),
+            });
+            continue;
+        };
+        if is_protected_desktop_item(source_name) {
+            skipped.push(ImportSkippedFileResult {
+                source: resolved_source.display().to_string(),
+                reason: ImportSkippedReason::Protected,
+            });
+            continue;
+        }
+
+        match create_drawer_shortcut(&app, &resolved_source, &target_dir) {
+            Ok(shortcut) => added.push(ImportedFileResult {
+                source: resolved_source.display().to_string(),
+                shortcut: shortcut.display().to_string(),
+                mode: "shortcut".to_string(),
+            }),
+            Err(err) => failed.push(ImportFailedFileResult {
+                source: resolved_source.display().to_string(),
+                error: err,
+            }),
+        }
     }
 
     Ok(ImportExternalFilesResult {
-        success: true,
+        success: failed.is_empty(),
         added,
+        skipped,
+        failed,
     })
 }
 

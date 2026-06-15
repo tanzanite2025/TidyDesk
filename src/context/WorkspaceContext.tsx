@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import { nativeClient } from '../native/native-client';
 import { DesktopHealthInfo, TidyFile, TidyFolder } from '../types/file';
-import type { ImportExternalFilesResult, WindowAction } from '../types/tidydesk-api';
+import type { ImportExternalFilesResult, ImportSkippedReason, WindowAction } from '../types/tidydesk-api';
 import { calculateDesktopHealth, generateSimulatedFiles, proposeTidyActions } from '../utils/tidyEngine';
 
 interface WorkspaceContextType {
@@ -26,7 +26,7 @@ interface WorkspaceContextType {
   renameItem: (id: string, type: 'file' | 'folder', newName: string) => Promise<void>;
   moveFileToDrawer: (fileId: string, folderId: string | null) => Promise<void>;
   executeSmartTidy: (rule: 'category' | 'date' | 'temp') => Promise<{ success: number; failed: number; errors: string[] }>;
-  importExternalFiles: (filePaths: string[], folderId: string | null) => Promise<void>;
+  importExternalFiles: (filePaths: string[], folderId: string | null) => Promise<ImportExternalFilesResult | null>;
   openFile: (filePath: string) => Promise<void>;
   clearError: () => void;
   windowControl: (action: WindowAction) => void;
@@ -72,6 +72,36 @@ function fileExtensionFromName(fileName: string): string {
 
   const lastDot = fileName.lastIndexOf('.');
   return lastDot > 0 ? fileName.slice(lastDot) : '';
+}
+
+function importSkippedReasonLabel(reason: ImportSkippedReason): string {
+  switch (reason) {
+    case 'missing':
+      return '源文件不存在';
+    case 'alreadyInDrawer':
+      return '已在抽屉内';
+    case 'protected':
+      return '受保护项目';
+    default:
+      return '已跳过';
+  }
+}
+
+function fileNameFromPath(filePath: string): string {
+  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
+}
+
+function appendImportResultErrors(results: { failed: number; errors: string[] }, importResult: ImportExternalFilesResult) {
+  const skipped = importResult.skipped || [];
+  const failed = importResult.failed || [];
+
+  results.failed += skipped.length + failed.length;
+  for (const item of skipped) {
+    results.errors.push(`${fileNameFromPath(item.source)}: ${importSkippedReasonLabel(item.reason)}`);
+  }
+  for (const item of failed) {
+    results.errors.push(`${fileNameFromPath(item.source)}: ${item.error}`);
+  }
 }
 
 export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
@@ -240,25 +270,36 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const importExternalFiles = async (filePaths: string[], folderId: string | null) => {
-    if (filePaths.length === 0) return;
+    if (filePaths.length === 0) return null;
 
     if (nativeClient.isAvailable()) {
       try {
-        await nativeClient.files.importExternalFiles({
+        const result = await nativeClient.files.importExternalFiles({
           filePaths,
           targetFolder: drawerNameFromId(folders, folderId)
         });
         await refreshDesktop();
+        return result;
       } catch (err: unknown) {
         setError(`Failed to import files: ${err instanceof Error ? err.message : String(err)}`);
       }
-      return;
+      return null;
     }
 
-    if (!folderId) return;
+    if (!folderId) return null;
     setFiles(prev => prev.map(file => (
       filePaths.includes(file.path) ? { ...file, parentId: folderId } : file
     )));
+    return {
+      success: true,
+      added: filePaths.map(filePath => ({
+        source: filePath,
+        shortcut: filePath,
+        mode: 'simulated'
+      })),
+      skipped: [],
+      failed: []
+    };
   };
 
   const moveFileToDrawer = async (fileId: string, folderId: string | null) => {
@@ -305,7 +346,8 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
             const addedCount = Array.isArray(importResult.added) ? importResult.added.length : 0;
 
             results.success += addedCount;
-            if (addedCount < batch.length) {
+            appendImportResultErrors(results, importResult);
+            if (!importResult.skipped && !importResult.failed && addedCount < batch.length) {
               results.failed += batch.length - addedCount;
             }
           }
@@ -349,7 +391,8 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
 
     if (results.failed > 0) {
-      setError(`Smart tidy finished with ${results.success} success(es) and ${results.failed} failure(s).`);
+      const details = results.errors.slice(0, 3).join('；');
+      setError(`Smart tidy finished with ${results.success} success(es) and ${results.failed} failure(s).${details ? ` ${details}` : ''}`);
     }
 
     if (shouldRefreshDesktop && results.success > 0) {
