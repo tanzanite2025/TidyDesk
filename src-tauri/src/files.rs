@@ -188,7 +188,6 @@ pub struct RestoreToDesktopResult {
 pub struct FileIconRequest {
     pub id: String,
     pub path: String,
-    pub target_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -371,12 +370,7 @@ pub fn files_read_icons(
             continue;
         }
 
-        let icon_path = file
-            .target_path
-            .as_deref()
-            .map(PathBuf::from)
-            .filter(|path| path.exists())
-            .unwrap_or(entry_path);
+        let icon_path = icon_source_path_for_entry(&entry_path);
 
         icons.push(FileIconResult {
             id: file.id,
@@ -385,6 +379,24 @@ pub fn files_read_icons(
     }
 
     Ok(icons)
+}
+
+fn icon_source_path_for_entry(entry_path: &Path) -> PathBuf {
+    if entry_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("lnk"))
+        == Some(true)
+    {
+        if let Ok(Some(target)) = crate::resolve_shortcut_target(&entry_path.display().to_string())
+        {
+            let target_path = PathBuf::from(target);
+            if target_path.exists() {
+                return target_path;
+            }
+        }
+    }
+    entry_path.to_path_buf()
 }
 
 #[tauri::command]
