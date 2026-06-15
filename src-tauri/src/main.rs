@@ -46,7 +46,7 @@ use commands::tests::{
 use commands::windows::windows_control;
 use files::{
     drawers_create, drawers_delete_item, drawers_rename_item, files_import_external_files,
-    files_open, files_read_desktop_files, files_restore_to_desktop,
+    files_open, files_read_desktop_files, files_read_icons, files_restore_to_desktop,
 };
 use hotkeys::{
     hotkeys_get_settings, hotkeys_reset_defaults, hotkeys_update_binding, hotkeys_validate_binding,
@@ -90,6 +90,7 @@ macro_rules! tidydesk_generate_handler {
             apps_refresh_installed,
             apps_add_to_drawer,
             files_read_desktop_files,
+            files_read_icons,
             files_open,
             files_import_external_files,
             files_restore_to_desktop,
@@ -156,6 +157,7 @@ macro_rules! tidydesk_generate_handler {
             apps_refresh_installed,
             apps_add_to_drawer,
             files_read_desktop_files,
+            files_read_icons,
             files_open,
             files_import_external_files,
             files_restore_to_desktop,
