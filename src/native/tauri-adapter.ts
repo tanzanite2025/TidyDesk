@@ -15,6 +15,8 @@ import type {
   CaptureOpenedPayload,
   DesktopFilesResult,
   DrawerStatePayload,
+  FileIconRequest,
+  FileIconResult,
   HotkeyBindingUpdatePayload,
   HotkeyBindingValidationPayload,
   HotkeySettings,
@@ -176,6 +178,8 @@ export function createTauriNativeClient(): NativeClient {
     isAvailable: isTauriRuntime,
     files: {
       readDesktopFiles: async () => normalizeDesktopFilesResult(await invoke<DesktopFilesResult>('files_read_desktop_files')),
+      readIcons: (files: FileIconRequest[]) =>
+        invoke<FileIconResult[]>('files_read_icons', { payload: { files } }),
       importExternalFiles: payload => invoke<ImportExternalFilesResult>('files_import_external_files', { payload }),
       open: filePath => invoke('files_open', { payload: { filePath } }),
       restoreToDesktop: payload => invoke<RestoreToDesktopResult>('files_restore_to_desktop', { payload })

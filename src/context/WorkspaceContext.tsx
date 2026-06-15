@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import { nativeClient } from '../native/native-client';
 import { DesktopHealthInfo, TidyFile, TidyFolder } from '../types/file';
-import type { ImportExternalFilesResult, ImportSkippedReason, WindowAction } from '../types/tidydesk-api';
+import type { FileIconResult, ImportExternalFilesResult, ImportSkippedReason, WindowAction } from '../types/tidydesk-api';
 import { calculateDesktopHealth, generateSimulatedFiles, proposeTidyActions } from '../utils/tidyEngine';
 
 interface WorkspaceContextType {
@@ -104,6 +104,23 @@ function appendImportResultErrors(results: { failed: number; errors: string[] },
   }
 }
 
+function mergeFileIcons(files: TidyFile[], icons: FileIconResult[]): TidyFile[] {
+  if (icons.length === 0) {
+    return files;
+  }
+
+  const iconsById = new Map(icons.map(item => [item.id, item.icon || undefined]));
+  return files.map(file => {
+    if (!iconsById.has(file.id)) {
+      return file;
+    }
+    return {
+      ...file,
+      icon: iconsById.get(file.id)
+    };
+  });
+}
+
 export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [files, setFiles] = useState<TidyFile[]>([]);
   const [folders, setFolders] = useState<TidyFolder[]>([]);
@@ -118,9 +135,16 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     if (nativeClient.isAvailable()) {
       try {
         const data = await nativeClient.files.readDesktopFiles();
-        setFiles(data.files || []);
+        const nextFiles = data.files || [];
+        setFiles(nextFiles);
         setFolders(data.folders || []);
         setSelectedFileId(null);
+        void nativeClient.files
+          .readIcons(nextFiles.map(file => ({ id: file.id, path: file.path, targetPath: file.targetPath })))
+          .then(icons => {
+            setFiles(current => mergeFileIcons(current, icons));
+          })
+          .catch(() => {});
       } catch (err: unknown) {
         setError(`Failed to scan drawers: ${err instanceof Error ? err.message : String(err)}`);
       } finally {

@@ -7,6 +7,8 @@ import type {
   DesktopFilesResult,
   DeleteItemPayload,
   DrawerStatePayload,
+  FileIconRequest,
+  FileIconResult,
   HotkeyBindingUpdatePayload,
   HotkeyBindingValidationPayload,
   HotkeySettings,
@@ -51,6 +53,7 @@ import type {
 
 export interface NativeFilesClient {
   readDesktopFiles: () => Promise<DesktopFilesResult>;
+  readIcons: (files: FileIconRequest[]) => Promise<FileIconResult[]>;
   importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
   open: (filePath: string) => Promise<unknown>;
   restoreToDesktop: (payload: RestoreToDesktopPayload) => Promise<RestoreToDesktopResult>;

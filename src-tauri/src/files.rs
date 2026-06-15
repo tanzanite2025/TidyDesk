@@ -183,6 +183,27 @@ pub struct RestoreToDesktopResult {
     pub restored_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIconRequest {
+    pub id: String,
+    pub path: String,
+    pub target_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIconBatchPayload {
+    pub files: Vec<FileIconRequest>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileIconResult {
+    pub id: String,
+    pub icon: Option<String>,
+}
+
 #[tauri::command]
 pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, String> {
     crate::prepare_drawer_storage(&app)?;
@@ -227,7 +248,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                 parent_id: None,
                 is_valid: None,
                 target_path: None,
-                icon: crate::extract_icon_data_url(&path),
+                icon: None,
             });
         }
     }
@@ -296,12 +317,6 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                 target_path = resolved;
             }
 
-            let icon_source_path = target_path
-                .as_ref()
-                .map(PathBuf::from)
-                .filter(|value| value.exists())
-                .unwrap_or_else(|| entry_path.clone());
-
             file_counter += 1;
             files.push(DesktopFile {
                 id: format!(
@@ -318,7 +333,7 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
                 parent_id: Some(folder_id.clone()),
                 is_valid,
                 target_path,
-                icon: crate::extract_icon_data_url(&icon_source_path),
+                icon: None,
             });
         }
     }
@@ -329,6 +344,47 @@ pub fn files_read_desktop_files(app: AppHandle) -> Result<DesktopFilesResult, St
         desktop_path: desktop_path.display().to_string(),
         tidy_box_path: drawer_root.display().to_string(),
     })
+}
+
+#[tauri::command]
+pub fn files_read_icons(
+    app: AppHandle,
+    payload: FileIconBatchPayload,
+) -> Result<Vec<FileIconResult>, String> {
+    if payload.files.len() > 100 {
+        return Err("Too many icons requested (max 100 per batch)".to_string());
+    }
+
+    let drawer_root = crate::drawer_root(&app)?;
+    let desktop_path = PathBuf::from(desktop_path());
+    let mut icons = Vec::new();
+
+    for file in payload.files {
+        if file.id.trim().is_empty() || file.path.trim().is_empty() {
+            continue;
+        }
+
+        let entry_path = PathBuf::from(&file.path);
+        if !crate::is_path_inside(&entry_path, &drawer_root)
+            && !crate::is_path_inside(&entry_path, &desktop_path)
+        {
+            continue;
+        }
+
+        let icon_path = file
+            .target_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+            .unwrap_or(entry_path);
+
+        icons.push(FileIconResult {
+            id: file.id,
+            icon: crate::extract_icon_data_url(&icon_path),
+        });
+    }
+
+    Ok(icons)
 }
 
 #[tauri::command]

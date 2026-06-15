@@ -32,6 +32,17 @@ export interface DesktopFilesResult {
   tidyBoxPath?: string;
 }
 
+export interface FileIconRequest {
+  id: string;
+  path: string;
+  targetPath?: string | null;
+}
+
+export interface FileIconResult {
+  id: string;
+  icon?: string | null;
+}
+
 export interface RenameItemPayload {
   oldName: string;
   newName: string;
@@ -294,6 +305,7 @@ export interface UpdateStatusPayload {
 
 export interface TidyDeskAPI {
   readDesktopFiles: () => Promise<DesktopFilesResult>;
+  readIcons: (payload: { files: FileIconRequest[] }) => Promise<FileIconResult[]>;
   createDrawer: (name: string) => Promise<unknown>;
   renameItem: (payload: RenameItemPayload) => Promise<unknown>;
   deleteItem: (payload: DeleteItemPayload) => Promise<unknown>;
