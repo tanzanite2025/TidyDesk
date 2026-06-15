@@ -199,7 +199,6 @@ pub fn ensure_drawer_window(app: &AppHandle) -> Result<(), String> {
             .inner_size(bounds.width as f64, bounds.height as f64)
             .resizable(false)
             .visible(false)
-            .visible(false)
             .decorations(false)
             .transparent(true)
             .shadow(false)

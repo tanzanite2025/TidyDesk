@@ -180,6 +180,14 @@ pub fn normalize_todo_index(index: Value) -> Value {
                 .as_str()
                 .filter(|value| column_ids.contains(&value.to_string()))
                 .unwrap_or("todo");
+            let created_at = card["createdAt"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(crate::timestamp_string);
+            let updated_at = card["updatedAt"]
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(crate::timestamp_string);
             card_ids.insert(id.to_string());
             cards.push(json!({
                 "id": id,
@@ -188,8 +196,8 @@ pub fn normalize_todo_index(index: Value) -> Value {
                 "title": safe_todo_title(card["title"].as_str().unwrap_or("未命名待办"), "未命名待办"),
                 "tags": card["tags"].as_array().cloned().unwrap_or_default(),
                 "archived": card["archived"].as_bool().unwrap_or(false),
-                "createdAt": card["createdAt"].as_str().unwrap_or_else(|| crate::timestamp_string().leak()),
-                "updatedAt": card["updatedAt"].as_str().unwrap_or_else(|| crate::timestamp_string().leak()),
+                "createdAt": created_at,
+                "updatedAt": updated_at,
             }));
         }
     }
