@@ -41,6 +41,7 @@ export const DrawerApp: React.FC = () => {
     notice,
     setNotice,
     error,
+    setError,
     isDrawerExpanded,
     renamingDrawerId,
     setRenamingDrawerId,
@@ -374,7 +375,7 @@ export const DrawerApp: React.FC = () => {
                             onOpen={() => openFile(file.path)}
                             onDelete={() => {
                               if (file.isManaged) {
-                                alert(`"${file.name}" 已由 TidyDesk 收纳。请先点击还原按钮移回桌面，再删除快捷入口。`);
+                                setError(`"${file.name}" 已由 TidyDesk 收纳。请先点击还原按钮移回桌面，再删除快捷入口。`);
                                 return;
                               }
                               if (confirm(`删除快捷入口 "${file.name}"？原文件不会被删除。`)) deleteItem(file.id, 'file');
