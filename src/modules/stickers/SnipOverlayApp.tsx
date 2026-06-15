@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nativeClient } from '../../native/native-client';
 
 type Point = { x: number; y: number };
@@ -58,6 +58,9 @@ export const SnipOverlayApp: React.FC = () => {
   const [cursorPoint, setCursorPoint] = useState<Point>(centerPoint);
   const [bgImage, setBgImage] = useState<string | null>(null);
   const [bgError, setBgError] = useState<string | null>(null);
+  const pointerFrameRef = useRef<number | null>(null);
+  const pendingPointRef = useRef<Point | null>(null);
+  const pendingEndPointRef = useRef(false);
 
   const cancelSnip = () => {
     if (!nativeClient.isAvailable()) return;
@@ -69,13 +72,43 @@ export const SnipOverlayApp: React.FC = () => {
     return rectFromPoints(startPoint, endPoint);
   }, [startPoint, endPoint]);
 
+  const cancelPendingPointerFrame = useCallback(() => {
+    if (pointerFrameRef.current !== null) {
+      window.cancelAnimationFrame(pointerFrameRef.current);
+      pointerFrameRef.current = null;
+    }
+    pendingPointRef.current = null;
+    pendingEndPointRef.current = false;
+  }, []);
+
+  const schedulePointerUpdate = useCallback((point: Point, updateEndPoint: boolean) => {
+    pendingPointRef.current = point;
+    pendingEndPointRef.current = updateEndPoint;
+    if (pointerFrameRef.current !== null) return;
+
+    pointerFrameRef.current = window.requestAnimationFrame(() => {
+      pointerFrameRef.current = null;
+      const nextPoint = pendingPointRef.current;
+      const shouldUpdateEndPoint = pendingEndPointRef.current;
+      pendingPointRef.current = null;
+      pendingEndPointRef.current = false;
+      if (!nextPoint) return;
+      setCursorPoint(nextPoint);
+      if (shouldUpdateEndPoint) {
+        setEndPoint(nextPoint);
+      }
+    });
+  }, []);
+
   const clearSelection = () => {
+    cancelPendingPointerFrame();
     setIsDragging(false);
     setStartPoint(null);
     setEndPoint(null);
   };
 
   const resetOverlay = useCallback(() => {
+    cancelPendingPointerFrame();
     setIsDragging(false);
     setIsCapturing(false);
     setStartPoint(null);
@@ -83,7 +116,7 @@ export const SnipOverlayApp: React.FC = () => {
     setCursorPoint(centerPoint());
     setBgImage(null);
     setBgError(null);
-  }, []);
+  }, [cancelPendingPointerFrame]);
 
   const loadBackgroundImage = useCallback(() => {
     nativeClient.capture.getBackgroundImage().then(result => {
@@ -145,6 +178,8 @@ export const SnipOverlayApp: React.FC = () => {
       unlisten?.();
     };
   }, [loadBackgroundImage, resetOverlay]);
+
+  useEffect(() => cancelPendingPointerFrame, [cancelPendingPointerFrame]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -230,6 +265,7 @@ export const SnipOverlayApp: React.FC = () => {
           cancelSnip();
           return;
         }
+        cancelPendingPointerFrame();
         const point = { x: event.clientX, y: event.clientY };
         setCursorPoint(point);
         setIsDragging(true);
@@ -238,12 +274,11 @@ export const SnipOverlayApp: React.FC = () => {
       }}
       onMouseMove={event => {
         const point = { x: event.clientX, y: event.clientY };
-        setCursorPoint(point);
-        if (!startPoint || !isDragging || isCapturing) return;
-        setEndPoint(point);
+        schedulePointerUpdate(point, Boolean(startPoint && isDragging && !isCapturing));
       }}
       onMouseUp={event => {
         if (!startPoint || !isDragging || isCapturing) return;
+        cancelPendingPointerFrame();
         const point = { x: event.clientX, y: event.clientY };
         setCursorPoint(point);
         setIsDragging(false);

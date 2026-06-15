@@ -1,4 +1,7 @@
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WebviewWindowBuilder,
     WindowEvent,
@@ -58,12 +61,55 @@ pub fn ensure_sticker_window(
     Ok(())
 }
 
+struct BoundsPersistDebounce {
+    sequence: u64,
+    running: bool,
+}
+
 fn register_sticker_window_lifecycle(window: &WebviewWindow, app: AppHandle, sticker_id: String) {
+    let debounce = Arc::new(Mutex::new(BoundsPersistDebounce {
+        sequence: 0,
+        running: false,
+    }));
     window.on_window_event(move |event| match event {
         WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-            let _ = persist_sticker_window_bounds(&app, &sticker_id);
+            schedule_sticker_bounds_persist(&app, &sticker_id, &debounce);
         }
         _ => {}
+    });
+}
+
+fn schedule_sticker_bounds_persist(
+    app: &AppHandle,
+    sticker_id: &str,
+    debounce: &Arc<Mutex<BoundsPersistDebounce>>,
+) {
+    let Ok(mut state) = debounce.lock() else {
+        return;
+    };
+    state.sequence += 1;
+    if state.running {
+        return;
+    }
+    state.running = true;
+    let mut observed_sequence = state.sequence;
+    drop(state);
+
+    let app = app.clone();
+    let sticker_id = sticker_id.to_string();
+    let debounce = debounce.clone();
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(180));
+        let Ok(mut state) = debounce.lock() else {
+            return;
+        };
+        if state.sequence == observed_sequence {
+            state.running = false;
+            drop(state);
+            let _ = persist_sticker_window_bounds(&app, &sticker_id);
+            return;
+        }
+        observed_sequence = state.sequence;
     });
 }
 
