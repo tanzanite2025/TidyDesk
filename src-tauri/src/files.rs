@@ -579,8 +579,21 @@ pub fn files_restore_to_desktop(
         .file_name()
         .ok_or_else(|| "Invalid target file name".to_string())?;
     let destination = next_available_path(&desktop_path, file_name);
-    move_path_with_fallback(&target_path, &destination, "file to desktop")?;
-    fs::remove_file(&shortcut_path).map_err(|err| format!("failed to remove shortcut: {err}"))?;
+    let staged_shortcut_path = stage_restore_shortcut_delete(&shortcut_path)?;
+    if let Err(err) = move_path_with_fallback(&target_path, &destination, "file to desktop") {
+        if let Err(restore_err) = fs::rename(&staged_shortcut_path, &shortcut_path) {
+            return Err(format!(
+                "{err}; additionally failed to restore shortcut: {restore_err}"
+            ));
+        }
+        return Err(err);
+    }
+    if let Err(err) = fs::remove_file(&staged_shortcut_path) {
+        eprintln!(
+            "[TIDYDESK] Failed to remove staged restore shortcut {}: {err}",
+            staged_shortcut_path.display()
+        );
+    }
 
     if let Some(storage_dir) = target_path.parent() {
         if storage_dir != storage_root {
@@ -597,4 +610,22 @@ pub fn files_restore_to_desktop(
         success: true,
         restored_path: destination.display().to_string(),
     })
+}
+
+fn stage_restore_shortcut_delete(shortcut_path: &Path) -> Result<PathBuf, String> {
+    let staged_path = staged_restore_shortcut_delete_path(shortcut_path);
+    fs::rename(shortcut_path, &staged_path)
+        .map_err(|err| format!("failed to stage shortcut deletion: {err}"))?;
+    Ok(staged_path)
+}
+
+fn staged_restore_shortcut_delete_path(shortcut_path: &Path) -> PathBuf {
+    let file_name = shortcut_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("shortcut.lnk");
+    shortcut_path.with_file_name(format!(
+        "{file_name}.restore.{}.deleting",
+        crate::timestamp_string()
+    ))
 }
