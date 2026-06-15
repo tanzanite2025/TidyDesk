@@ -54,9 +54,23 @@ export interface ImportedFileResult {
   mode: string;
 }
 
+export type ImportSkippedReason = 'missing' | 'alreadyInDrawer' | 'protected';
+
+export interface ImportSkippedFileResult {
+  source: string;
+  reason: ImportSkippedReason;
+}
+
+export interface ImportFailedFileResult {
+  source: string;
+  error: string;
+}
+
 export interface ImportExternalFilesResult {
   success: boolean;
   added: ImportedFileResult[];
+  skipped: ImportSkippedFileResult[];
+  failed: ImportFailedFileResult[];
 }
 
 export interface RestoreToDesktopPayload {
