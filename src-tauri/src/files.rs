@@ -368,8 +368,7 @@ pub fn drawers_rename_item(
                 .file_name()
                 .ok_or_else(|| "Invalid rename target".to_string())?,
         );
-        fs::rename(&old_path, target_path)
-            .map_err(|err| format!("failed to rename item: {err}"))?;
+        move_path_with_fallback(&old_path, &target_path, "drawer item rename")?;
         return Ok(json!({ "success": true }));
     }
 
@@ -386,7 +385,7 @@ pub fn drawers_rename_item(
         return Err("A drawer with this name already exists".to_string());
     }
 
-    fs::rename(old_path, new_path).map_err(|err| format!("failed to rename drawer: {err}"))?;
+    move_path_with_fallback(&old_path, &new_path, "drawer rename")?;
     Ok(json!({ "success": true }))
 }
 
