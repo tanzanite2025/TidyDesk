@@ -18,7 +18,7 @@ TidyDesk 使用 `tauri-plugin-updater`：
 
 ```text
 src-tauri/tauri.conf.json                  updater endpoint、公钥、bundle 配置
-src-tauri/src/updates.rs                   Rust updater command
+src-tauri/src/updates/                     Rust updater 配置、状态快照、调度与命令
 src/services/updates/use-update-manager.ts 前端更新状态管理
 scripts/run-tauri-build.cjs                Tauri build 包装脚本
 scripts/generate-tauri-latest-json.cjs     latest.json 生成脚本
@@ -74,11 +74,13 @@ npm run tauri:manifest
 npm run tauri:release
 ```
 
-4. 在 GitHub Releases 发布以下产物：
+4. 在 GitHub Releases 发布以下产物（若设置了 `CARGO_BUILD_TARGET` / `TAURI_TARGET_TRIPLE`，则位于 `src-tauri/target/<triple>/release/bundle/nsis/`）：
 
 - `src-tauri/target/release/bundle/nsis/*.exe`
 - `src-tauri/target/release/bundle/nsis/*.exe.sig`
 - `release-tauri/latest.json`
+
+说明：若仅需在本机验证未签名 NSIS 安装包构建而不配签名私钥，可直接执行 `npx tauri build`。
 
 `latest.json` 中的下载地址必须能访问到同一个 release 下的安装包。
 
@@ -87,15 +89,15 @@ npm run tauri:release
 推荐用 tag 触发发布：
 
 ```bash
-git tag v3.0.2
-git push origin v3.0.2
+git tag -a v3.5.0 -m "TidyDesk v3.5.0"
+git push origin v3.5.0
 ```
 
 `.github/workflows/release.yml` 会执行：
 
 1. 校验 tag、`package.json` 和 `src-tauri/Cargo.toml` 版本一致。
-2. 安装 Node、Rust GNU toolchain 和 MinGW。
-3. 运行 `npm run check`。
+2. 安装 Node 22 与 Rust MSVC 工具链（`stable-x86_64-pc-windows-msvc`）。
+3. 运行 `npm run check` 与 `cargo test --manifest-path src-tauri/Cargo.toml`。
 4. 运行 `npm run tauri:release` 生成 `.exe`、`.exe.sig` 和 `latest.json`。
 5. 上传产物到对应 GitHub Release，并标记为 latest。
 
@@ -171,4 +173,4 @@ npm run tauri:manifest
 - release 包应来自受控构建环境。
 - updater 公钥变更需要同步更新 `src-tauri/tauri.conf.json` 并重新发布客户端。
 
-**最后更新**: 2026-06-14
+**最后更新**: 2026-11-19

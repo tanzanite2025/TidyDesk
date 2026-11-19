@@ -24,15 +24,27 @@ TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React
 ```text
 TidyDesk/
 ├─ src/                     React 前端
-│  ├─ modules/              drawer / rail / handle / todos / notes / stickers
+│  ├─ components/           通用设置、热键弹窗等组件（settings/*）
+│  ├─ context/              Workspace / Todo 全局状态
+│  ├─ modules/              drawer / rail / handle / todos / notes / stickers / apps
 │  ├─ native/               前端到 Tauri IPC 的 adapter
-│  ├─ services/             前端服务，例如 updater 状态管理
+│  ├─ services/             前端服务（updater、workspace 等）
 │  └─ types/                共享 TypeScript 类型
 ├─ src-tauri/               Tauri / Rust 后端
 │  ├─ src/
-│  │  ├─ commands/          IPC 命令分组
+│  │  ├─ apps_classifier/   已安装应用扫描、分类与缓存
+│  │  ├─ asset_protocol.rs  tidydesk-asset:// 受控只读资产协议（截图内存/图标/贴纸）
+│  │  ├─ capture/           GDI 截屏捕获、显示器快照与 snip 遮罩流程
+│  │  ├─ commands/          IPC 命令分组与 E2E 测试命令桥
+│  │  ├─ files/             桌面与抽屉扫描、图标、导入、还原与抽屉 CRUD
 │  │  ├─ files_rules/       文件分类、路径清洗、storage、shortcut、shell open
-│  │  └─ tool_windows/      Todo / App Picker / Snip / Sticker 窗口生命周期
+│  │  ├─ hotkeys/           热键解析、持久化、冲突检测与全局注册
+│  │  ├─ shell/             把手/抽屉窗口状态、布局与生命周期
+│  │  ├─ shortcuts/         快捷方式监听与启发式修复
+│  │  ├─ stickers/          贴纸持久化模型与 Win32 WS_EX_LAYERED 原生窗口渲染
+│  │  ├─ todos/             待办看板与卡片 Markdown 存储（保留未知扩展字段）
+│  │  ├─ tool_windows/      Todo / App Picker / Snip 窗口生命周期
+│  │  └─ updates/           自动更新配置、状态快照与每日调度
 │  └─ tauri.conf.json
 ├─ e2e-tests/               Tauri 窗口 smoke 测试
 ├─ scripts/                 构建与发布脚本
@@ -42,11 +54,12 @@ TidyDesk/
 
 ## 职责边界
 
-- `src/modules/*` 只负责 UI 和用户交互流程。
+- `src/modules/*` 与 `src/components/*` 只负责 UI 和用户交互流程。
 - `src/native/*` 只负责把前端调用转成 Tauri command，不直接实现系统能力。
-- `src-tauri/src/commands/*` 是 IPC 边界；具体业务逻辑下沉到 `apps.rs`、`files.rs`、`todos.rs` 等领域文件。
+- `src-tauri/src/commands/*` 是跨领域命令入口；具体业务逻辑按领域内聚到 `apps*`、`files/`、`todos/`、`hotkeys/`、`shortcuts/`、`capture/`、`stickers/`、`updates/`、`shell/` 模块。
 - `src-tauri/src/files_rules/*` 拆分文件分类、路径安全、托管 storage、Windows `.lnk` 和 shell open。
-- `src-tauri/src/tool_windows/*` 分别管理 Todo、App Picker、截图遮罩和贴纸窗口。
+- `src-tauri/src/stickers/native_window.rs` 通过单一 Win32 后台 UI 线程 + `WS_EX_LAYERED` 原生分层窗口承载全部桌面贴纸，不再为单张贴纸启动独立 WebView2 进程。
+- `src-tauri/src/tool_windows/*` 管理 Todo、App Picker、截图遮罩（Snip）工具窗口生命周期。
 - `src-tauri/src/apps*.rs` 负责已安装应用扫描、cache、分类和导入抽屉，不再依赖额外 sidecar 进程。
 
 ## 本地开发
@@ -66,8 +79,8 @@ npm --prefix C:\path\to\TidyDesk run dev
 ### 环境要求
 
 - `Node.js 18+`
-- `Rust` / `cargo`，并安装 GNU target：`rustup toolchain install stable-x86_64-pc-windows-gnu`
-- `MinGW`，用于 Windows GNU target 的资源编译和链接
+- `Rust` / `cargo`（默认使用 Windows MSVC 工具链：`stable-x86_64-pc-windows-msvc`）
+- `Microsoft Visual Studio C++ Build Tools`（提供 Windows SDK 与 MSVC 链接器）
 - `Windows 10/11`
 
 ### 安装依赖
@@ -127,7 +140,8 @@ npm run check
 
 ```powershell
 npm run build
-cargo +stable-x86_64-pc-windows-gnu check --manifest-path src-tauri/Cargo.toml
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
 ### 常见报错
@@ -137,8 +151,7 @@ cargo +stable-x86_64-pc-windows-gnu check --manifest-path src-tauri/Cargo.toml
 | `Could not read package.json` | 当前终端不在仓库根目录 | 先 `cd C:\path\to\TidyDesk`，或使用 `npm --prefix C:\path\to\TidyDesk run dev` |
 | `Port 3000 is already in use` | 上一次 Vite/Tauri dev 进程还在运行 | 关闭旧终端或结束占用 3000 端口的 node 进程后重试 |
 | 浏览器页面里出现 Tauri/IPC/window 相关错误 | 启动的是纯前端 `dev:web`，不是桌面应用 | 用 `npm run dev` |
-| `cargo check` target triple 不匹配 | 直接跑了底层 cargo 命令，未带 Windows GNU target | 用 `npm run check:rust` |
-| GNU target / MinGW / `windres` 相关错误 | Rust GNU target 或 MinGW 未装好 | 确认已安装 `stable-x86_64-pc-windows-gnu` 和 MinGW；在 Devin 环境中使用已配置好的 `npm run check:rust` |
+| `link.exe` 缺失或 MSVC 链接失败 | 未安装 Visual Studio C++ Build Tools 或 `stable-x86_64-pc-windows-msvc` | 安装 C++ Build Tools 并确认 `rustup default stable-x86_64-pc-windows-msvc` |
 
 ## 打包发布
 
@@ -238,9 +251,11 @@ GitHub Release workflow 需要在仓库 Settings → Secrets and variables → A
 
 ### 主要产物路径
 
-- 安装包：`src-tauri/target/release/bundle/nsis/*.exe`
+- 主程序可执行文件：`src-tauri/target/release/tidydesk.exe`
+- NSIS 安装包：`src-tauri/target/release/bundle/nsis/*.exe`（若显式指定了 `CARGO_BUILD_TARGET` / `TAURI_TARGET_TRIPLE`，则位于 `src-tauri/target/<triple>/release/bundle/nsis/*.exe`）
 - 安装包签名：`src-tauri/target/release/bundle/nsis/*.exe.sig`
-- updater manifest：`release-tauri/latest.json`
+- updater manifest：`release-tauri/latest.json`（可通过 `TIDYDESK_UPDATER_MANIFEST_DIR` 修改目录）
+- 若仅需本地验证打包、未配置签名私钥，可直接运行 `npx tauri build` 生成未签名安装包。
 
 ## 数据存储
 
@@ -259,9 +274,10 @@ GitHub Release workflow 需要在仓库 Settings → Secrets and variables → A
 - 生产测试 IPC 被限定在 debug/test 场景，避免 release 包暴露测试能力。
 - updater 不允许通过普通运行时环境变量覆盖公钥；真正需要保密的是签名私钥，不是公钥。
 - `stickers`、`todos`、`quick notes` 的本地状态写入已经串行化，降低多窗口同时写入导致的数据覆盖风险。
-- 抽屉动画线程现在带有代际取消，避免旧动画继续改窗口位置。
+- 抽屉展开/收起改由纯 CSS GPU 动画配合代际取消实现，移除了高频窗口位置重绘线程。
 - 应用扫描已内聚到 Rust 后端，避免 sidecar 进程/RPC/target triple 复制带来的额外失败点。
-- 生产包已启用显式 CSP，限制脚本、对象、frame 和跨源连接范围。
+- 应用内截图背景与图标加载统一收敛到 `tidydesk-asset://` 受控只读自定义协议（内存直出截图 + 磁盘缓存图标 URL），并启用显式 CSP 限制脚本、对象、frame 和跨源连接范围。
+- 桌面贴纸采用单一 Win32 后台线程 + `WS_EX_LAYERED` 原生分层窗口，避免多贴纸场景下 WebView2 进程与内存线性膨胀。
 
 ## 文档入口
 

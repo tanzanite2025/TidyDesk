@@ -10,9 +10,32 @@
 ### 计划中
 - 云同步功能
 - 主题系统（浅色/深色/自动）
-- 自定义快捷键
 - 文件搜索功能
 - 导出/导入配置
+- Todo 卡片拍照 / 富媒体附件任务支持
+
+---
+
+## [3.5.0] - 2026-11-19
+
+### ⚡ 性能与底层架构升级
+- **启动与渲染性能重构**：
+  - 将静态 `bootstrap` 隐藏窗口替换为按需 `handle` 窗口，并在 `main.tsx` 与 `App.tsx` 中补齐无用模式早退守卫。
+  - 移除 `index.html` 与 `tailwind.config.js` 对 Google Fonts 的阻塞外链，统一改用本地字体栈。
+  - 将抽屉展开/收起由 16ms 跨线程调整窗口位置/尺寸重绘改为纯 CSS GPU 动画配合 160ms 延迟隐藏。
+  - 将重型 Tauri 文件/抽屉/待办/快捷方式/截图指令全部迁移至 `async` + `spawn_blocking` 异步执行，消除 UI 线程阻塞。
+  - 在 `persistence.rs` 提供零冗余全目录扫描的 `atomic_write_text_fast`，并在 Todos / Quick Notes 修复读盘时无意义的写回。
+  - 应用分类扫描升级缓存格式，直接持久化 `targetPath` 并复用 COM `ShortcutResolver`；桌面/应用图标加入 `app_cache_dir/icons/` 磁盘 PNG 缓存与快速 PNG 编码。
+- **自定义受控资源协议 `tidydesk-asset://`**：
+  - 新增 `src-tauri/src/asset_protocol.rs` 与严格白名单路由（`snip/current`、`icons/<32hex>.png`、`stickers/<safe_id>.png`），拦截路径穿越与越权访问。
+  - 截图冻结背景直接由内存 `Arc<Vec<u8>>` 输出，免除截图前写删临时盘文件；图标全面改走协议 URL，显著减少 IPC Base64 传输与前端堆内存。
+- **Win32 原生分层窗口（`WS_EX_LAYERED`）贴纸**：
+  - 新增 `src-tauri/src/stickers/native_window.rs`，以单一后台 Win32 UI 线程 + `UpdateLayeredWindow` 渲染全部桌面贴纸，彻底消除多贴纸 WebView2 进程内存线性膨胀。
+  - 支持原生边框拖拽缩放、左键整体拖动、防抖落盘位置尺寸，以及右键原生菜单（置顶、复制图片、另存为、关闭）。
+- **代码模块化拆分与兼容加固**：
+  - 将 Rust 后端大文件按领域拆分为 `updates/`、`files/`、`hotkeys/`、`shortcuts/`、`capture/`、`stickers/`、`shell/`、`todos/`；前端拆分 `WorkspaceContext`、`SettingsPanel`、`DrawerApp`、`SnipOverlayApp`、`AppPickerApp`，并清理废弃的 Electron 时代契约文件。
+  - 加固 `todos/model.rs` 的 `normalize_todo_index`，保留未知扩展字段与高版本 `version`，为后续 Trello 式拍照/附件功能铺平数据结构边界。
+  - 将 `package.json` 与 `.github/workflows/release.yml` 统一适配至默认 Windows MSVC 工具链并对齐发版目录解析。
 
 ---
 
