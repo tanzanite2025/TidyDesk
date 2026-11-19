@@ -12,8 +12,9 @@
 ### 开发者
 
 1. [主项目 README](../README.md) - 当前架构、目录职责、开发/构建/测试命令。
-2. [当前优化和 BUG 审计](./development/CURRENT_SOFTWARE_OPTIMIZATION_AND_BUG_AUDIT.md) - 稳定性、性能和维护性优化建议。
-3. [更新日志](../CHANGELOG.md) - 版本变化和历史功能记录。
+2. [TODO 富媒体与多账号协同演进路线图](./development/TODO_MEDIA_AND_COLLAB_ROADMAP.md) - 后续拍照任务、多账号隔离与服务端协同实施清单。
+3. [当前优化和 BUG 审计](./development/CURRENT_SOFTWARE_OPTIMIZATION_AND_BUG_AUDIT.md) - 稳定性、性能和维护性优化建议。
+4. [更新日志](../CHANGELOG.md) - 版本变化和历史功能记录。
 
 ### 发布维护
 
