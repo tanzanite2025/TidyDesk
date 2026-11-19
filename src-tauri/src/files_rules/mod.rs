@@ -13,4 +13,6 @@ pub use shell_open::open_path_with_shell;
 pub use storage::{
     create_drawer_shortcut, file_storage_root, is_protected_desktop_item, move_path_with_fallback,
 };
-pub use windows_shortcuts::{create_shortcut_link, resolve_shortcut_target, write_shortcut_link};
+pub use windows_shortcuts::{
+    create_shortcut_link, resolve_shortcut_target, write_shortcut_link, ShortcutResolver,
+};

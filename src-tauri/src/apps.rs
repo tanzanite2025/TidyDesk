@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, State};
 
 #[allow(unused_imports)]
@@ -11,7 +12,8 @@ pub use crate::apps_classifier::{
 };
 
 const APP_ICON_UPDATE_EVENT: &str = "apps-icons-updated";
-const APP_ICON_BATCH_SIZE: usize = 12;
+const APP_ICON_BATCH_SIZE: usize = 24;
+static APP_ICON_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +107,7 @@ fn emit_icon_batch(app: &AppHandle, icons: Vec<AppIconUpdate>, complete: bool) {
 }
 
 fn spawn_app_icon_updates(app: &AppHandle, apps: &[InstalledApp]) {
+    let generation = APP_ICON_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     if apps.is_empty() {
         emit_icon_batch(app, Vec::new(), true);
         return;
@@ -113,9 +116,13 @@ fn spawn_app_icon_updates(app: &AppHandle, apps: &[InstalledApp]) {
     let app_handle = app.clone();
     let apps = apps.to_vec();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut batch = Vec::new();
+        let mut batch = Vec::with_capacity(APP_ICON_BATCH_SIZE);
         for installed_app in apps {
-            let update = crate::apps_classifier::app_icon_update(&installed_app);
+            if APP_ICON_GENERATION.load(Ordering::Acquire) != generation {
+                return;
+            }
+            let update =
+                crate::apps_classifier::app_icon_update_cached(&app_handle, &installed_app);
             if update.icon.is_some() {
                 batch.push(update);
             }
@@ -125,7 +132,9 @@ fn spawn_app_icon_updates(app: &AppHandle, apps: &[InstalledApp]) {
             }
         }
 
-        emit_icon_batch(&app_handle, batch, true);
+        if APP_ICON_GENERATION.load(Ordering::Acquire) == generation {
+            emit_icon_batch(&app_handle, batch, true);
+        }
     });
 }
 

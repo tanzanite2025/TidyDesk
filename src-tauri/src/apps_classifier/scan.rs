@@ -20,6 +20,7 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
     let mut shortcuts = Vec::new();
     let mut scanned_paths = Vec::new();
     let mut seen_shortcuts = HashSet::new();
+    let resolver = crate::ShortcutResolver::new().ok();
 
     for start_menu_path in start_menu_paths() {
         let path = PathBuf::from(&start_menu_path);
@@ -36,6 +37,7 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
             &skip_directories,
             &mut seen_shortcuts,
             &mut shortcuts,
+            resolver.as_ref(),
         );
     }
 
@@ -53,6 +55,7 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
                 &skip_directories,
                 &mut seen_shortcuts,
                 &mut shortcuts,
+                resolver.as_ref(),
             );
         }
     }
@@ -81,6 +84,7 @@ fn scan_shortcut_directory(
     skip_directories: &HashSet<String>,
     seen_shortcuts: &mut HashSet<String>,
     shortcuts: &mut Vec<ShortcutMetadata>,
+    resolver: Option<&crate::ShortcutResolver>,
 ) {
     if depth > max_depth {
         return;
@@ -111,6 +115,7 @@ fn scan_shortcut_directory(
                     skip_directories,
                     seen_shortcuts,
                     shortcuts,
+                    resolver,
                 );
             }
             continue;
@@ -139,9 +144,16 @@ fn scan_shortcut_directory(
             continue;
         };
 
+        let shortcut_path_str = full_path.display().to_string();
+        let target_path = resolver
+            .and_then(|active| active.resolve_target(&shortcut_path_str).ok())
+            .flatten()
+            .filter(|value| !value.is_empty());
+
         shortcuts.push(ShortcutMetadata {
             name: Some(name.clone()),
-            shortcut_path: Some(full_path.display().to_string()),
+            shortcut_path: Some(shortcut_path_str),
+            target_path,
             source: Some(source.to_string()),
             category: Some(classify::categorize_shortcut(&name, &full_path)),
             size: Some(metadata.len()),

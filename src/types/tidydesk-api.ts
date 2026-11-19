@@ -1,11 +1,4 @@
 import type { TidyFile, TidyFolder } from './file';
-import type {
-  CreateTodoCardInput,
-  MoveTodoCardInput,
-  TodoCounts,
-  TodoState,
-  UpdateTodoCardInput
-} from './todo';
 
 export type RailModule = 'files' | 'todos' | 'capture' | null;
 
@@ -35,6 +28,7 @@ export interface DesktopFilesResult {
 export interface FileIconRequest {
   id: string;
   path: string;
+  targetPath?: string | null;
 }
 
 export interface FileIconResult {
@@ -274,81 +268,4 @@ export interface DrawerStatePayload {
 export interface ModuleStatePayload {
   expanded: boolean;
   activeModule: RailModule;
-}
-
-export type UpdateStatus =
-  | 'checking'
-  | 'available'
-  | 'not-available'
-  | 'downloading'
-  | 'downloaded'
-  | 'error'
-  | 'dev-mode'
-  | 'success';
-
-export interface AppVersionInfo {
-  version: string;
-  name: string;
-  isPackaged: boolean;
-}
-
-export interface UpdateStatusPayload {
-  status: UpdateStatus;
-  version?: string;
-  releaseDate?: string;
-  releaseNotes?: string;
-  percent?: number;
-  message?: string;
-  [key: string]: unknown;
-}
-
-export interface TidyDeskAPI {
-  readDesktopFiles: () => Promise<DesktopFilesResult>;
-  readIcons: (payload: { files: FileIconRequest[] }) => Promise<FileIconResult[]>;
-  createDrawer: (name: string) => Promise<unknown>;
-  renameItem: (payload: RenameItemPayload) => Promise<unknown>;
-  deleteItem: (payload: DeleteItemPayload) => Promise<unknown>;
-  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
-  openFile: (filePath: string) => Promise<unknown>;
-  windowControl: (action: WindowAction) => void;
-  send: (channel: TidyDeskSendChannel) => void;
-  getPathForFile: (file: File) => string;
-  onDrawerState: (callback: (payload: DrawerStatePayload) => void) => () => void;
-  onModuleState: (callback: (payload: ModuleStatePayload) => void) => () => void;
-  onTargetFileDeleted: (callback: (payload: TargetFileEventPayload) => void) => () => void;
-  onTargetFileRestored: (callback: (payload: TargetFileEventPayload) => void) => () => void;
-  onShortcutsValidated: (callback: (payload: ShortcutValidationStats) => void) => () => void;
-  validateAllShortcuts: () => Promise<ShortcutValidationStats>;
-  repairShortcut: (payload: RepairShortcutPayload) => Promise<RepairShortcutResult>;
-  restoreToDesktop: (payload: RestoreToDesktopPayload) => Promise<RestoreToDesktopResult>;
-  scanInstalledApps: () => Promise<InstalledAppsResult>;
-  refreshApps: () => Promise<InstalledAppsResult>;
-  getCacheInfo: () => Promise<CacheInfoResult>;
-  openAppPicker: (payload: OpenAppPickerPayload) => Promise<unknown>;
-  closeAppPicker: () => Promise<unknown>;
-  getAppPickerTarget: () => Promise<AppPickerTargetResult>;
-  onSetTargetFolder: (callback: (targetFolder: string) => void) => () => void;
-  addAppToDrawer: (payload: AddAppToDrawerPayload) => Promise<unknown>;
-  readTodoState: () => Promise<TodoState>;
-  getTodoCounts: () => Promise<TodoCounts>;
-  createTodoCard: (payload: CreateTodoCardInput) => Promise<TodoState>;
-  updateTodoCard: (payload: UpdateTodoCardInput) => Promise<TodoState>;
-  deleteTodoCard: (cardId: string) => Promise<TodoState>;
-  moveTodoCard: (payload: MoveTodoCardInput) => Promise<TodoState>;
-  getClipboardText: () => Promise<string>;
-  onTodoCountsUpdated: (callback: (payload: TodoCounts) => void) => () => void;
-  onCaptureOpened: (callback: (payload: CaptureOpenedPayload) => void) => () => void;
-  completeSnipSelection: (rect: SnipRect) => Promise<unknown>;
-  cancelSnip: () => Promise<unknown>;
-  getSticker: (stickerId: string) => Promise<StickerData | null>;
-  toggleStickerPin: (stickerId: string) => Promise<StickerPinResult>;
-  copySticker: (stickerId: string) => Promise<unknown>;
-  saveStickerAs: (stickerId: string) => Promise<unknown>;
-  closeSticker: (stickerId: string) => Promise<unknown>;
-  onStickerUpdated: (callback: (payload: StickerUpdatedPayload) => void) => () => void;
-  getAppVersion: () => Promise<AppVersionInfo>;
-  checkForUpdates: () => Promise<UpdateStatusPayload>;
-  downloadUpdate: () => Promise<unknown>;
-  installUpdate: () => Promise<unknown>;
-  onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => () => void;
 }

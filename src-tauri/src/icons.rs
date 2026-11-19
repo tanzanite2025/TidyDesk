@@ -1,11 +1,14 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::{ColorType, ImageEncoder};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
+use tauri::{AppHandle, Manager};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Gdi::{
@@ -19,32 +22,102 @@ use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL
 const ICON_SIZE: i32 = 32;
 static ICON_DATA_URL_CACHE: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
 
+fn icon_memory_cache() -> &'static Mutex<HashMap<String, Option<String>>> {
+    ICON_DATA_URL_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn stable_cache_digest(key: &str) -> String {
+    let mut h1: u64 = 0xcbf29ce484222325;
+    let mut h2: u64 = 0xaf63bd4c8601b7df;
+    for &byte in key.as_bytes() {
+        h1 ^= u64::from(byte);
+        h1 = h1.wrapping_mul(0x100000001b3);
+        h2 = h2.wrapping_mul(0x100000001b3) ^ u64::from(byte);
+    }
+    format!("{h1:016x}{h2:016x}")
+}
+
+fn disk_icon_cache_path_with_digest(app: &AppHandle, digest: &str) -> Option<PathBuf> {
+    let cache_dir = app.path().app_cache_dir().ok()?.join("icons");
+    Some(cache_dir.join(format!("{digest}.png")))
+}
+
 #[cfg(windows)]
 pub fn extract_icon_data_url(path: &Path) -> Option<String> {
+    extract_icon_data_url_internal(None, path)
+}
+
+#[cfg(windows)]
+pub fn extract_icon_data_url_cached(app: &AppHandle, path: &Path) -> Option<String> {
+    extract_icon_data_url_internal(Some(app), path)
+}
+
+const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+fn write_icon_cache_atomic(disk_path: &Path, bytes: &[u8]) -> bool {
+    if let Some(parent) = disk_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let tmp_path = disk_path.with_extension(format!(
+        "tmp-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    if fs::write(&tmp_path, bytes).is_ok() {
+        if fs::rename(&tmp_path, disk_path).is_ok() {
+            return true;
+        }
+        let _ = fs::remove_file(&tmp_path);
+    }
+    false
+}
+
+#[cfg(windows)]
+fn extract_icon_data_url_internal(app: Option<&AppHandle>, path: &Path) -> Option<String> {
     if !path.exists() {
         return None;
     }
     if let Some(key) = icon_cache_key(path) {
-        if let Ok(cache) = ICON_DATA_URL_CACHE
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-        {
+        if let Ok(cache) = icon_memory_cache().lock() {
             if let Some(cached) = cache.get(&key) {
                 return cached.clone();
             }
         }
 
-        let extracted = extract_icon_data_url_uncached(path);
-        if let Ok(mut cache) = ICON_DATA_URL_CACHE
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-        {
-            cache.insert(key, extracted.clone());
+        let digest = stable_cache_digest(&key);
+        let disk_path = app.and_then(|handle| disk_icon_cache_path_with_digest(handle, &digest));
+
+        if let Some(disk_path_ref) = disk_path.as_ref() {
+            if let Ok(header_bytes) = fs::read(disk_path_ref) {
+                if header_bytes.starts_with(&PNG_MAGIC) {
+                    let asset_url =
+                        crate::asset_protocol::asset_url(&format!("icons/{digest}.png"));
+                    if let Ok(mut cache) = icon_memory_cache().lock() {
+                        cache.insert(key, Some(asset_url.clone()));
+                    }
+                    return Some(asset_url);
+                }
+            }
         }
-        return extracted;
+
+        let png_bytes = extract_icon_png_bytes_uncached(path);
+        let resolved_url = png_bytes.as_ref().map(|bytes| {
+            if let Some(disk_path_ref) = disk_path.as_ref() {
+                if write_icon_cache_atomic(disk_path_ref, bytes) {
+                    return crate::asset_protocol::asset_url(&format!("icons/{digest}.png"));
+                }
+            }
+            format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes))
+        });
+
+        if let Ok(mut cache) = icon_memory_cache().lock() {
+            cache.insert(key, resolved_url.clone());
+        }
+        return resolved_url;
     }
 
-    extract_icon_data_url_uncached(path)
+    extract_icon_png_bytes_uncached(path)
+        .map(|bytes| format!("data:image/png;base64,{}", BASE64_STANDARD.encode(bytes)))
 }
 
 #[cfg(windows)]
@@ -65,7 +138,7 @@ fn icon_cache_key(path: &Path) -> Option<String> {
 }
 
 #[cfg(windows)]
-fn extract_icon_data_url_uncached(path: &Path) -> Option<String> {
+fn extract_icon_png_bytes_uncached(path: &Path) -> Option<Vec<u8>> {
     let wide: Vec<u16> = path
         .as_os_str()
         .to_string_lossy()
@@ -86,7 +159,7 @@ fn extract_icon_data_url_uncached(path: &Path) -> Option<String> {
             return None;
         }
 
-        let encoded = icon_handle_to_data_url(info.hIcon).ok();
+        let encoded = icon_handle_to_png_bytes(info.hIcon).ok();
         let _ = DestroyIcon(info.hIcon);
         encoded
     }
@@ -97,10 +170,15 @@ pub fn extract_icon_data_url(_path: &Path) -> Option<String> {
     None
 }
 
+#[cfg(not(windows))]
+pub fn extract_icon_data_url_cached(_app: &AppHandle, _path: &Path) -> Option<String> {
+    None
+}
+
 #[cfg(windows)]
-fn icon_handle_to_data_url(
+fn icon_handle_to_png_bytes(
     hicon: windows::Win32::UI::WindowsAndMessaging::HICON,
-) -> Result<String, String> {
+) -> Result<Vec<u8>, String> {
     unsafe {
         let screen_dc = GetDC(None);
         if screen_dc.0 == std::ptr::null_mut() {
@@ -170,16 +248,35 @@ fn icon_handle_to_data_url(
             pixel.swap(0, 2);
         }
 
-        let image = RgbaImage::from_raw(ICON_SIZE as u32, ICON_SIZE as u32, rgba)
-            .ok_or_else(|| "failed to build icon image".to_string())?;
         let mut cursor = Cursor::new(Vec::new());
-        DynamicImage::ImageRgba8(image)
-            .write_to(&mut cursor, ImageFormat::Png)
+        let encoder =
+            PngEncoder::new_with_quality(&mut cursor, CompressionType::Fast, FilterType::NoFilter);
+        encoder
+            .write_image(
+                &rgba,
+                ICON_SIZE as u32,
+                ICON_SIZE as u32,
+                ColorType::Rgba8.into(),
+            )
             .map_err(|err| format!("failed to encode icon png: {err}"))?;
 
-        Ok(format!(
-            "data:image/png;base64,{}",
-            BASE64_STANDARD.encode(cursor.into_inner())
-        ))
+        Ok(cursor.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_cache_digest_is_deterministic_and_hex() {
+        let first = stable_cache_digest(r"c:\program files\app\app.exe:1024:999");
+        let second = stable_cache_digest(r"c:\program files\app\app.exe:1024:999");
+        let other = stable_cache_digest(r"c:\program files\app\app.exe:1025:999");
+
+        assert_eq!(first, second);
+        assert_ne!(first, other);
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

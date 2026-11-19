@@ -20,12 +20,17 @@ pub fn drawer_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 pub fn is_path_inside(child_path: &Path, parent_path: &Path) -> bool {
-    let resolved_child = resolve_path_for_comparison(child_path);
     let resolved_parent = resolve_path_for_comparison(parent_path);
+    is_path_inside_resolved(child_path, &resolved_parent)
+}
+
+/// 配合外部预解析好的根目录路径使用，避免在高频循环中重复对同一父目录执行 canonicalize
+pub fn is_path_inside_resolved(child_path: &Path, resolved_parent: &Path) -> bool {
+    let resolved_child = resolve_path_for_comparison(child_path);
     resolved_child.starts_with(resolved_parent)
 }
 
-fn resolve_path_for_comparison(path: &Path) -> PathBuf {
+pub fn resolve_path_for_comparison(path: &Path) -> PathBuf {
     if let Ok(resolved) = path.canonicalize() {
         return resolved;
     }

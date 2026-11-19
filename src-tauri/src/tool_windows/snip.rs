@@ -5,16 +5,16 @@ use tauri::{
 };
 
 pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
-    if crate::stickers::is_snip_capture_in_flight(app) {
+    if crate::capture::is_snip_capture_in_flight(app) {
         return Ok(());
     }
 
-    let monitor = crate::stickers_rules::snip_open_monitor(app)?;
-    if let Some(window) = app.get_webview_window(crate::stickers_rules::SNIP_WINDOW_LABEL) {
+    let monitor = crate::capture::snip_open_monitor(app)?;
+    if let Some(window) = app.get_webview_window(crate::capture::SNIP_WINDOW_LABEL) {
         prepare_snip_window(&window, &monitor)?;
         window
             .emit(
-                crate::stickers_rules::SNIP_RESET_EVENT,
+                crate::capture::SNIP_RESET_EVENT,
                 json!({ "reason": "reopen" }),
             )
             .map_err(|err| err.to_string())?;
@@ -25,7 +25,7 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
 
     let window = WebviewWindowBuilder::new(
         app,
-        crate::stickers_rules::SNIP_WINDOW_LABEL,
+        crate::capture::SNIP_WINDOW_LABEL,
         crate::shell::webview_url_for_mode("snip")?,
     )
     .title("TidyDesk Snip")
@@ -46,7 +46,7 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
 
 fn prepare_snip_window(
     window: &WebviewWindow,
-    monitor: &crate::stickers_rules::MonitorSnapshot,
+    monitor: &crate::capture::MonitorSnapshot,
 ) -> Result<(), String> {
     window
         .set_ignore_cursor_events(false)
@@ -76,7 +76,7 @@ fn dispose_snip_window(window: &WebviewWindow) {
 }
 
 pub fn close_snip_window(app: &AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(crate::stickers_rules::SNIP_WINDOW_LABEL) {
+    if let Some(window) = app.get_webview_window(crate::capture::SNIP_WINDOW_LABEL) {
         dispose_snip_window(&window);
     }
     Ok(())

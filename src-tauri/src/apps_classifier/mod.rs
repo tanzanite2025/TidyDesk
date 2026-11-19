@@ -17,6 +17,8 @@ pub struct ShortcutMetadata {
     pub name: Option<String>,
     pub shortcut_path: Option<String>,
     #[serde(default)]
+    pub target_path: Option<String>,
+    #[serde(default)]
     pub source: Option<String>,
     pub category: Option<String>,
     #[serde(default)]
@@ -64,6 +66,7 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
     let mut apps = Vec::new();
     let mut seen_targets = HashSet::new();
     let mut skipped_count = 0;
+    let mut resolver: Option<crate::ShortcutResolver> = None;
 
     for shortcut in &metadata.shortcuts {
         let shortcut_path = match shortcut.shortcut_path.as_deref() {
@@ -97,11 +100,27 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
             continue;
         }
 
-        let target_path = match crate::resolve_shortcut_target(shortcut_path) {
-            Ok(Some(value)) if !value.is_empty() => value,
-            _ => {
-                skipped_count += 1;
-                continue;
+        let target_path = if let Some(cached_target) = shortcut
+            .target_path
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            cached_target.to_string()
+        } else {
+            if resolver.is_none() {
+                resolver = crate::ShortcutResolver::new().ok();
+            }
+            match resolver
+                .as_ref()
+                .and_then(|active| active.resolve_target(shortcut_path).ok())
+                .flatten()
+                .filter(|value| !value.is_empty())
+            {
+                Some(value) => value,
+                None => {
+                    skipped_count += 1;
+                    continue;
+                }
             }
         };
 
@@ -150,6 +169,14 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
     }
 }
 
+pub fn app_icon_update_cached(app_handle: &tauri::AppHandle, app: &InstalledApp) -> AppIconUpdate {
+    AppIconUpdate {
+        shortcut_path: app.shortcut_path.clone(),
+        icon: crate::icons::extract_icon_data_url_cached(app_handle, Path::new(&app.target_path)),
+    }
+}
+
+#[allow(dead_code)]
 pub fn app_icon_update(app: &InstalledApp) -> AppIconUpdate {
     AppIconUpdate {
         shortcut_path: app.shortcut_path.clone(),
@@ -263,6 +290,7 @@ mod tests {
                 ShortcutMetadata {
                     name: Some("System Tool".to_string()),
                     shortcut_path: Some(primary_shortcut.display().to_string()),
+                    target_path: None,
                     source: Some("test".to_string()),
                     category: Some("other".to_string()),
                     size: None,
@@ -272,6 +300,7 @@ mod tests {
                 ShortcutMetadata {
                     name: Some("System Tool Copy".to_string()),
                     shortcut_path: Some(duplicate_shortcut.display().to_string()),
+                    target_path: None,
                     source: Some("test".to_string()),
                     category: Some("other".to_string()),
                     size: None,
@@ -281,6 +310,7 @@ mod tests {
                 ShortcutMetadata {
                     name: Some("Ignored".to_string()),
                     shortcut_path: Some(ignored_file.display().to_string()),
+                    target_path: None,
                     source: Some("test".to_string()),
                     category: Some("other".to_string()),
                     size: None,
@@ -290,6 +320,7 @@ mod tests {
                 ShortcutMetadata {
                     name: Some("Missing Shortcut".to_string()),
                     shortcut_path: None,
+                    target_path: None,
                     source: Some("test".to_string()),
                     category: Some("other".to_string()),
                     size: None,
@@ -326,6 +357,32 @@ mod tests {
                 .canonicalize()
                 .expect("copied target should exist"),
             target_exe.canonicalize().expect("target exe should exist")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn complete_installed_apps_uses_cached_target_path_without_resolving_lnk() {
+        let target_exe = shortcut_test_target_exe();
+        let installed = complete_installed_apps(ScanMetadataResult {
+            shortcuts: vec![ShortcutMetadata {
+                name: Some("Cached App".to_string()),
+                shortcut_path: Some(r"C:\nonexistent\Cached App.lnk".to_string()),
+                target_path: Some(target_exe.display().to_string()),
+                source: Some("cache".to_string()),
+                category: Some("other".to_string()),
+                size: None,
+                modified_at: None,
+                depth: None,
+            }],
+            scanned_paths: Vec::new(),
+            duration_ms: 0,
+        });
+
+        assert_eq!(installed.apps.len(), 1);
+        assert_eq!(
+            installed.apps[0].target_path,
+            target_exe.display().to_string()
         );
     }
 }

@@ -48,8 +48,8 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Outfit", "Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "Fira Code", "monospace"],
+        sans: ["Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "system-ui", "sans-serif"],
+        mono: ["Cascadia Code", "JetBrains Mono", "Consolas", "monospace"],
       },
     },
   },

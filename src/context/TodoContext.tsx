@@ -142,7 +142,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     return grouped;
   }, [board, cards]);
 
-  const createCard = async (payload: CreateTodoCardInput): Promise<TodoCard | null> => {
+  const createCard = useCallback(async (payload: CreateTodoCardInput): Promise<TodoCard | null> => {
     if (!client.isAvailable()) return null;
 
     try {
@@ -153,9 +153,9 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       setError(`创建待办失败: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
-  };
+  }, [client]);
 
-  const updateCard = async (payload: UpdateTodoCardInput) => {
+  const updateCard = useCallback(async (payload: UpdateTodoCardInput) => {
     if (!client.isAvailable()) return false;
 
     try {
@@ -166,9 +166,9 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       setError(`保存待办失败: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  };
+  }, [client]);
 
-  const deleteCard = async (cardId: string) => {
+  const deleteCard = useCallback(async (cardId: string) => {
     if (!client.isAvailable()) return;
 
     try {
@@ -177,9 +177,9 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     } catch (err) {
       setError(`删除待办失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
+  }, [client]);
 
-  const moveCard = async (payload: MoveTodoCardInput) => {
+  const moveCard = useCallback(async (payload: MoveTodoCardInput) => {
     if (!client.isAvailable()) return;
 
     try {
@@ -188,12 +188,30 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     } catch (err) {
       setError(`移动待办失败: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
+  }, [client]);
 
-  const clearError = () => setError(null);
+  const clearError = useCallback(() => setError(null), []);
+
+  const contextValue = useMemo(
+    () => ({
+      board,
+      cards,
+      counts,
+      isLoading,
+      error,
+      cardsByColumn,
+      refreshTodos,
+      createCard,
+      updateCard,
+      deleteCard,
+      moveCard,
+      clearError
+    }),
+    [board, cards, counts, isLoading, error, cardsByColumn, refreshTodos, createCard, updateCard, deleteCard, moveCard, clearError]
+  );
 
   return (
-    <TodoContext.Provider value={{ board, cards, counts, isLoading, error, cardsByColumn, refreshTodos, createCard, updateCard, deleteCard, moveCard, clearError }}>
+    <TodoContext.Provider value={contextValue}>
       {children}
     </TodoContext.Provider>
   );

@@ -240,7 +240,9 @@ export function createTauriNativeClient(): NativeClient {
     },
     windows: {
       control: action => {
-        invoke('windows_control', { payload: { action } }).catch(() => {});
+        invoke('windows_control', { payload: { action } }).catch(err => {
+          console.error('[TIDYDESK] Failed windows_control:', err);
+        });
       },
       getPathForFile: () => unavailable('windows.getPathForFile'),
       onDrawerState: callback => onTauriEvent<DrawerStatePayload>('drawer-state', callback),
@@ -276,7 +278,7 @@ export function createTauriNativeClient(): NativeClient {
       cancelSnip: () => invoke('snip_cancel'),
       getBackgroundImage: async () => {
         const result = await invoke<SnipBackgroundImageResult>('snip_get_background_image');
-        if (result.success && result.imagePath) {
+        if (result.success && !result.imageUrl && result.imagePath) {
           return { ...result, imageUrl: await fileUrl(result.imagePath) };
         }
         return result;
@@ -286,6 +288,7 @@ export function createTauriNativeClient(): NativeClient {
       get: async (stickerId: string) => {
         const sticker = await invoke<StickerData | null>('sticker_get', { sticker_id: stickerId });
         if (!sticker) return null;
+        if (sticker.imageUrl) return sticker;
         return { ...sticker, imageUrl: await fileUrl(sticker.imagePath) };
       },
       togglePin: (stickerId: string) => invoke<StickerPinResult>('sticker_toggle_pin', { sticker_id: stickerId }),
@@ -304,7 +307,9 @@ export function createTauriNativeClient(): NativeClient {
     },
     events: {
       send: (channel: TidyDeskSendChannel) => {
-        invoke('events_send', { payload: { channel } }).catch(() => {});
+        invoke('events_send', { payload: { channel } }).catch(err => {
+          console.error('[TIDYDESK] Failed events_send:', err);
+        });
       }
     }
   };

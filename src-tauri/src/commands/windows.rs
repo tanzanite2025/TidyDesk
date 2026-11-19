@@ -1,7 +1,7 @@
+use crate::capture::open_snip_window;
 use crate::shell::{
     apply_drawer_state, close_active_module, shell_snapshot, update_active_module, ShellState,
 };
-use crate::stickers::open_snip_window;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
@@ -13,7 +13,7 @@ pub struct WindowControlPayload {
 }
 
 #[tauri::command]
-pub fn windows_control(
+pub async fn windows_control(
     app: AppHandle,
     shell: tauri::State<'_, ShellState>,
     payload: WindowControlPayload,
@@ -61,7 +61,7 @@ pub fn windows_control(
                 }
                 apply_drawer_state(&app, &shell, true)?;
                 update_active_module(&app, &shell, Some("capture".to_string()))?;
-                emit_capture_opened(&app)?;
+                emit_capture_opened(&app).await?;
             }
         }
         "show-files-tab" => {
@@ -77,7 +77,7 @@ pub fn windows_control(
                 apply_drawer_state(&app, &shell, true)?;
             }
             update_active_module(&app, &shell, Some("capture".to_string()))?;
-            emit_capture_opened(&app)?;
+            emit_capture_opened(&app).await?;
         }
         "close-panel" => {
             if shell_snapshot(&shell)?.active_module.as_deref() == Some("todos") {
@@ -96,7 +96,10 @@ pub fn windows_control(
             apply_drawer_state(&app, &shell, expanded)?;
         }
         "start-screenshot" => {
-            open_snip_window(&app)?;
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || open_snip_window(&app_handle))
+                .await
+                .map_err(|err| format!("start screenshot task failed: {err}"))??;
         }
         _ => return Err(format!("Unsupported window action: {}", payload.action)),
     }
@@ -104,13 +107,13 @@ pub fn windows_control(
     Ok(json!({ "success": true }))
 }
 
-fn emit_capture_opened(app: &AppHandle) -> Result<(), String> {
-    let clipboard_text = {
-        match arboard::Clipboard::new() {
-            Ok(mut cb) => cb.get_text().unwrap_or_default(),
-            Err(_) => String::new(),
-        }
-    };
+async fn emit_capture_opened(app: &AppHandle) -> Result<(), String> {
+    let clipboard_text = tauri::async_runtime::spawn_blocking(|| match arboard::Clipboard::new() {
+        Ok(mut cb) => cb.get_text().unwrap_or_default(),
+        Err(_) => String::new(),
+    })
+    .await
+    .unwrap_or_default();
     let payload = json!({ "clipboardText": clipboard_text });
     for label in ["capture", "main"] {
         if let Some(window) = app.get_webview_window(label) {

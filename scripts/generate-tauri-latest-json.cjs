@@ -78,16 +78,29 @@ function normalizeBaseUrl(pkg) {
   );
 }
 
+function resolveBundleDir(projectRoot) {
+  const candidates = [];
+  const triple = (process.env.CARGO_BUILD_TARGET || process.env.TAURI_TARGET_TRIPLE || '').trim();
+  if (triple) {
+    candidates.push(path.join(projectRoot, 'src-tauri', 'target', triple, 'release', 'bundle', 'nsis'));
+  }
+  candidates.push(path.join(projectRoot, 'src-tauri', 'target', 'release', 'bundle', 'nsis'));
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`NSIS bundle directory not found. Checked: ${candidates.join(', ')}`);
+}
+
 function main() {
   loadReleaseEnvFromWindowsUserEnv();
   const projectRoot = path.resolve(__dirname, '..');
   const packageJsonPath = path.join(projectRoot, 'package.json');
   const pkg = readJson(packageJsonPath);
-  const bundleDir = path.join(projectRoot, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
-
-  if (!fs.existsSync(bundleDir)) {
-    throw new Error(`NSIS bundle directory not found: ${bundleDir}`);
-  }
+  const bundleDir = resolveBundleDir(projectRoot);
 
   const installerPath = findFirstMatchingFile(
     bundleDir,

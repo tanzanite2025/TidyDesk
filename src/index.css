@@ -102,12 +102,13 @@
 }
 
 .animate-drawer-panel-in {
-  animation: drawer-panel-in 250ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  animation-delay: 50ms;
+  animation: drawer-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
 }
 
 .animate-drawer-panel-out {
-  animation: drawer-panel-out 200ms cubic-bezier(0.7, 0, 0.84, 0) both;
+  animation: drawer-panel-out 150ms cubic-bezier(0.4, 0, 1, 1) both;
+  will-change: transform, opacity;
 }
 
 .animate-drawer-handle-in {

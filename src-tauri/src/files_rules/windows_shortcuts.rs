@@ -129,38 +129,73 @@ pub fn write_shortcut_link(
 }
 
 #[cfg(windows)]
-pub fn resolve_shortcut_target(shortcut_path: &str) -> Result<Option<String>, String> {
-    let shortcut_path_wide: Vec<u16> = shortcut_path.encode_utf16().chain(Some(0)).collect();
-    let _com = ComApartment::init()?;
-    resolve_shortcut_target_with_com(&shortcut_path_wide)
+pub struct ShortcutResolver {
+    _com: ComApartment,
+    shell_link: IShellLinkW,
+    persist_file: IPersistFile,
 }
 
 #[cfg(windows)]
-fn resolve_shortcut_target_with_com(shortcut_path_wide: &[u16]) -> Result<Option<String>, String> {
-    unsafe {
-        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|err| format!("failed to create ShellLink: {err}"))?;
-        let persist_file: IPersistFile = shell_link
-            .cast()
-            .map_err(|err| format!("failed to query IPersistFile: {err}"))?;
-        persist_file
-            .Load(PCWSTR(shortcut_path_wide.as_ptr()), STGM_READ)
-            .map_err(|err| format!("failed to load shortcut: {err}"))?;
-
-        let mut target = [0u16; 32768];
-        let mut find_data = WIN32_FIND_DATAW::default();
-        shell_link
-            .GetPath(&mut target, &mut find_data, 0)
-            .map_err(|err| format!("failed to resolve shortcut target: {err}"))?;
-        let end = target
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(target.len());
-        if end == 0 {
-            return Ok(None);
+impl ShortcutResolver {
+    /// 初始化单次 COM 套件并复用 IShellLinkW / IPersistFile 实例，避免批量解析时重复开关 COM
+    pub fn new() -> Result<Self, String> {
+        let com = ComApartment::init()?;
+        unsafe {
+            let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|err| format!("failed to create ShellLink: {err}"))?;
+            let persist_file: IPersistFile = shell_link
+                .cast()
+                .map_err(|err| format!("failed to query IPersistFile: {err}"))?;
+            Ok(Self {
+                _com: com,
+                shell_link,
+                persist_file,
+            })
         }
-        Ok(Some(String::from_utf16_lossy(&target[..end])))
     }
+
+    pub fn resolve_target(&self, shortcut_path: &str) -> Result<Option<String>, String> {
+        let shortcut_path_wide: Vec<u16> = shortcut_path.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            self.persist_file
+                .Load(PCWSTR(shortcut_path_wide.as_ptr()), STGM_READ)
+                .map_err(|err| format!("failed to load shortcut: {err}"))?;
+
+            let mut target = [0u16; 32768];
+            let mut find_data = WIN32_FIND_DATAW::default();
+            self.shell_link
+                .GetPath(&mut target, &mut find_data, 0)
+                .map_err(|err| format!("failed to resolve shortcut target: {err}"))?;
+            let end = target
+                .iter()
+                .position(|value| *value == 0)
+                .unwrap_or(target.len());
+            if end == 0 {
+                return Ok(None);
+            }
+            Ok(Some(String::from_utf16_lossy(&target[..end])))
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub struct ShortcutResolver;
+
+#[cfg(not(windows))]
+impl ShortcutResolver {
+    pub fn new() -> Result<Self, String> {
+        Ok(Self)
+    }
+
+    pub fn resolve_target(&self, _shortcut_path: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+}
+
+#[cfg(windows)]
+pub fn resolve_shortcut_target(shortcut_path: &str) -> Result<Option<String>, String> {
+    let resolver = ShortcutResolver::new()?;
+    resolver.resolve_target(shortcut_path)
 }
 
 #[cfg(not(windows))]

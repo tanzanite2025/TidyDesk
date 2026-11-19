@@ -1,0 +1,153 @@
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager};
+
+const HOTKEY_SETTINGS_FILE: &str = "hotkeys.json";
+pub(super) const HOTKEY_SETTINGS_VERSION: u32 = 1;
+pub(super) const DEFAULT_PASTE_PENDING_STICKER: &str = "ctrl+alt+v";
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyAction {
+    PastePendingSticker,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StoredHotkeyBinding {
+    pub action: HotkeyAction,
+    pub accelerator: Option<String>,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct HotkeySettingsFile {
+    pub version: u32,
+    pub bindings: Vec<StoredHotkeyBinding>,
+}
+
+pub(super) fn action_label(action: &HotkeyAction) -> &'static str {
+    match action {
+        HotkeyAction::PastePendingSticker => "贴出最近截图",
+    }
+}
+
+pub(super) fn read_hotkey_settings(app: &AppHandle) -> Result<HotkeySettingsFile, String> {
+    ensure_hotkey_storage(app)?;
+    let path = hotkey_settings_path(app)?;
+    let raw = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let settings = default_hotkey_settings();
+            write_hotkey_settings(app, &settings)?;
+            return Ok(settings);
+        }
+        Err(err) => return Err(format!("failed to read hotkey settings: {err}")),
+    };
+    match serde_json::from_str::<HotkeySettingsFile>(&raw) {
+        Ok(settings) => Ok(normalize_settings(settings)),
+        Err(err) => {
+            let backup_path = crate::persistence::backup_corrupt_file(&path, "hotkey settings")?;
+            eprintln!(
+                "[TIDYDESK] Backed up corrupt hotkey settings to {}: {err}",
+                backup_path.display()
+            );
+            let settings = default_hotkey_settings();
+            write_hotkey_settings(app, &settings)?;
+            Ok(settings)
+        }
+    }
+}
+
+pub(super) fn write_hotkey_settings(
+    app: &AppHandle,
+    settings: &HotkeySettingsFile,
+) -> Result<(), String> {
+    crate::persistence::atomic_write_json(&hotkey_settings_path(app)?, settings, "hotkey settings")
+}
+
+fn normalize_settings(settings: HotkeySettingsFile) -> HotkeySettingsFile {
+    let mut bindings = Vec::new();
+    for action in all_actions() {
+        if let Some(binding) = settings
+            .bindings
+            .iter()
+            .find(|binding| binding.action == action)
+        {
+            bindings.push(binding.clone());
+        } else {
+            bindings.push(default_binding(action));
+        }
+    }
+    HotkeySettingsFile {
+        version: HOTKEY_SETTINGS_VERSION,
+        bindings,
+    }
+}
+
+fn default_hotkey_settings() -> HotkeySettingsFile {
+    HotkeySettingsFile {
+        version: HOTKEY_SETTINGS_VERSION,
+        bindings: all_actions().into_iter().map(default_binding).collect(),
+    }
+}
+
+fn default_binding(action: HotkeyAction) -> StoredHotkeyBinding {
+    let accelerator = match action {
+        HotkeyAction::PastePendingSticker => Some(DEFAULT_PASTE_PENDING_STICKER.to_string()),
+    };
+    StoredHotkeyBinding {
+        action,
+        accelerator,
+        enabled: true,
+        updated_at: crate::timestamp_string(),
+    }
+}
+
+fn all_actions() -> Vec<HotkeyAction> {
+    vec![HotkeyAction::PastePendingSticker]
+}
+
+pub(super) fn update_stored_binding(
+    settings: &mut HotkeySettingsFile,
+    action: HotkeyAction,
+    accelerator: Option<String>,
+    enabled: bool,
+    updated_at: String,
+) {
+    if let Some(binding) = settings
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.action == action)
+    {
+        binding.accelerator = accelerator;
+        binding.enabled = enabled;
+        binding.updated_at = updated_at;
+        return;
+    }
+    settings.bindings.push(StoredHotkeyBinding {
+        action,
+        accelerator,
+        enabled,
+        updated_at,
+    });
+}
+
+fn ensure_hotkey_storage(app: &AppHandle) -> Result<(), String> {
+    fs::create_dir_all(hotkey_root(app)?)
+        .map_err(|err| format!("failed to create hotkey storage: {err}"))
+}
+
+fn hotkey_root(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("hotkeys"))
+        .map_err(|err| format!("failed to resolve app data directory: {err}"))
+}
+
+fn hotkey_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(hotkey_root(app)?.join(HOTKEY_SETTINGS_FILE))
+}

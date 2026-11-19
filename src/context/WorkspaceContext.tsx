@@ -5,18 +5,19 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from 'react';
 import { nativeClient } from '../native/native-client';
 import { DesktopHealthInfo, TidyFile, TidyFolder } from '../types/file';
-import type {
-  FileIconRequest,
-  FileIconResult,
-  ImportExternalFilesResult,
-  ImportSkippedReason,
-  WindowAction
-} from '../types/tidydesk-api';
-import { calculateDesktopHealth, generateSimulatedFiles, proposeTidyActions } from '../utils/tidyEngine';
+import type { ImportExternalFilesResult, WindowAction } from '../types/tidydesk-api';
+import { calculateDesktopHealth, generateSimulatedFiles } from '../utils/tidyEngine';
+import { loadFileIcons, mergeFileIcons } from '../services/workspace/iconLoader';
+import {
+  buildSimulatedFolder,
+  executeNativeSmartTidy,
+  executeSimulatedSmartTidy
+} from '../services/workspace/tidyExecutor';
 
 interface WorkspaceContextType {
   files: TidyFile[];
@@ -24,6 +25,7 @@ interface WorkspaceContextType {
   selectedFileId: string | null;
   healthInfo: DesktopHealthInfo;
   isLoading: boolean;
+  hasLoadedOnce: boolean;
   error: string | null;
   refreshDesktop: () => Promise<void>;
   setSelectedFileId: (id: string | null) => void;
@@ -49,18 +51,6 @@ function drawerNameFromId(folders: TidyFolder[], folderId: string | null): strin
   return folders.find(folder => folder.id === folderId)?.name || null;
 }
 
-function buildSimulatedFolder(name: string): TidyFolder {
-  return {
-    id: `fol-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    name,
-    path: `AppData\\TidyDesk\\drawers\\${name}`,
-    category: 'folder',
-    modifiedAt: new Date().toISOString(),
-    isSimulated: true,
-    parentId: null
-  };
-}
-
 function fileNameWithExtension(file: TidyFile): string {
   if (!file.extension || file.name.endsWith(file.extension)) {
     return file.name;
@@ -80,95 +70,44 @@ function fileExtensionFromName(fileName: string): string {
   return lastDot > 0 ? fileName.slice(lastDot) : '';
 }
 
-function importSkippedReasonLabel(reason: ImportSkippedReason): string {
-  switch (reason) {
-    case 'missing':
-      return '源文件不存在';
-    case 'alreadyInDrawer':
-      return '已在抽屉内';
-    case 'protected':
-      return '受保护项目';
-    default:
-      return '已跳过';
-  }
-}
-
-function fileNameFromPath(filePath: string): string {
-  return filePath.split(/[\\/]/).filter(Boolean).pop() || filePath;
-}
-
-function appendImportResultErrors(results: { failed: number; errors: string[] }, importResult: ImportExternalFilesResult) {
-  const skipped = importResult.skipped || [];
-  const failed = importResult.failed || [];
-
-  results.failed += skipped.length + failed.length;
-  for (const item of skipped) {
-    results.errors.push(`${fileNameFromPath(item.source)}: ${importSkippedReasonLabel(item.reason)}`);
-  }
-  for (const item of failed) {
-    results.errors.push(`${fileNameFromPath(item.source)}: ${item.error}`);
-  }
-}
-
-function mergeFileIcons(files: TidyFile[], icons: FileIconResult[]): TidyFile[] {
-  if (icons.length === 0) {
-    return files;
-  }
-
-  const iconsById = new Map(icons.map(item => [item.id, item.icon || undefined]));
-  return files.map(file => {
-    if (!iconsById.has(file.id)) {
-      return file;
-    }
-    return {
-      ...file,
-      icon: iconsById.get(file.id)
-    };
-  });
-}
-
-const FILE_ICON_BATCH_SIZE = 100;
-
-async function loadFileIcons(files: TidyFile[]): Promise<FileIconResult[]> {
-  const requests: FileIconRequest[] = files.map(file => ({
-    id: file.id,
-    path: file.path
-  }));
-  const results: FileIconResult[] = [];
-  for (let start = 0; start < requests.length; start += FILE_ICON_BATCH_SIZE) {
-    const batch = requests.slice(start, start + FILE_ICON_BATCH_SIZE);
-    results.push(...(await nativeClient.files.readIcons(batch)));
-  }
-  return results;
-}
-
 export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [files, setFiles] = useState<TidyFile[]>([]);
   const [folders, setFolders] = useState<TidyFolder[]>([]);
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshTokenRef = useRef(0);
 
   const refreshDesktop = useCallback(async () => {
+    const token = ++refreshTokenRef.current;
     setIsLoading(true);
     setError(null);
 
     if (nativeClient.isAvailable()) {
       try {
         const data = await nativeClient.files.readDesktopFiles();
+        if (refreshTokenRef.current !== token) return;
         const nextFiles = data.files || [];
         setFiles(nextFiles);
         setFolders(data.folders || []);
         setSelectedFileId(null);
-        void loadFileIcons(nextFiles)
-          .then(icons => {
-            setFiles(current => mergeFileIcons(current, icons));
-          })
-          .catch(() => {});
+        void loadFileIcons(
+          nextFiles,
+          icons => setFiles(current => mergeFileIcons(current, icons)),
+          () => refreshTokenRef.current !== token
+        ).catch(err => {
+          console.error('[TIDYDESK] Failed to load file icons:', err);
+        });
       } catch (err: unknown) {
-        setError(`Failed to scan drawers: ${err instanceof Error ? err.message : String(err)}`);
+        if (refreshTokenRef.current === token) {
+          setError(`Failed to scan drawers: ${err instanceof Error ? err.message : String(err)}`);
+        }
       } finally {
-        setIsLoading(false);
+        if (refreshTokenRef.current === token) {
+          setIsLoading(false);
+          setHasLoadedOnce(true);
+        }
       }
       return;
     }
@@ -177,6 +116,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
     setFiles(simulated);
     setFolders([buildSimulatedFolder('收纳抽屉')]);
     setIsLoading(false);
+    setHasLoadedOnce(true);
   }, []);
 
   useEffect(() => {
@@ -353,96 +293,25 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const executeSmartTidy = async (rule: 'category' | 'date' | 'temp') => {
-    const suggestions = proposeTidyActions(files, rule);
-    const results = { success: 0, failed: 0, errors: [] as string[] };
-    const shouldRefreshDesktop = nativeClient.isAvailable();
-
-    if (suggestions.length === 0) {
+    if (nativeClient.isAvailable()) {
+      const results = await executeNativeSmartTidy(files, rule);
+      if (results.failed > 0) {
+        const details = results.errors.slice(0, 3).join('；');
+        setError(`Smart tidy finished with ${results.success} success(es) and ${results.failed} failure(s).${details ? ` ${details}` : ''}`);
+      }
+      if (results.success > 0) {
+        await refreshDesktop();
+      }
       return results;
     }
 
-    if (nativeClient.isAvailable()) {
-      const groupedSuggestions = new Map<string, string[]>();
-
-      for (const suggestion of suggestions) {
-        const file = files.find(item => item.id === suggestion.fileId);
-        if (!file) {
-          results.failed++;
-          results.errors.push(`${suggestion.fileName}: missing source file`);
-          continue;
-        }
-
-        const group = groupedSuggestions.get(suggestion.targetFolder) || [];
-        group.push(file.path);
-        groupedSuggestions.set(suggestion.targetFolder, group);
-      }
-
-      for (const [targetFolder, groupedPaths] of groupedSuggestions) {
-        try {
-          await nativeClient.drawers.create(targetFolder);
-
-          for (let index = 0; index < groupedPaths.length; index += 100) {
-            const batch = groupedPaths.slice(index, index + 100);
-            const importResult: ImportExternalFilesResult = await nativeClient.files.importExternalFiles({
-              filePaths: batch,
-              targetFolder
-            });
-            const addedCount = Array.isArray(importResult.added) ? importResult.added.length : 0;
-
-            results.success += addedCount;
-            appendImportResultErrors(results, importResult);
-            if (!importResult.skipped && !importResult.failed && addedCount < batch.length) {
-              results.failed += batch.length - addedCount;
-            }
-          }
-        } catch (err: unknown) {
-          results.failed += groupedPaths.length;
-          results.errors.push(`${targetFolder}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-    } else {
-      const folderIdsByName = new Map(folders.map(folder => [folder.name, folder.id]));
-      const nextFolders = [...folders];
-      let nextFiles = [...files];
-
-      for (const suggestion of suggestions) {
-        let folderId = folderIdsByName.get(suggestion.targetFolder) || null;
-        if (!folderId) {
-          const newFolder = buildSimulatedFolder(suggestion.targetFolder);
-          folderId = newFolder.id;
-          folderIdsByName.set(newFolder.name, newFolder.id);
-          nextFolders.push(newFolder);
-        }
-
-        const file = nextFiles.find(item => item.id === suggestion.fileId);
-        if (!file) {
-          results.failed++;
-          results.errors.push(`${suggestion.fileName}: missing source file`);
-          continue;
-        }
-
-        nextFiles = nextFiles.map(item => (
-          item.id === suggestion.fileId
-            ? { ...item, parentId: folderId }
-            : item
-        ));
-        results.success++;
-      }
-
-      setFolders(nextFolders);
-      setFiles(nextFiles);
-    }
-
+    const { results, nextFolders, nextFiles } = executeSimulatedSmartTidy(files, folders, rule);
+    setFolders(nextFolders);
+    setFiles(nextFiles);
     if (results.failed > 0) {
       const details = results.errors.slice(0, 3).join('；');
       setError(`Smart tidy finished with ${results.success} success(es) and ${results.failed} failure(s).${details ? ` ${details}` : ''}`);
     }
-
-    if (shouldRefreshDesktop && results.success > 0) {
-      await refreshDesktop();
-    }
-
     return results;
   };
 
@@ -551,6 +420,7 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
         selectedFileId,
         healthInfo,
         isLoading,
+        hasLoadedOnce,
         error,
         refreshDesktop,
         setSelectedFileId,

@@ -1,9 +1,9 @@
 use crate::apps::close_app_picker;
+use crate::capture::{open_snip_window, snip_cancel};
 use crate::shell::{
     apply_drawer_state, recover_shell_windows, shell_snapshot, update_active_module,
     update_shell_state, ShellState,
 };
-use crate::stickers::{open_snip_window, snip_cancel};
 use crate::tool_windows::{close_todo_window, APP_PICKER_WINDOW_LABEL};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -30,8 +30,10 @@ pub fn tests_collapse_drawer(
 }
 
 #[tauri::command]
-pub fn tests_start_snip(app: AppHandle) -> Result<Value, String> {
-    open_snip_window(&app)?;
+pub async fn tests_start_snip(app: AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || open_snip_window(&app))
+        .await
+        .map_err(|err| format!("test start snip failed: {err}"))??;
     Ok(json!({ "success": true }))
 }
 

@@ -6,13 +6,16 @@ import { HandleApp } from './modules/handle/HandleApp';
 import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
 import { RailApp } from './modules/rail/RailApp';
 import { SnipOverlayApp } from './modules/stickers/SnipOverlayApp';
-import { StickerApp } from './modules/stickers/StickerApp';
 import { TodoPanelApp } from './modules/todos/TodoPanel';
 
 const windowMode = new URLSearchParams(window.location.search).get('mode');
 
 const App: React.FC = () => {
   let content: React.ReactNode;
+
+  if (windowMode === 'bootstrap') {
+    return null;
+  }
 
   if (windowMode === 'handle') {
     content = <HandleApp />;
@@ -24,8 +27,6 @@ const App: React.FC = () => {
     content = <QuickCaptureApp />;
   } else if (windowMode === 'snip') {
     content = <SnipOverlayApp />;
-  } else if (windowMode === 'sticker') {
-    content = <StickerApp />;
   } else {
     content = (
       <WorkspaceProvider>

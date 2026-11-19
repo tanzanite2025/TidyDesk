@@ -18,7 +18,30 @@ pub fn atomic_write_json<T: Serialize>(path: &Path, value: &T, label: &str) -> R
     atomic_write_text(path, &content, label)
 }
 
+pub fn atomic_write_json_fast<T: Serialize>(
+    path: &Path,
+    value: &T,
+    label: &str,
+) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(value)
+        .map_err(|err| format!("failed to serialize {label}: {err}"))?;
+    atomic_write_text_with_mode(path, &content, label, false)
+}
+
 pub fn atomic_write_text(path: &Path, content: &str, label: &str) -> Result<(), String> {
+    atomic_write_text_with_mode(path, content, label, true)
+}
+
+pub fn atomic_write_text_fast(path: &Path, content: &str, label: &str) -> Result<(), String> {
+    atomic_write_text_with_mode(path, content, label, false)
+}
+
+fn atomic_write_text_with_mode(
+    path: &Path,
+    content: &str,
+    label: &str,
+    strict_sync: bool,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|err| format!("failed to create {label} parent: {err}"))?;
@@ -30,10 +53,15 @@ pub fn atomic_write_text(path: &Path, content: &str, label: &str) -> Result<(), 
             .map_err(|err| format!("failed to create temporary {label}: {err}"))?;
         file.write_all(content.as_bytes())
             .map_err(|err| format!("failed to write temporary {label}: {err}"))?;
-        file.sync_all()
-            .map_err(|err| format!("failed to sync temporary {label}: {err}"))?;
+        if strict_sync {
+            file.sync_all()
+                .map_err(|err| format!("failed to sync temporary {label}: {err}"))?;
+        } else {
+            file.flush()
+                .map_err(|err| format!("failed to flush temporary {label}: {err}"))?;
+        }
         drop(file);
-        replace_file(&temp_path, path, label)
+        replace_file(&temp_path, path, label, strict_sync)
     })();
 
     if result.is_err() {
@@ -44,21 +72,32 @@ pub fn atomic_write_text(path: &Path, content: &str, label: &str) -> Result<(), 
 }
 
 #[cfg(windows)]
-fn replace_file(temp_path: &Path, path: &Path, label: &str) -> Result<(), String> {
+fn replace_file(
+    temp_path: &Path,
+    path: &Path,
+    label: &str,
+    strict_sync: bool,
+) -> Result<(), String> {
     let from: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let flags = if strict_sync {
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+    } else {
+        MOVEFILE_REPLACE_EXISTING
+    };
     unsafe {
-        MoveFileExW(
-            PCWSTR(from.as_ptr()),
-            PCWSTR(to.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-        .map_err(|err| format!("failed to replace {label}: {err}"))
+        MoveFileExW(PCWSTR(from.as_ptr()), PCWSTR(to.as_ptr()), flags)
+            .map_err(|err| format!("failed to replace {label}: {err}"))
     }
 }
 
 #[cfg(not(windows))]
-fn replace_file(temp_path: &Path, path: &Path, label: &str) -> Result<(), String> {
+fn replace_file(
+    temp_path: &Path,
+    path: &Path,
+    label: &str,
+    _strict_sync: bool,
+) -> Result<(), String> {
     fs::rename(temp_path, path).map_err(|err| format!("failed to replace {label}: {err}"))
 }
 
@@ -124,6 +163,22 @@ mod tests {
             .expect("first write should succeed");
         atomic_write_text(&path, "{\"version\":2}", "test state")
             .expect("second write should replace existing file");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("state should be readable"),
+            "{\"version\":2}"
+        );
+    }
+
+    #[test]
+    fn atomic_write_text_fast_replaces_existing_file() {
+        let root = temp_test_dir("atomic-replace-fast");
+        let path = root.join("state.json");
+
+        atomic_write_text_fast(&path, "{\"version\":1}", "test fast state")
+            .expect("first fast write should succeed");
+        atomic_write_text_fast(&path, "{\"version\":2}", "test fast state")
+            .expect("second fast write should replace existing file");
 
         assert_eq!(
             fs::read_to_string(&path).expect("state should be readable"),

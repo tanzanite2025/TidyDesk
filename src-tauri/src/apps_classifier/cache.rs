@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
-const APP_CACHE_VERSION: &str = "rust-app-scan-v1";
+const APP_CACHE_VERSION: &str = "rust-app-scan-v2";
 const APP_CACHE_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000;
 const APP_CACHE_FUTURE_TOLERANCE_MILLIS: i64 = 5 * 60 * 1000;
 
@@ -57,7 +57,7 @@ pub fn write_app_cache(app: &AppHandle, metadata: &ScanMetadataResult) -> Result
         timestamp: Some(now_millis()),
         apps: metadata.shortcuts.clone(),
     };
-    crate::persistence::atomic_write_json(&path, &cache, "app cache")
+    crate::persistence::atomic_write_json_fast(&path, &cache, "app cache")
 }
 
 pub fn app_cache_info(app: &AppHandle) -> Result<AppCacheInfo, String> {

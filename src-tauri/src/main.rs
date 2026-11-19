@@ -10,6 +10,8 @@ use tauri::Manager;
 
 mod apps;
 mod apps_classifier;
+mod asset_protocol;
+mod capture;
 mod commands;
 mod files;
 mod files_rules;
@@ -22,20 +24,22 @@ mod resident;
 mod shell;
 mod shortcuts;
 mod stickers;
-mod stickers_rules;
 mod todos;
-mod todos_rules;
 mod tool_windows;
 mod updates;
 
-pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link};
-pub use crate::paths::{drawer_root, is_path_inside, prepare_drawer_storage, timestamp_string};
+pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link, ShortcutResolver};
+pub use crate::paths::{
+    drawer_root, is_path_inside, is_path_inside_resolved, prepare_drawer_storage,
+    resolve_path_for_comparison, timestamp_string,
+};
 
 use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
     apps_scan_installed, close_app_picker, open_app_picker, AppPickerTargetState,
     TrustedShortcutState,
 };
+use capture::{snip_cancel, snip_complete_selection, snip_get_background_image, SnipCaptureState};
 use commands::clipboard::clipboard_read_text;
 use commands::events::{events_send, UserInteractionState};
 #[cfg(any(debug_assertions, feature = "e2e-tests"))]
@@ -52,7 +56,6 @@ use hotkeys::{
     hotkeys_get_settings, hotkeys_reset_defaults, hotkeys_update_binding, hotkeys_validate_binding,
     HotkeyRuntimeState,
 };
-use icons::extract_icon_data_url;
 use quick_notes::{
     quick_notes_create_note, quick_notes_delete_note, quick_notes_read_state,
     quick_notes_update_note, QuickNotesStoreState,
@@ -67,9 +70,8 @@ use shortcuts::{
     ShortcutWatcherState,
 };
 use stickers::{
-    restore_stickers, snip_cancel, snip_complete_selection, snip_get_background_image,
-    sticker_close, sticker_copy, sticker_get, sticker_save_as, sticker_toggle_pin,
-    SnipCaptureState, StickerStoreState,
+    schedule_restore_stickers, sticker_close, sticker_copy, sticker_get, sticker_save_as,
+    sticker_toggle_pin, StickerStoreState,
 };
 use todos::{
     todos_create_card, todos_delete_card, todos_get_counts, todos_move_card, todos_read_state,
@@ -212,6 +214,9 @@ macro_rules! tidydesk_generate_handler {
 
 fn main() {
     let result = tauri::Builder::default()
+        .register_uri_scheme_protocol("tidydesk-asset", |ctx, request| {
+            asset_protocol::handle_asset_request(ctx.app_handle(), request.uri().path())
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let _ = crate::resident::show_handle_window(app);
         }))
@@ -294,7 +299,7 @@ fn main() {
                     let _ = window.set_always_on_top(true);
                 }
             }
-            let _ = restore_stickers(&handle);
+            schedule_restore_stickers(handle.clone());
             start_shortcut_background_services(handle.clone());
             Ok(())
         })

@@ -10,6 +10,10 @@ const mode = params.get('mode');
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 
 async function resolveAppComponent(): Promise<ComponentType> {
+  if (mode === 'bootstrap') {
+    return () => null;
+  }
+
   if (mode === 'app-picker') {
     return (await import('./AppPickerApp.tsx')).AppPickerApp;
   }
