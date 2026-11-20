@@ -81,6 +81,23 @@ fn close_todo_window_internal(app: &AppHandle) -> Result<(), String> {
     sync_todo_window_closed(app)
 }
 
+pub fn hide_todo_window_for_snip(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
+        window.hide().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn show_todo_window_after_snip(app: &AppHandle) -> Result<(), String> {
+    let shell = app.state::<ShellState>();
+    ensure_todo_window(app)?;
+    if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
+        window.show().map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+    }
+    update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))
+}
+
 #[tauri::command]
 pub async fn open_todo_window(app: AppHandle) -> Result<Value, String> {
     let app_handle = app.clone();

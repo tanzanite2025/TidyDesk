@@ -1,13 +1,20 @@
+use super::attachments::{
+    finalize_card_attachments_delete, remove_attachment_files, rollback_card_attachments_delete,
+    save_image_attachment, stage_card_attachments_delete,
+};
 use super::model::{
     create_todo_id, find_todo_card_index, insert_card_order, prepend_card_order,
     remove_card_from_orders, safe_todo_title, todo_board_id, todo_column_ids, todo_counts,
-    CreateTodoCardPayload, MoveTodoCardPayload, UpdateTodoCardPayload,
+    AddTodoAttachmentBytesPayload, CreateTodoCardPayload, DeleteTodoAttachmentPayload,
+    MoveTodoCardPayload, SetTodoCardCoverPayload, UpdateTodoCardPayload,
 };
 use super::store::{
-    cache_todo_state_contents, read_todo_index_unlocked, todo_card_path,
-    todo_state_from_cache_or_disk, todo_state_from_index_unlocked, with_todo_store_lock,
-    write_todo_card_content_unlocked, write_todo_index_unlocked,
+    cache_todo_state_contents, enrich_card_view, read_todo_card_content_unlocked,
+    read_todo_index_unlocked, todo_card_path, todo_state_from_cache_or_disk,
+    todo_state_from_index_unlocked, with_todo_store_lock, write_todo_card_content_unlocked,
+    write_todo_index_unlocked,
 };
+use rfd::FileDialog;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,6 +77,8 @@ pub async fn todos_create_card(
                 "title": title,
                 "tags": [],
                 "archived": false,
+                "attachments": [],
+                "coverAttachmentId": Value::Null,
                 "createdAt": now,
                 "updatedAt": now,
             });
@@ -217,7 +226,9 @@ pub async fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value,
             index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
             let card_path = todo_card_path(&app, &card_id)?;
             let staged_content_path = stage_todo_card_content_delete(&card_path, &card_id)?;
+            let staged_attachments_dir = stage_card_attachments_delete(&app, &card_id)?;
             if let Err(err) = write_todo_index_unlocked(&app, &index) {
+                rollback_card_attachments_delete(staged_attachments_dir.as_ref());
                 if let Some(staged_path) = &staged_content_path {
                     let _ = fs::rename(staged_path, &card_path);
                 }
@@ -226,6 +237,7 @@ pub async fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value,
             if let Some(staged_path) = staged_content_path {
                 remove_staged_todo_card_content(&staged_path);
             }
+            finalize_card_attachments_delete(staged_attachments_dir.as_ref());
             if let Ok(mut cache) = store.content_cache.lock() {
                 cache.remove(&card_id);
             }
@@ -281,6 +293,278 @@ pub async fn todos_move_card(
     })
     .await
     .map_err(|err| format!("todo move task failed: {err}"))?
+}
+
+fn attach_image_bytes_to_card_sync(
+    app: &AppHandle,
+    card_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<(Value, Value), String> {
+    with_todo_store_lock(app, |store| {
+        let mut index = read_todo_index_unlocked(app)?;
+        let card_index = find_todo_card_index(&index, card_id)?;
+        let attachment = save_image_attachment(app, card_id, file_name, bytes)?;
+
+        let cards = index["cards"]
+            .as_array_mut()
+            .ok_or_else(|| "todo index cards is not an array".to_string())?;
+        let card = &mut cards[card_index];
+        if !card["attachments"].is_array() {
+            card["attachments"] = json!([]);
+        }
+        let att_id = attachment["id"].as_str().unwrap_or_default().to_string();
+        if let Some(list) = card["attachments"].as_array_mut() {
+            list.push(attachment);
+        }
+        if card["coverAttachmentId"].is_null() {
+            card["coverAttachmentId"] = json!(att_id);
+        }
+        let now = crate::timestamp_string();
+        card["updatedAt"] = json!(now.clone());
+        index["boards"][0]["updatedAt"] = json!(now);
+
+        if let Err(err) = write_todo_index_unlocked(app, &index) {
+            if let Some(last) = index["cards"][card_index]["attachments"]
+                .as_array()
+                .and_then(|arr| arr.last())
+            {
+                let _ = remove_attachment_files(app, card_id, last);
+            }
+            return Err(err);
+        }
+
+        let counts = todo_counts(&index);
+        let state = todo_state_from_cache_or_disk(app, store, &index, counts.clone())?;
+        Ok((state, counts))
+    })
+}
+
+pub fn attach_png_to_todo_card(
+    app: &AppHandle,
+    card_id: &str,
+    file_name: &str,
+    png: &[u8],
+) -> Result<(), String> {
+    let (state, counts) = attach_image_bytes_to_card_sync(app, card_id, file_name, png)?;
+    emit_todo_counts(app, &counts)?;
+    emit_todos_updated(app, &state)
+}
+
+#[tauri::command]
+pub async fn todos_get_card_detail(app: AppHandle, card_id: String) -> Result<Value, String> {
+    if card_id.trim().is_empty() {
+        return Err("Missing todo card id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        with_todo_store_lock(&app, |store| {
+            let index = read_todo_index_unlocked(&app)?;
+            let card_index = find_todo_card_index(&index, &card_id)?;
+            let card = &index["cards"][card_index];
+            let content = {
+                let mut cache = store
+                    .content_cache
+                    .lock()
+                    .map_err(|_| "failed to lock todo content cache".to_string())?;
+                if let Some(cached) = cache.get(&card_id) {
+                    cached.clone()
+                } else {
+                    let loaded = read_todo_card_content_unlocked(&app, &card_id)?;
+                    cache.insert(card_id.clone(), loaded.clone());
+                    loaded
+                }
+            };
+            Ok(enrich_card_view(card, content))
+        })
+    })
+    .await
+    .map_err(|err| format!("todo detail task failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn todos_add_attachment_bytes(
+    app: AppHandle,
+    payload: AddTodoAttachmentBytesPayload,
+) -> Result<Value, String> {
+    if payload.card_id.trim().is_empty() {
+        return Err("Missing todo card id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let (state, counts) = attach_image_bytes_to_card_sync(
+            &app,
+            &payload.card_id,
+            &payload.file_name,
+            &payload.bytes,
+        )?;
+        emit_todo_counts(&app, &counts)?;
+        Ok(state)
+    })
+    .await
+    .map_err(|err| format!("todo attachment upload task failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn todos_pick_and_add_attachment(
+    app: AppHandle,
+    card_id: String,
+) -> Result<Value, String> {
+    if card_id.trim().is_empty() {
+        return Err("Missing todo card id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(selected_path) = FileDialog::new()
+            .set_title("选择图片加入待办卡片")
+            .add_filter("图片文件", &["png", "jpg", "jpeg", "webp"])
+            .pick_file()
+        else {
+            return Ok(json!({ "canceled": true }));
+        };
+
+        let bytes = fs::read(&selected_path).map_err(|err| format!("读取所选图片失败: {err}"))?;
+        let file_name = selected_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("photo.png")
+            .to_string();
+
+        let (state, counts) = attach_image_bytes_to_card_sync(&app, &card_id, &file_name, &bytes)?;
+        emit_todo_counts(&app, &counts)?;
+        Ok(json!({ "canceled": false, "state": state }))
+    })
+    .await
+    .map_err(|err| format!("todo pick attachment task failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn todos_delete_attachment(
+    app: AppHandle,
+    payload: DeleteTodoAttachmentPayload,
+) -> Result<Value, String> {
+    if payload.card_id.trim().is_empty() || payload.attachment_id.trim().is_empty() {
+        return Err("Missing todo card or attachment id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let (state, counts) = with_todo_store_lock(&app, |store| {
+            let mut index = read_todo_index_unlocked(&app)?;
+            let card_index = find_todo_card_index(&index, &payload.card_id)?;
+
+            let removed_attachment = {
+                let card = &mut index["cards"][card_index];
+                let (removed, fallback_cover) = {
+                    let list = card["attachments"]
+                        .as_array_mut()
+                        .ok_or_else(|| "Todo attachment not found".to_string())?;
+                    let pos = list
+                        .iter()
+                        .position(|item| {
+                            item["id"].as_str() == Some(payload.attachment_id.as_str())
+                        })
+                        .ok_or_else(|| "Todo attachment not found".to_string())?;
+                    let removed = list.remove(pos);
+                    let fallback = list
+                        .first()
+                        .and_then(|item| item["id"].as_str())
+                        .map(|id| json!(id))
+                        .unwrap_or(Value::Null);
+                    (removed, fallback)
+                };
+
+                if card["coverAttachmentId"].as_str() == Some(payload.attachment_id.as_str()) {
+                    card["coverAttachmentId"] = fallback_cover;
+                }
+                let now = crate::timestamp_string();
+                card["updatedAt"] = json!(now);
+                removed
+            };
+
+            index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
+            write_todo_index_unlocked(&app, &index)?;
+            remove_attachment_files(&app, &payload.card_id, &removed_attachment)?;
+
+            let counts = todo_counts(&index);
+            let state = todo_state_from_cache_or_disk(&app, store, &index, counts.clone())?;
+            Ok((state, counts))
+        })?;
+        emit_todo_counts(&app, &counts)?;
+        Ok(state)
+    })
+    .await
+    .map_err(|err| format!("todo delete attachment task failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn todos_set_card_cover(
+    app: AppHandle,
+    payload: SetTodoCardCoverPayload,
+) -> Result<Value, String> {
+    if payload.card_id.trim().is_empty() {
+        return Err("Missing todo card id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let (state, counts) = with_todo_store_lock(&app, |store| {
+            let mut index = read_todo_index_unlocked(&app)?;
+            let card_index = find_todo_card_index(&index, &payload.card_id)?;
+            {
+                let card = &mut index["cards"][card_index];
+                let next_cover = match payload.attachment_id.as_deref() {
+                    Some(target_id) if !target_id.trim().is_empty() => {
+                        let exists = card["attachments"]
+                            .as_array()
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .any(|item| item["id"].as_str() == Some(target_id))
+                            })
+                            .unwrap_or(false);
+                        if !exists {
+                            return Err("Cover attachment not found on card".to_string());
+                        }
+                        json!(target_id)
+                    }
+                    _ => Value::Null,
+                };
+                card["coverAttachmentId"] = next_cover;
+                card["updatedAt"] = json!(crate::timestamp_string());
+            }
+            index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
+            write_todo_index_unlocked(&app, &index)?;
+
+            let counts = todo_counts(&index);
+            let state = todo_state_from_cache_or_disk(&app, store, &index, counts.clone())?;
+            Ok((state, counts))
+        })?;
+        emit_todo_counts(&app, &counts)?;
+        Ok(state)
+    })
+    .await
+    .map_err(|err| format!("todo set cover task failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn todos_start_snip_for_card(app: AppHandle, card_id: String) -> Result<Value, String> {
+    if card_id.trim().is_empty() {
+        return Err("Missing todo card id".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        with_todo_store_lock(&app, |_| {
+            let index = read_todo_index_unlocked(&app)?;
+            let _ = find_todo_card_index(&index, &card_id)?;
+            Ok(())
+        })?;
+        crate::capture::open_snip_window_for_todo_card(&app, card_id)
+    })
+    .await
+    .map_err(|err| format!("todo start snip task failed: {err}"))??;
+    Ok(json!({ "success": true }))
+}
+
+fn emit_todos_updated(app: &AppHandle, state: &Value) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("todos") {
+        window
+            .emit("todos-updated", state.clone())
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn emit_todo_counts(app: &AppHandle, counts: &Value) -> Result<(), String> {

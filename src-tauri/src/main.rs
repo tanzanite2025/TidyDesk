@@ -74,8 +74,10 @@ use stickers::{
     sticker_toggle_pin, StickerStoreState,
 };
 use todos::{
-    todos_create_card, todos_delete_card, todos_get_counts, todos_move_card, todos_read_state,
-    todos_update_card, TodoStoreState,
+    todos_add_attachment_bytes, todos_create_card, todos_delete_attachment, todos_delete_card,
+    todos_get_card_detail, todos_get_counts, todos_move_card, todos_pick_and_add_attachment,
+    todos_read_state, todos_set_card_cover, todos_start_snip_for_card, todos_update_card,
+    TodoStoreState,
 };
 use tool_windows::{close_todo_window, open_todo_window};
 use updates::{
@@ -129,6 +131,12 @@ macro_rules! tidydesk_generate_handler {
             todos_update_card,
             todos_delete_card,
             todos_move_card,
+            todos_get_card_detail,
+            todos_add_attachment_bytes,
+            todos_pick_and_add_attachment,
+            todos_delete_attachment,
+            todos_set_card_cover,
+            todos_start_snip_for_card,
             quick_notes_read_state,
             quick_notes_create_note,
             quick_notes_update_note,
@@ -191,6 +199,12 @@ macro_rules! tidydesk_generate_handler {
             todos_update_card,
             todos_delete_card,
             todos_move_card,
+            todos_get_card_detail,
+            todos_add_attachment_bytes,
+            todos_pick_and_add_attachment,
+            todos_delete_attachment,
+            todos_set_card_cover,
+            todos_start_snip_for_card,
             quick_notes_read_state,
             quick_notes_create_note,
             quick_notes_update_note,

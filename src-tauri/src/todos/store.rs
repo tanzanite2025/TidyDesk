@@ -1,3 +1,4 @@
+use super::attachments::enrich_attachment_view;
 use super::model::{create_default_todo_index, normalize_todo_index};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -128,6 +129,32 @@ pub(super) fn write_todo_card_content_unlocked(
     )
 }
 
+pub(super) fn enrich_card_view(card: &Value, content: String) -> Value {
+    let mut next = card.clone();
+    let card_id = next["id"].as_str().unwrap_or_default().to_string();
+    let raw_attachments = next["attachments"].as_array().cloned().unwrap_or_default();
+    let attachments: Vec<Value> = raw_attachments
+        .iter()
+        .map(|att| enrich_attachment_view(&card_id, att))
+        .collect();
+    let cover_id = next["coverAttachmentId"].as_str().map(str::to_string);
+    let cover_thumb_url = cover_id
+        .as_deref()
+        .and_then(|cid| {
+            attachments
+                .iter()
+                .find(|att| att["id"].as_str() == Some(cid))
+        })
+        .and_then(|att| att["thumbUrl"].as_str().map(|s| json!(s)))
+        .unwrap_or(Value::Null);
+
+    next["attachments"] = Value::Array(attachments.clone());
+    next["attachmentCount"] = json!(attachments.len());
+    next["coverThumbUrl"] = cover_thumb_url;
+    next["content"] = json!(content);
+    next
+}
+
 pub(super) fn todo_state_from_index_unlocked(
     app: &AppHandle,
     index: &Value,
@@ -139,10 +166,9 @@ pub(super) fn todo_state_from_index_unlocked(
             cards
                 .iter()
                 .map(|card| {
-                    let mut next = card.clone();
-                    let card_id = next["id"].as_str().unwrap_or_default().to_string();
-                    next["content"] = json!(read_todo_card_content_unlocked(app, &card_id)?);
-                    Ok(next)
+                    let card_id = card["id"].as_str().unwrap_or_default();
+                    let content = read_todo_card_content_unlocked(app, card_id)?;
+                    Ok(enrich_card_view(card, content))
                 })
                 .collect::<Result<Vec<_>, String>>()
         })
@@ -185,8 +211,7 @@ pub(super) fn todo_state_from_cache_or_disk(
             cards
                 .iter()
                 .map(|card| {
-                    let mut next = card.clone();
-                    let card_id = next["id"].as_str().unwrap_or_default().to_string();
+                    let card_id = card["id"].as_str().unwrap_or_default().to_string();
                     let content = if let Some(cached) = cache.get(&card_id) {
                         cached.clone()
                     } else {
@@ -194,8 +219,7 @@ pub(super) fn todo_state_from_cache_or_disk(
                         cache.insert(card_id, loaded.clone());
                         loaded
                     };
-                    next["content"] = json!(content);
-                    Ok(next)
+                    Ok(enrich_card_view(card, content))
                 })
                 .collect::<Result<Vec<_>, String>>()
         })

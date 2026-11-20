@@ -23,6 +23,15 @@ pub struct PendingSticker {
     bounds: StickerWindowBounds,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SnipTarget {
+    #[default]
+    Sticker,
+    TodoCard {
+        card_id: String,
+    },
+}
+
 #[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
@@ -30,6 +39,7 @@ pub struct SnipCaptureState {
     pub frozen_image_bytes: Mutex<Option<(u64, Arc<Vec<u8>>)>>,
     pub frozen_image_error: Mutex<Option<String>>,
     pub pending_sticker: Mutex<Option<PendingSticker>>,
+    pub snip_target: Mutex<SnipTarget>,
 }
 
 fn pending_sticker_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -61,8 +71,27 @@ pub fn clear_pending_sticker_cache(app: &AppHandle) {
 }
 
 pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
+    open_snip_window_with_target(app, SnipTarget::Sticker)
+}
+
+pub fn open_snip_window_for_todo_card(app: &AppHandle, card_id: String) -> Result<(), String> {
+    crate::tool_windows::hide_todo_window_for_snip(app)?;
+    std::thread::sleep(Duration::from_millis(90));
+    open_snip_window_with_target(app, SnipTarget::TodoCard { card_id })
+}
+
+fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(), String> {
     if is_snip_capture_in_flight(app) {
         return Ok(());
+    }
+
+    let state = app.state::<SnipCaptureState>();
+    {
+        let mut target_guard = state
+            .snip_target
+            .lock()
+            .map_err(|_| "failed to lock snip target".to_string())?;
+        *target_guard = target;
     }
 
     // 在打开窗口之前，先静默截取全屏
@@ -73,7 +102,6 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
         width: monitor.width as f64 / monitor.scale_factor,
         height: monitor.height as f64 / monitor.scale_factor,
     };
-    let state = app.state::<SnipCaptureState>();
     match capture_monitor_region_png(&monitor, &rect) {
         Ok(png) => {
             let version = state.frozen_image_version.fetch_add(1, Ordering::Relaxed) + 1;
@@ -141,6 +169,14 @@ pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Resul
     }
 }
 
+fn take_snip_target(app: &AppHandle) -> SnipTarget {
+    let state = app.state::<SnipCaptureState>();
+    let Ok(mut target) = state.snip_target.lock() else {
+        return SnipTarget::Sticker;
+    };
+    std::mem::take(&mut *target)
+}
+
 #[tauri::command]
 pub async fn snip_complete_selection(
     window: WebviewWindow,
@@ -149,14 +185,18 @@ pub async fn snip_complete_selection(
 ) -> Result<Value, String> {
     require_snip_window(&window, "snip_complete_selection")?;
     begin_snip_capture(&app)?;
+    let target = take_snip_target(&app);
+    let is_todo_target = matches!(target, SnipTarget::TodoCard { .. });
     let app_handle = app.clone();
-    let capture_result =
-        tauri::async_runtime::spawn_blocking(move || capture_selection(&app_handle, payload)).await;
+    let capture_result = tauri::async_runtime::spawn_blocking(move || {
+        capture_selection(&app_handle, payload, target)
+    })
+    .await;
     finish_snip_capture(&app);
     let result = capture_result
         .map_err(|err| err.to_string())
         .and_then(|result| result);
-    if let Err(cleanup_err) = cleanup_after_snip_selection(&app) {
+    if let Err(cleanup_err) = cleanup_after_snip_selection(&app, is_todo_target) {
         if result.is_ok() {
             return Err(cleanup_err);
         }
@@ -172,10 +212,15 @@ pub async fn snip_complete_selection(
 
 #[tauri::command]
 pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
+    let target = take_snip_target(&app);
     crate::tool_windows::close_snip_window(&app)?;
     clear_frozen_background(&app)?;
     finish_snip_capture(&app);
-    crate::shell::recover_shell_windows(&app)?;
+    if matches!(target, SnipTarget::TodoCard { .. }) {
+        crate::tool_windows::show_todo_window_after_snip(&app)?;
+    } else {
+        crate::shell::recover_shell_windows(&app)?;
+    }
     Ok(json!({ "success": true }))
 }
 
@@ -267,8 +312,11 @@ fn save_pending_sticker(
     Ok(())
 }
 
-fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<CapturedSticker, String> {
-    ensure_storage(app)?;
+fn capture_selection(
+    app: &AppHandle,
+    payload: SnipRectPayload,
+    target: SnipTarget,
+) -> Result<CapturedSticker, String> {
     let monitor = active_monitor(app)?;
     let normalized = normalize_rect(payload, &monitor)?;
 
@@ -308,6 +356,15 @@ fn capture_selection(app: &AppHandle, payload: SnipRectPayload) -> Result<Captur
     crate::tool_windows::close_snip_window(app)?;
     clear_frozen_background(app)?;
 
+    if let SnipTarget::TodoCard { card_id } = target {
+        crate::todos::attach_png_to_todo_card(app, &card_id, "screenshot.png", &png)?;
+        return Ok(CapturedSticker {
+            sticker_id: None,
+            pasted: false,
+        });
+    }
+
+    ensure_storage(app)?;
     let bounds = initial_sticker_bounds(&monitor, &normalized);
     if crate::resident::read_resident_settings(app).auto_stick_after_snip {
         let sticker_id = create_sticker_from_png(app, &png, bounds)?;
@@ -344,7 +401,7 @@ fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn cleanup_after_snip_selection(app: &AppHandle) -> Result<(), String> {
+fn cleanup_after_snip_selection(app: &AppHandle, is_todo_target: bool) -> Result<(), String> {
     let mut errors = Vec::new();
     if let Err(err) = crate::tool_windows::close_snip_window(app) {
         errors.push(err);
@@ -352,7 +409,12 @@ fn cleanup_after_snip_selection(app: &AppHandle) -> Result<(), String> {
     if let Err(err) = clear_frozen_background(app) {
         errors.push(err);
     }
-    if let Err(err) = crate::shell::recover_shell_windows(app) {
+    let recover_result = if is_todo_target {
+        crate::tool_windows::show_todo_window_after_snip(app)
+    } else {
+        crate::shell::recover_shell_windows(app)
+    };
+    if let Err(err) = recover_result {
         errors.push(err);
     }
     if errors.is_empty() {

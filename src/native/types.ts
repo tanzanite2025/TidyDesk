@@ -44,8 +44,13 @@ import type {
   UpdateQuickNoteInput
 } from '../types/quick-note';
 import type {
+  AddTodoAttachmentBytesInput,
   CreateTodoCardInput,
+  DeleteTodoAttachmentInput,
   MoveTodoCardInput,
+  PickTodoAttachmentResult,
+  SetTodoCardCoverInput,
+  TodoCard,
   TodoCounts,
   TodoState,
   UpdateTodoCardInput
@@ -80,7 +85,14 @@ export interface NativeTodosClient {
   updateCard: (payload: UpdateTodoCardInput) => Promise<TodoState>;
   deleteCard: (cardId: string) => Promise<TodoState>;
   moveCard: (payload: MoveTodoCardInput) => Promise<TodoState>;
+  getCardDetail: (cardId: string) => Promise<TodoCard>;
+  addAttachmentBytes: (payload: AddTodoAttachmentBytesInput) => Promise<TodoState>;
+  pickAndAddAttachment: (cardId: string) => Promise<PickTodoAttachmentResult>;
+  deleteAttachment: (payload: DeleteTodoAttachmentInput) => Promise<TodoState>;
+  setCardCover: (payload: SetTodoCardCoverInput) => Promise<TodoState>;
+  startSnipForCard: (cardId: string) => Promise<unknown>;
   onCountsUpdated: (callback: (payload: TodoCounts) => void) => (() => void) | undefined;
+  onUpdated: (callback: (payload: TodoState) => void) => (() => void) | undefined;
 }
 
 export interface NativeQuickNotesClient {

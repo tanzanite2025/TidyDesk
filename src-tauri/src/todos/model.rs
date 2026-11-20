@@ -1,6 +1,31 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TODO_ID_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddTodoAttachmentBytesPayload {
+    pub card_id: String,
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTodoAttachmentPayload {
+    pub card_id: String,
+    pub attachment_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTodoCardCoverPayload {
+    pub card_id: String,
+    pub attachment_id: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -143,6 +168,31 @@ pub(super) fn normalize_todo_index(index: Value) -> Value {
                 .get("archived")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let attachments: Vec<Value> = card_obj
+                .get("attachments")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            item.get("id").and_then(Value::as_str).is_some()
+                                && (item.get("fileName").and_then(Value::as_str).is_some()
+                                    || item.get("relativePath").and_then(Value::as_str).is_some())
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let cover_attachment_id = card_obj
+                .get("coverAttachmentId")
+                .and_then(Value::as_str)
+                .filter(|cover_id| {
+                    attachments
+                        .iter()
+                        .any(|item| item.get("id").and_then(Value::as_str) == Some(*cover_id))
+                })
+                .map(|value| json!(value))
+                .unwrap_or(Value::Null);
 
             card_ids.insert(id.to_string());
             let mut next_card = card_obj.clone();
@@ -152,6 +202,8 @@ pub(super) fn normalize_todo_index(index: Value) -> Value {
             next_card.insert("title".to_string(), json!(title));
             next_card.insert("tags".to_string(), Value::Array(tags));
             next_card.insert("archived".to_string(), json!(archived));
+            next_card.insert("attachments".to_string(), Value::Array(attachments));
+            next_card.insert("coverAttachmentId".to_string(), cover_attachment_id);
             next_card.insert("createdAt".to_string(), json!(created_at));
             next_card.insert("updatedAt".to_string(), json!(updated_at));
             cards.push(Value::Object(next_card));
@@ -295,8 +347,9 @@ pub(super) fn safe_todo_title(title: &str, fallback: &str) -> String {
 }
 
 pub(super) fn create_todo_id(prefix: &str) -> String {
+    let seq = TODO_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!(
-        "{prefix}-{}-{}",
+        "{prefix}-{}-{}-{seq}",
         crate::timestamp_string(),
         std::process::id()
     )

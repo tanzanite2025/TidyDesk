@@ -3,6 +3,21 @@ export interface TodoColumn {
   title: string;
 }
 
+export interface TodoAttachment {
+  id: string;
+  kind: 'image';
+  originalName: string;
+  fileName: string;
+  thumbFileName: string;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  mimeType: string;
+  createdAt: string;
+  assetUrl?: string;
+  thumbUrl?: string;
+}
+
 export interface TodoBoard {
   id: string;
   title: string;
@@ -20,6 +35,10 @@ export interface TodoCard {
   content: string;
   tags: string[];
   archived: boolean;
+  attachments?: TodoAttachment[];
+  attachmentCount?: number;
+  coverAttachmentId?: string | null;
+  coverThumbUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -56,4 +75,25 @@ export interface MoveTodoCardInput {
   id: string;
   columnId: string;
   beforeId?: string;
+}
+
+export interface AddTodoAttachmentBytesInput {
+  cardId: string;
+  fileName: string;
+  bytes: number[];
+}
+
+export interface DeleteTodoAttachmentInput {
+  cardId: string;
+  attachmentId: string;
+}
+
+export interface SetTodoCardCoverInput {
+  cardId: string;
+  attachmentId: string | null;
+}
+
+export interface PickTodoAttachmentResult {
+  canceled: boolean;
+  state?: TodoState;
 }

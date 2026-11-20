@@ -8,6 +8,11 @@ pub(crate) enum AssetRoute {
     SnipCurrent,
     IconPng(String),
     StickerPng(String),
+    TodoAttachment {
+        card_id: String,
+        file_name: String,
+        content_type: &'static str,
+    },
 }
 
 /// Build the platform-appropriate URL for TidyDesk's custom read-only asset protocol.
@@ -59,6 +64,44 @@ pub(crate) fn parse_asset_route(raw_path: &str) -> Option<AssetRoute> {
             }
         }
         return None;
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("todos/") {
+        let mut parts = rest.split('/');
+        let (Some(card_id), Some(file_name), None) = (parts.next(), parts.next(), parts.next())
+        else {
+            return None;
+        };
+        let valid_card_id = !card_id.is_empty()
+            && card_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if !valid_card_id {
+            return None;
+        }
+        let valid_file_name = !file_name.is_empty()
+            && !file_name.starts_with('.')
+            && file_name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+        if !valid_file_name {
+            return None;
+        }
+        let lower = file_name.to_ascii_lowercase();
+        let content_type = if lower.ends_with(".png") {
+            "image/png"
+        } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+            "image/jpeg"
+        } else if lower.ends_with(".webp") {
+            "image/webp"
+        } else {
+            return None;
+        };
+        return Some(AssetRoute::TodoAttachment {
+            card_id: card_id.to_string(),
+            file_name: file_name.to_string(),
+            content_type,
+        });
     }
 
     None
@@ -136,6 +179,22 @@ pub fn handle_asset_request(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>
                 Err(_) => text_error(StatusCode::NOT_FOUND, "Sticker image not found"),
             }
         }
+        AssetRoute::TodoAttachment {
+            card_id,
+            file_name,
+            content_type,
+        } => {
+            let Ok(attachments_dir) = crate::todos::todo_attachments_root(app) else {
+                return text_error(StatusCode::NOT_FOUND, "Todo attachment storage unavailable");
+            };
+            let path = attachments_dir.join(&card_id).join(&file_name);
+            match fs::read(path) {
+                Ok(bytes) => {
+                    build_response(StatusCode::OK, content_type, "public, max-age=86400", bytes)
+                }
+                Err(_) => text_error(StatusCode::NOT_FOUND, "Todo attachment not found"),
+            }
+        }
     }
 }
 
@@ -159,6 +218,22 @@ mod tests {
             parse_asset_route("/stickers/sticker-123_abc.png"),
             Some(AssetRoute::StickerPng("sticker-123_abc.png".to_string()))
         );
+        assert_eq!(
+            parse_asset_route("/todos/card-1_a/att-1.png"),
+            Some(AssetRoute::TodoAttachment {
+                card_id: "card-1_a".to_string(),
+                file_name: "att-1.png".to_string(),
+                content_type: "image/png",
+            })
+        );
+        assert_eq!(
+            parse_asset_route("/todos/card-1_a/photo.webp"),
+            Some(AssetRoute::TodoAttachment {
+                card_id: "card-1_a".to_string(),
+                file_name: "photo.webp".to_string(),
+                content_type: "image/webp",
+            })
+        );
     }
 
     #[test]
@@ -168,6 +243,9 @@ mod tests {
         assert_eq!(parse_asset_route("/icons/nothex.png"), None);
         assert_eq!(parse_asset_route("/stickers/.png"), None);
         assert_eq!(parse_asset_route("/stickers/a/b.png"), None);
+        assert_eq!(parse_asset_route("/todos/card-1/sub/a.png"), None);
+        assert_eq!(parse_asset_route("/todos/card-1/.hidden.png"), None);
+        assert_eq!(parse_asset_route("/todos/card-1/script.svg"), None);
         assert_eq!(parse_asset_route("/other/file.png"), None);
     }
 }

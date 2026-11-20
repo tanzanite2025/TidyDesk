@@ -29,7 +29,7 @@
 | 阶段 | 主题 | 状态 | 目标版本参考 |
 | --- | --- | --- | --- |
 | **Phase 0** | 单机底层架构底座与扩展字段兼容性 | ✅ 已完成 | `v3.5.0` |
-| **Phase 1** | 单机 Trello 式拍照 / 图片附件 TODO 看板 | ⬜ 未开始 | 下一阶段重点 |
+| **Phase 1** | 单机 Trello 式拍照 / 图片附件 TODO 看板 | 🚧 代码已完成（待实机验收） | 下一发布版本 |
 | **Phase 2** | 多账号本地隔离与协同数据模型补齐 | ⬜ 未开始 | 联网前置准备 |
 | **Phase 3** | 最小可用服务端与离线优先增量同步 | ⬜ 未开始 | 服务端上线 MVP |
 | **Phase 4** | 实时协同推送与 Web / 移动端拍照扩展 | ⬜ 未开始 | 多端实时协同 |
@@ -48,32 +48,31 @@
 
 ---
 
-### Phase 1：单机 Trello 式拍照 / 图片附件 TODO 看板（下一步优先）
+### Phase 1：单机 Trello 式拍照 / 图片附件 TODO 看板（代码已落地，待实机验收）
 
 > **核心目标**：在不引入服务器的情况下，让本地 TODO 窗口完整支持卡片封面图、拍照上传、截屏直接入卡、多图片附件管理与缩略图流畅渲染。
 
 #### 1.1 数据结构与存储布局扩展
-- [ ] 在 `src/types/todo.ts` 与 `src-tauri/src/todos/model.rs` 扩展卡片与附件模型（升级 `boards.json` `version: 2`）：
-  - `attachments`: `Array<{ id, kind: 'image', fileName, relativePath, thumbRelativePath, width, height, sizeBytes, mimeType, createdAt }>`
+- [x] 在 `src/types/todo.ts` 与 `src-tauri/src/todos/model.rs` 扩展卡片与附件模型（保持与 `boards.json` 既有字段及扩展字段兼容）：
+  - `attachments`: `Array<{ id, kind: 'image', originalName, fileName, thumbFileName, width, height, sizeBytes, mimeType, createdAt }>`
   - `coverAttachmentId`: `string | null`（看板列表封面图引用）
-  - `checklist`: 可选任务清单项数组
-- [ ] 在 `todos/store.rs` 建立卡片附件目录：`app_data_dir()/todos/attachments/<card_id>/`（原图 + 列表缩略图 `thumb_*.png` / `.webp`）。
-- [ ] 更新 `todos_delete_card`（`src-tauri/src/todos/commands.rs`）：采用“隔离重命名附件目录 → 更新 `boards.json` → 物理清理”两阶段删除，杜绝孤儿图片残留在磁盘。
+  - （注：独立结构化 `checklist` 待后续按需扩展，当前继续支持卡片 Markdown 任务项 `- [ ]`）
+- [x] 在 `src-tauri/src/todos/attachments.rs` 建立卡片附件目录：`app_data_dir()/todos/attachments/<card_id>/`（原图 + 最大边 360px 缩略图 `thumb_<att_id>.png`）。
+- [x] 更新 `todos_delete_card`（`src-tauri/src/todos/commands.rs`）：采用“隔离重命名附件目录 → 更新 `boards.json` → 物理清理”两阶段删除，杜绝孤儿图片残留在磁盘。
 
 #### 1.2 协议扩展与按需加载
-- [ ] 在 `src-tauri/src/asset_protocol.rs` 新增 `TodoAttachment` 安全路由（严格校验 `<card_id>` 与文件名白名单，拒绝 `..` 路径穿越），通过 `tidydesk-asset://localhost/todos/<card_id>/<file>` 输出。
-- [ ] 拆分 `todos_read_state` 与卡片详情命令：列表初始化仅返回元数据与封面缩略图 URL；点击打开卡片详情时按需读取正文与高清原图清单（新增 `todos_get_card_detail`）。
+- [x] 在 `src-tauri/src/asset_protocol.rs` 新增 `TodoAttachment` 安全路由（严格校验 `<card_id>` 与文件名白名单，拒绝 `..` 路径穿越），通过 `tidydesk-asset://localhost/todos/<card_id>/<file>` 输出。
+- [x] 新增 `todos_get_card_detail` 按需读取单卡详情，并使看板卡片列表瓷砖 `TodoCardTile.tsx` 仅渲染 `coverThumbUrl` 360px 缩略图。
 - [ ] 如后续需要本地音视频附件回放，在 `src-tauri/tauri.conf.json` 的 `media-src` 同步放行 `tidydesk-asset: http://tidydesk-asset.localhost`。
 
 #### 1.3 拍照、截图与本地上传入口
-- [ ] **本地图片/拖拽导入**：支持拖入或选图，Rust 后端转存并自动生成固定尺寸缩略图（如最大边 360px）。
-- [ ] **截屏直接生成任务图**：复用 `capture/screen_gdi.rs` + `SnipOverlayApp.tsx`，增加目标路由模式（贴桌面贴纸 vs 插入指定 TODO 卡片）。
-- [ ] **摄像头拍照任务**：前端基于 `<video>` + `getUserMedia` + `<canvas>` 抓拍（或 Rust 原生采集），确认在 Tauri Windows WebView2 中放行摄像头权限，并将抓拍帧直接落盘保存后绑定到当前卡片。
+- [x] **本地图片/粘贴导入**：支持原生文件选择框导入（PNG/JPG/WebP）及编辑区 `Ctrl+V` 粘贴图片，Rust 后端转存并生成 360px 缩略图。
+- [x] **截屏直接生成任务图**：复用 `capture/screen_gdi.rs` + `SnipOverlayApp.tsx`（`SnipTarget::TodoCard`），完成或取消均可靠恢复 `todos` 窗口并广播 `todos-updated`。
+- [x] **摄像头拍照任务**：前端基于 `<video>` + `getUserMedia` + `<canvas>` 实现 `TodoCameraModal.tsx`（含多摄像头切换、重拍与退出停轨释放，拒权/无设备显式提示）。
 
 #### 1.4 阶段验收标准
-- [ ] 单张卡片挂载 10+ 张高分辨率拍照图片后，看板列拖拽、切换列与滚动仍流畅，列表内存仅受缩略图影响。
-- [ ] 删除带图片卡片后，`todos/attachments/<card_id>/` 彻底清理无残留。
-- [ ] 补齐 `asset_protocol` `TodoAttachment` 路由测试与 `todos` 删卡清理/结构迁移测试，`npm run check` 与 `cargo test` 全量通过。
+- [ ] 实机桌面验收（`npm run dev`）：在真实 Windows 环境验证 WebView2 摄像头权限、多图卡片拖拽滚动与删卡磁盘清理。
+- [x] 补齐 `asset_protocol` `TodoAttachment` 路由单测与 `todos::attachments` 缩略图/异常校验单测，`npm run check`、`tsc --noUnusedLocals --noUnusedParameters`、`cargo check --features e2e-tests` 与 `cargo test`（22/22）全量通过。
 
 ---
 

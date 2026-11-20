@@ -201,9 +201,16 @@ export function createTauriNativeClient(): NativeClient {
       getCounts: () => invoke<TodoCounts>('todos_get_counts'),
       createCard: (payload: CreateTodoCardInput) => invoke<TodoState>('todos_create_card', { payload }),
       updateCard: (payload: UpdateTodoCardInput) => invoke<TodoState>('todos_update_card', { payload }),
-      deleteCard: (cardId: string) => invoke<TodoState>('todos_delete_card', { card_id: cardId }),
+      deleteCard: (cardId: string) => invoke<TodoState>('todos_delete_card', { cardId }),
       moveCard: (payload: MoveTodoCardInput) => invoke<TodoState>('todos_move_card', { payload }),
-      onCountsUpdated: callback => onTauriEvent<TodoCounts>('todo-counts-updated', callback)
+      getCardDetail: (cardId: string) => invoke('todos_get_card_detail', { cardId }),
+      addAttachmentBytes: payload => invoke<TodoState>('todos_add_attachment_bytes', { payload }),
+      pickAndAddAttachment: (cardId: string) => invoke('todos_pick_and_add_attachment', { cardId }),
+      deleteAttachment: payload => invoke<TodoState>('todos_delete_attachment', { payload }),
+      setCardCover: payload => invoke<TodoState>('todos_set_card_cover', { payload }),
+      startSnipForCard: (cardId: string) => invoke('todos_start_snip_for_card', { cardId }),
+      onCountsUpdated: callback => onTauriEvent<TodoCounts>('todo-counts-updated', callback),
+      onUpdated: callback => onTauriEvent<TodoState>('todos-updated', callback)
     },
     quickNotes: {
       readState: () => invoke<QuickNotesState>('quick_notes_read_state'),

@@ -4,37 +4,11 @@ import { TodoProvider, useTodos } from '../../context/TodoContext';
 import { nativeClient } from '../../native/native-client';
 import { TodoCard, TodoColumn } from '../../types/todo';
 import { MarkdownPreview } from './MarkdownPreview';
+import { TodoCardTile } from './TodoCardTile';
+import { TodoAttachmentsSection } from './TodoAttachmentsSection';
+import { TodoCameraModal } from './TodoCameraModal';
 
 type EditorMode = 'write' | 'preview';
-
-function cardSummary(content: string) {
-  return content
-    .split(/\r?\n/)
-    .map(line => line.replace(/^#+\s*/, '').replace(/^- \[[ xX]\]\s*/, '').trim())
-    .find(Boolean) || '没有描述';
-}
-
-const TodoCardTile: React.FC<{
-  card: TodoCard;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDragStart: (event: React.DragEvent<HTMLButtonElement>) => void;
-}> = ({ card, isSelected, onSelect, onDragStart }) => (
-  <button
-    type="button"
-    draggable
-    onDragStart={onDragStart}
-    onClick={onSelect}
-    className={`w-full rounded-lg border p-3 text-left transition-all ${
-      isSelected
-        ? 'border-sky-300/35 bg-sky-400/14'
-        : 'border-white/[0.07] bg-white/[0.055] hover:bg-white/[0.09]'
-    }`}
-  >
-    <div className="line-clamp-2 text-[12px] font-bold leading-4 text-slate-100">{card.title}</div>
-    <div className="mt-2 line-clamp-2 text-[10px] leading-4 text-slate-500">{cardSummary(card.content)}</div>
-  </button>
-);
 
 const MarkdownToolbar: React.FC<{
   mode: EditorMode;
@@ -75,13 +49,34 @@ const MarkdownToolbar: React.FC<{
 );
 
 const TodoPanelInner: React.FC = () => {
-  const { board, cardsByColumn, counts, isLoading, error, refreshTodos, createCard, updateCard, deleteCard, moveCard, clearError } = useTodos();
+  const {
+    board,
+    cardsByColumn,
+    counts,
+    isLoading,
+    isUploadingAttachment,
+    error,
+    refreshTodos,
+    createCard,
+    updateCard,
+    deleteCard,
+    moveCard,
+    getCardDetail,
+    addAttachmentBytes,
+    pickAndAddAttachment,
+    deleteAttachment,
+    setCardCover,
+    startSnipForCard,
+    clearError
+  } = useTodos();
   const [newCardTitle, setNewCardTitle] = useState('');
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const [selectedDetailCard, setSelectedDetailCard] = useState<TodoCard | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState('');
   const [editorMode, setEditorMode] = useState<EditorMode>('write');
   const [isDirty, setIsDirty] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const draftRef = useRef({ cardId: null as string | null, title: '', content: '' });
@@ -93,13 +88,34 @@ const TodoPanelInner: React.FC = () => {
       .find(card => card.id === selectedCardId) || null;
   }, [board, cardsByColumn, selectedCardId]);
 
+  const activeDetailCard = useMemo(() => {
+    if (!selectedCard) return null;
+    if (selectedDetailCard && selectedDetailCard.id === selectedCard.id) {
+      return { ...selectedDetailCard, ...selectedCard };
+    }
+    return selectedCard;
+  }, [selectedCard, selectedDetailCard]);
+
   useEffect(() => {
-    if (!selectedCard) return;
+    if (!selectedCard) {
+      setSelectedDetailCard(null);
+      return;
+    }
     setDraftTitle(selectedCard.title);
     setDraftContent(selectedCard.content);
     setEditorMode('write');
     setIsDirty(false);
-  }, [selectedCard?.id]);
+
+    let disposed = false;
+    void getCardDetail(selectedCard.id).then(detail => {
+      if (!disposed && detail) {
+        setSelectedDetailCard(detail);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [getCardDetail, selectedCard?.id]);
 
   useEffect(() => {
     draftRef.current = { cardId: selectedCardId, title: draftTitle, content: draftContent };
@@ -168,11 +184,30 @@ const TodoPanelInner: React.FC = () => {
     });
   };
 
+  const handleDetailPaste = async (event: React.ClipboardEvent) => {
+    if (!selectedCard) return;
+    const items = Array.from(event.clipboardData.items || []);
+    const imageItem = items.find(item => item.type.startsWith('image/'));
+    if (!imageItem) return;
+
+    const blob = imageItem.getAsFile();
+    if (!blob) return;
+    event.preventDefault();
+    const buffer = await blob.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    const ext = blob.type.includes('jpeg') ? 'jpg' : blob.type.includes('webp') ? 'webp' : 'png';
+    await addAttachmentBytes({
+      cardId: selectedCard.id,
+      fileName: blob.name || `paste-${Date.now()}.${ext}`,
+      bytes
+    });
+  };
+
   const dropOnColumn = (event: React.DragEvent, column: TodoColumn) => {
     event.preventDefault();
     const cardId = event.dataTransfer.getData('text/plain') || draggingCardId;
     if (!cardId) return;
-    moveCard({ id: cardId, columnId: column.id });
+    void moveCard({ id: cardId, columnId: column.id });
     setDraggingCardId(null);
   };
 
@@ -187,6 +222,7 @@ const TodoPanelInner: React.FC = () => {
   const selectCard = async (cardId: string | null) => {
     if (cardId === selectedCardId) return;
     await flushSelectedDraft();
+    setShowCameraModal(false);
     setSelectedCardId(cardId);
   };
 
@@ -268,8 +304,11 @@ const TodoPanelInner: React.FC = () => {
         )}
       </div>
 
-      {selectedCard && (
-        <aside className="absolute inset-y-0 right-0 z-20 flex w-[460px] max-w-[calc(100%-24px)] flex-col border-l border-white/[0.1] bg-[#151926] shadow-2xl">
+      {activeDetailCard && (
+        <aside
+          onPaste={event => void handleDetailPaste(event)}
+          className="absolute inset-y-0 right-0 z-20 flex w-[460px] max-w-[calc(100%-24px)] flex-col border-l border-white/[0.1] bg-[#151926] shadow-2xl"
+        >
           <div className="flex items-center justify-between border-b border-white/[0.08] px-4 py-3">
             <input
               value={draftTitle}
@@ -292,6 +331,17 @@ const TodoPanelInner: React.FC = () => {
             </div>
           </div>
 
+          <TodoAttachmentsSection
+            attachments={activeDetailCard.attachments || []}
+            coverAttachmentId={activeDetailCard.coverAttachmentId ?? null}
+            isUploading={isUploadingAttachment}
+            onOpenCamera={() => setShowCameraModal(true)}
+            onStartSnip={() => void startSnipForCard(activeDetailCard.id)}
+            onPickImage={() => void pickAndAddAttachment(activeDetailCard.id)}
+            onSetCover={attachmentId => void setCardCover(activeDetailCard.id, attachmentId)}
+            onDeleteAttachment={attachmentId => void deleteAttachment(activeDetailCard.id, attachmentId)}
+          />
+
           <MarkdownToolbar mode={editorMode} onModeChange={setEditorMode} onInsert={insertMarkdown} />
 
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -306,11 +356,11 @@ const TodoPanelInner: React.FC = () => {
                 onKeyDown={event => {
                   if (event.ctrlKey && event.key === 'Enter') {
                     event.preventDefault();
-                    saveNow();
+                    void saveNow();
                   }
                 }}
                 className="h-full w-full resize-none bg-transparent p-4 text-[12px] leading-5 text-slate-100 outline-none placeholder:text-slate-600"
-                placeholder="写 Markdown 描述、清单或链接..."
+                placeholder="写 Markdown 描述、清单或链接（支持 Ctrl+V 粘贴图片）..."
               />
             ) : (
               <div className="p-4">
@@ -322,6 +372,18 @@ const TodoPanelInner: React.FC = () => {
             {isDirty ? '正在等待自动保存' : '已保存'}
           </div>
         </aside>
+      )}
+
+      {showCameraModal && activeDetailCard && (
+        <TodoCameraModal
+          isUploading={isUploadingAttachment}
+          onCapture={(fileName, bytes) => addAttachmentBytes({
+            cardId: activeDetailCard.id,
+            fileName,
+            bytes
+          })}
+          onClose={() => setShowCameraModal(false)}
+        />
       )}
     </div>
   );

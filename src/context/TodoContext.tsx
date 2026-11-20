@@ -1,12 +1,22 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { NativeClient } from '../native/types';
-import { CreateTodoCardInput, MoveTodoCardInput, TodoBoard, TodoCard, TodoCounts, TodoState, UpdateTodoCardInput } from '../types/todo';
+import {
+  AddTodoAttachmentBytesInput,
+  CreateTodoCardInput,
+  MoveTodoCardInput,
+  TodoBoard,
+  TodoCard,
+  TodoCounts,
+  TodoState,
+  UpdateTodoCardInput
+} from '../types/todo';
 
 interface TodoContextType {
   board: TodoBoard | null;
   cards: TodoCard[];
   counts: TodoCounts;
   isLoading: boolean;
+  isUploadingAttachment: boolean;
   error: string | null;
   cardsByColumn: Record<string, TodoCard[]>;
   refreshTodos: () => Promise<void>;
@@ -14,6 +24,12 @@ interface TodoContextType {
   updateCard: (payload: UpdateTodoCardInput) => Promise<boolean>;
   deleteCard: (cardId: string) => Promise<void>;
   moveCard: (payload: MoveTodoCardInput) => Promise<void>;
+  getCardDetail: (cardId: string) => Promise<TodoCard | null>;
+  addAttachmentBytes: (payload: AddTodoAttachmentBytesInput) => Promise<boolean>;
+  pickAndAddAttachment: (cardId: string) => Promise<boolean>;
+  deleteAttachment: (cardId: string, attachmentId: string) => Promise<boolean>;
+  setCardCover: (cardId: string, attachmentId: string | null) => Promise<boolean>;
+  startSnipForCard: (cardId: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -47,6 +63,10 @@ const simulatedTodoState: TodoState = {
       content: '# 整理发布清单\n\n- [ ] 检查构建\n- [ ] 写发布说明\n\n| 项目 | 状态 |\n| --- | --- |\n| Build | OK |',
       tags: [],
       archived: false,
+      attachments: [],
+      attachmentCount: 0,
+      coverAttachmentId: null,
+      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     },
@@ -58,6 +78,10 @@ const simulatedTodoState: TodoState = {
       content: '支持 **Markdown** 和剪贴板捕获。',
       tags: [],
       archived: false,
+      attachments: [],
+      attachmentCount: 0,
+      coverAttachmentId: null,
+      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     },
@@ -69,6 +93,10 @@ const simulatedTodoState: TodoState = {
       content: '- [x] 三个竖向入口',
       tags: [],
       archived: false,
+      attachments: [],
+      attachmentCount: 0,
+      coverAttachmentId: null,
+      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     }
@@ -76,7 +104,12 @@ const simulatedTodoState: TodoState = {
   counts: { total: 3, open: 2, done: 1 }
 };
 
-function applyTodoState(state: TodoState, setBoard: (board: TodoBoard | null) => void, setCards: (cards: TodoCard[]) => void, setCounts: (counts: TodoCounts) => void) {
+function applyTodoState(
+  state: TodoState,
+  setBoard: (board: TodoBoard | null) => void,
+  setCards: (cards: TodoCard[]) => void,
+  setCounts: (counts: TodoCounts) => void
+) {
   setBoard(state.boards.find(board => board.id === state.activeBoardId) || state.boards[0] || null);
   setCards(state.cards || []);
   setCounts(state.counts || emptyCounts);
@@ -87,6 +120,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   const [cards, setCards] = useState<TodoCard[]>([]);
   const [counts, setCounts] = useState<TodoCounts>(emptyCounts);
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshTodos = useCallback(async () => {
@@ -119,9 +153,16 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
 
   useEffect(() => {
     if (!client.isAvailable()) return undefined;
-    return client.todos.onCountsUpdated(nextCounts => {
+    const unsubCounts = client.todos.onCountsUpdated(nextCounts => {
       setCounts(nextCounts);
     });
+    const unsubState = client.todos.onUpdated(nextState => {
+      applyTodoState(nextState, setBoard, setCards, setCounts);
+    });
+    return () => {
+      unsubCounts?.();
+      unsubState?.();
+    };
   }, [client]);
 
   const cardsByColumn = useMemo(() => {
@@ -190,6 +231,89 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
+  const getCardDetail = useCallback(async (cardId: string): Promise<TodoCard | null> => {
+    if (!client.isAvailable()) {
+      return cards.find(card => card.id === cardId) || null;
+    }
+    try {
+      return await client.todos.getCardDetail(cardId);
+    } catch (err) {
+      setError(`读取卡片详情失败: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }, [cards, client]);
+
+  const addAttachmentBytes = useCallback(async (payload: AddTodoAttachmentBytesInput) => {
+    if (!client.isAvailable()) return false;
+    setIsUploadingAttachment(true);
+    setError(null);
+    try {
+      const state = await client.todos.addAttachmentBytes(payload);
+      applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
+    } catch (err) {
+      setError(`保存图片附件失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    } finally {
+      setIsUploadingAttachment(false);
+    }
+  }, [client]);
+
+  const pickAndAddAttachment = useCallback(async (cardId: string) => {
+    if (!client.isAvailable()) return false;
+    setIsUploadingAttachment(true);
+    setError(null);
+    try {
+      const result = await client.todos.pickAndAddAttachment(cardId);
+      if (!result.canceled && result.state) {
+        applyTodoState(result.state, setBoard, setCards, setCounts);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      setError(`添加本地图片失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    } finally {
+      setIsUploadingAttachment(false);
+    }
+  }, [client]);
+
+  const deleteAttachment = useCallback(async (cardId: string, attachmentId: string) => {
+    if (!client.isAvailable()) return false;
+    setError(null);
+    try {
+      const state = await client.todos.deleteAttachment({ cardId, attachmentId });
+      applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
+    } catch (err) {
+      setError(`删除图片附件失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }, [client]);
+
+  const setCardCover = useCallback(async (cardId: string, attachmentId: string | null) => {
+    if (!client.isAvailable()) return false;
+    setError(null);
+    try {
+      const state = await client.todos.setCardCover({ cardId, attachmentId });
+      applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
+    } catch (err) {
+      setError(`更新封面失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }, [client]);
+
+  const startSnipForCard = useCallback(async (cardId: string) => {
+    if (!client.isAvailable()) return;
+    setError(null);
+    try {
+      await client.todos.startSnipForCard(cardId);
+    } catch (err) {
+      setError(`启动截图失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [client]);
+
   const clearError = useCallback(() => setError(null), []);
 
   const contextValue = useMemo(
@@ -198,6 +322,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       cards,
       counts,
       isLoading,
+      isUploadingAttachment,
       error,
       cardsByColumn,
       refreshTodos,
@@ -205,9 +330,35 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       updateCard,
       deleteCard,
       moveCard,
+      getCardDetail,
+      addAttachmentBytes,
+      pickAndAddAttachment,
+      deleteAttachment,
+      setCardCover,
+      startSnipForCard,
       clearError
     }),
-    [board, cards, counts, isLoading, error, cardsByColumn, refreshTodos, createCard, updateCard, deleteCard, moveCard, clearError]
+    [
+      board,
+      cards,
+      counts,
+      isLoading,
+      isUploadingAttachment,
+      error,
+      cardsByColumn,
+      refreshTodos,
+      createCard,
+      updateCard,
+      deleteCard,
+      moveCard,
+      getCardDetail,
+      addAttachmentBytes,
+      pickAndAddAttachment,
+      deleteAttachment,
+      setCardCover,
+      startSnipForCard,
+      clearError
+    ]
   );
 
   return (
