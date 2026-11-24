@@ -306,6 +306,7 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
     },
     windows: {
       control: () => undefined,
+      getShellState: async () => ({ expanded: false, activeModule: null }),
       getPathForFile: () => '',
       onDrawerState: () => undefined,
       onModuleState: () => undefined
@@ -350,6 +351,7 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
       getState: () => unsupportedDesktop('updates'),
       check: () => unsupportedDesktop('updates'),
       download: () => unsupportedDesktop('updates'),
+      cancelDownload: () => unsupportedDesktop('updates'),
       install: () => unsupportedDesktop('updates'),
       onChange: () => undefined
     },

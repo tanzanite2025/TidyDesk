@@ -139,6 +139,7 @@ export interface NativeAppsClient {
 
 export interface NativeWindowsClient {
   control: (action: WindowAction) => void;
+  getShellState?: () => Promise<DrawerStatePayload>;
   getPathForFile: (file: File) => string;
   onDrawerState: (callback: (payload: DrawerStatePayload) => void) => (() => void) | undefined;
   onModuleState: (callback: (payload: ModuleStatePayload) => void) => (() => void) | undefined;
@@ -190,6 +191,7 @@ export interface NativeUpdatesClient {
   getState: () => Promise<UpdateSnapshot>;
   check: () => Promise<UpdateSnapshot>;
   download: () => Promise<UpdateSnapshot>;
+  cancelDownload?: () => Promise<UpdateSnapshot>;
   install: () => Promise<UpdateSnapshot>;
   onChange: (callback: (payload: UpdateSnapshot) => void) => (() => void) | undefined;
 }

@@ -10,6 +10,7 @@ use tauri_plugin_notification::NotificationExt;
 
 const AUTO_UPDATE_CHECK_FILE: &str = "updates.json";
 const AUTO_UPDATE_CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
+const AUTO_UPDATE_RETRY_DELAY: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +33,10 @@ fn auto_update_check_due(now_secs: u64, last_check_secs: Option<u64>) -> bool {
         Some(_) => true,
         None => true,
     }
+}
+
+fn should_record_auto_check_completion(snapshot: &UpdateSnapshot) -> bool {
+    matches!(snapshot.state.as_str(), "up-to-date" | "available")
 }
 
 fn auto_update_check_state_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -76,7 +81,7 @@ fn should_run_auto_update_check(app: &AppHandle) -> bool {
     auto_update_check_due(unix_now_secs(), state.last_auto_check_unix_secs)
 }
 
-fn mark_auto_update_check_attempted(app: &AppHandle) -> Result<(), String> {
+fn mark_auto_update_check_succeeded(app: &AppHandle) -> Result<(), String> {
     let path = auto_update_check_state_path(app)?;
     let state = UpdateAutoCheckState {
         last_auto_check_unix_secs: Some(unix_now_secs()),
@@ -89,25 +94,42 @@ pub fn start_update_auto_check(app: AppHandle, delay: Duration) {
         return;
     }
 
+    spawn_auto_check_attempt(app, delay, true);
+}
+
+fn spawn_auto_check_attempt(app: AppHandle, delay: Duration, allow_retry_on_error: bool) {
     tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(delay);
-        if let Err(err) = tauri::async_runtime::block_on(run_update_auto_check(app)) {
+        if let Err(err) =
+            tauri::async_runtime::block_on(run_update_auto_check(app, allow_retry_on_error))
+        {
             eprintln!("[TIDYDESK] Automatic update check failed: {err}");
         }
     });
 }
 
-async fn run_update_auto_check(app: AppHandle) -> Result<(), String> {
+async fn run_update_auto_check(app: AppHandle, allow_retry_on_error: bool) -> Result<(), String> {
+    if !crate::resident::read_resident_settings(&app).auto_update_check_enabled {
+        return Ok(());
+    }
     if !should_run_auto_update_check(&app) {
         return Ok(());
     }
 
-    mark_auto_update_check_attempted(&app)?;
     let state = app.state::<UpdaterSessionState>();
     let snapshot = updates_check_internal(&app, &state).await?;
-    if snapshot.state == "available" {
-        notify_update_available(&app, &snapshot);
+    if should_record_auto_check_completion(&snapshot) {
+        mark_auto_update_check_succeeded(&app)?;
+        if snapshot.state == "available" {
+            notify_update_available(&app, &snapshot);
+        }
+        return Ok(());
     }
+
+    if snapshot.state == "error" && allow_retry_on_error {
+        spawn_auto_check_attempt(app, AUTO_UPDATE_RETRY_DELAY, false);
+    }
+
     Ok(())
 }
 
@@ -132,6 +154,22 @@ fn notify_update_available(app: &AppHandle, snapshot: &UpdateSnapshot) {
 mod tests {
     use super::*;
 
+    fn sample_snapshot(state: &str) -> UpdateSnapshot {
+        UpdateSnapshot {
+            state: state.to_string(),
+            current_version: "0.0.2".to_string(),
+            available_version: None,
+            release_date: None,
+            release_notes: None,
+            percent: None,
+            message: None,
+            reason: None,
+            can_check: true,
+            can_download: false,
+            can_install: false,
+        }
+    }
+
     #[test]
     fn auto_update_check_runs_when_never_checked() {
         assert!(auto_update_check_due(1_000, None));
@@ -149,5 +187,24 @@ mod tests {
     #[test]
     fn auto_update_check_runs_when_stored_time_is_in_future() {
         assert!(auto_update_check_due(1_000, Some(2_000)));
+    }
+
+    #[test]
+    fn auto_update_check_quota_is_only_consumed_on_definitive_result() {
+        assert!(should_record_auto_check_completion(&sample_snapshot(
+            "up-to-date"
+        )));
+        assert!(should_record_auto_check_completion(&sample_snapshot(
+            "available"
+        )));
+        assert!(!should_record_auto_check_completion(&sample_snapshot(
+            "error"
+        )));
+        assert!(!should_record_auto_check_completion(&sample_snapshot(
+            "unsupported"
+        )));
+        assert!(!should_record_auto_check_completion(&sample_snapshot(
+            "checking"
+        )));
     }
 }

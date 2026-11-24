@@ -33,14 +33,73 @@ function getTargetKey() {
   return 'windows-x86_64';
 }
 
-function findFirstMatchingFile(directory, matcher) {
-  const entries = fs.readdirSync(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isFile() && matcher(entry.name)) {
-      return path.join(directory, entry.name);
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function listInstallerFiles(directory) {
+  if (!fs.existsSync(directory)) {
+    throw new Error(`NSIS bundle directory does not exist: ${directory}`);
+  }
+  return fs
+    .readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.exe') && !entry.name.endsWith('.exe.sig'))
+    .map(entry => entry.name)
+    .sort();
+}
+
+function selectInstallerArtifact(bundleDir, version, productName = 'TidyDesk') {
+  const normalizedVersion = String(version || '').trim();
+  if (!normalizedVersion) {
+    throw new Error('Package version is required to locate the NSIS installer.');
+  }
+
+  const installers = listInstallerFiles(bundleDir);
+  if (installers.length === 0) {
+    throw new Error(`No NSIS installer found in ${bundleDir}`);
+  }
+
+  const versionPattern = new RegExp(`(?:^|[_-])${escapeRegExp(normalizedVersion)}(?:[_.-]|\\.exe$)`, 'i');
+  const versionMatches = installers.filter(fileName => versionPattern.test(fileName));
+
+  if (versionMatches.length === 0) {
+    throw new Error(
+      `No NSIS installer matching version ${normalizedVersion} found in ${bundleDir}. Found: ${installers.join(', ')}`
+    );
+  }
+
+  let selectedName;
+  if (versionMatches.length === 1) {
+    selectedName = versionMatches[0];
+  } else {
+    const expectedPrefix = `${productName}_${normalizedVersion}_`.toLowerCase();
+    const preferredMatches = versionMatches.filter(name => name.toLowerCase().startsWith(expectedPrefix));
+    if (preferredMatches.length === 1) {
+      selectedName = preferredMatches[0];
+    } else {
+      throw new Error(
+        `Multiple NSIS installers match version ${normalizedVersion} in ${bundleDir}: ${versionMatches.join(', ')}`
+      );
     }
   }
-  return null;
+
+  const installerPath = path.join(bundleDir, selectedName);
+  const signaturePath = `${installerPath}.sig`;
+  if (!fs.existsSync(signaturePath)) {
+    throw new Error(`Updater signature not found: ${signaturePath}`);
+  }
+
+  const signature = fs.readFileSync(signaturePath, 'utf8').trim();
+  if (!signature) {
+    throw new Error(`Updater signature file is empty: ${signaturePath}`);
+  }
+
+  return {
+    installerName: selectedName,
+    installerPath,
+    signaturePath,
+    signature
+  };
 }
 
 function normalizeBaseUrl(pkg) {
@@ -95,43 +154,56 @@ function resolveBundleDir(projectRoot) {
   throw new Error(`NSIS bundle directory not found. Checked: ${candidates.join(', ')}`);
 }
 
+function buildUpdaterManifest({ version, installerName, signature, targetKey, baseUrl, notes = '', pubDate = new Date().toISOString() }) {
+  if (!version || !String(version).trim()) {
+    throw new Error('Updater manifest requires a valid version.');
+  }
+  if (!signature || !String(signature).trim()) {
+    throw new Error('Updater manifest requires a non-empty signature.');
+  }
+  if (!targetKey || !String(targetKey).trim()) {
+    throw new Error('Updater manifest requires a valid targetKey.');
+  }
+
+  const artifactUrl = `${String(baseUrl).replace(/\/$/, '')}/${encodeURIComponent(installerName)}`;
+  new URL(artifactUrl);
+
+  return {
+    version: String(version).trim(),
+    notes: String(notes ?? ''),
+    pub_date: pubDate,
+    platforms: {
+      [targetKey]: {
+        signature: String(signature).trim(),
+        url: artifactUrl
+      }
+    }
+  };
+}
+
 function main() {
   loadReleaseEnvFromWindowsUserEnv();
   const projectRoot = path.resolve(__dirname, '..');
   const packageJsonPath = path.join(projectRoot, 'package.json');
   const pkg = readJson(packageJsonPath);
+  const tauriConfPath = path.join(projectRoot, 'src-tauri', 'tauri.conf.json');
+  const tauriConf = fs.existsSync(tauriConfPath) ? readJson(tauriConfPath) : null;
+  const productName = tauriConf?.productName || 'TidyDesk';
+
   const bundleDir = resolveBundleDir(projectRoot);
+  const { installerName, signature } = selectInstallerArtifact(bundleDir, pkg.version, productName);
 
-  const installerPath = findFirstMatchingFile(
-    bundleDir,
-    fileName => fileName.endsWith('.exe') && !fileName.endsWith('.exe.sig')
-  );
-
-  if (!installerPath) {
-    throw new Error(`No NSIS installer found in ${bundleDir}`);
-  }
-
-  const signaturePath = `${installerPath}.sig`;
-  if (!fs.existsSync(signaturePath)) {
-    throw new Error(`Updater signature not found: ${signaturePath}`);
-  }
-
-  const installerName = path.basename(installerPath);
-  const signature = fs.readFileSync(signaturePath, 'utf8').trim();
   const baseUrl = normalizeBaseUrl(pkg);
   const targetKey = getTargetKey();
-  const notes = process.env.TIDYDESK_UPDATER_NOTES || '';
-  const manifest = {
+  const notes = (process.env.TIDYDESK_UPDATER_NOTES || '').trim();
+  const manifest = buildUpdaterManifest({
     version: pkg.version,
-    notes,
-    pub_date: new Date().toISOString(),
-    platforms: {
-      [targetKey]: {
-        signature,
-        url: `${baseUrl}/${encodeURIComponent(installerName)}`
-      }
-    }
-  };
+    installerName,
+    signature,
+    targetKey,
+    baseUrl,
+    notes
+  });
 
   const outputDir = process.env.TIDYDESK_UPDATER_MANIFEST_DIR
     ? path.resolve(projectRoot, process.env.TIDYDESK_UPDATER_MANIFEST_DIR)
@@ -149,4 +221,14 @@ function main() {
   });
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  buildUpdaterManifest,
+  getTargetKey,
+  normalizeBaseUrl,
+  resolveBundleDir,
+  selectInstallerArtifact
+};

@@ -610,7 +610,9 @@ test('server isolates colliding card/quickNote entityIds and media blobs per wor
 test('sync server serves mobile PWA manifest and SPA html when webDistDir is configured', async () => {
   const webRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-web-dist-'));
   const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-web-data-'));
+  fs.mkdirSync(path.join(webRoot, 'assets'), { recursive: true });
   fs.writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html><html><body>TidyDesk Mobile</body></html>');
+  fs.writeFileSync(path.join(webRoot, 'assets', 'app-abc123.js'), 'console.log("ok");');
   fs.writeFileSync(
     path.join(webRoot, 'manifest.webmanifest'),
     JSON.stringify({ name: 'TidyDesk', start_url: '/?mode=mobile', display: 'standalone' })
@@ -623,16 +625,29 @@ test('sync server serves mobile PWA manifest and SPA html when webDistDir is con
   await new Promise(resolve => webSrv.listen(0, '127.0.0.1', resolve));
   try {
     const port = webSrv.address().port;
+    const healthRes = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(healthRes.status, 200);
+    const healthJson = await healthRes.json();
+    assert.equal(healthJson.ok, true);
+    assert.equal(healthJson.version, 1);
+    assert.ok(typeof healthJson.appVersion === 'string' && healthJson.appVersion.length > 0);
+
     const htmlRes = await fetch(`http://127.0.0.1:${port}/?mode=mobile`);
     assert.equal(htmlRes.status, 200);
     assert.match(htmlRes.headers.get('content-type') || '', /text\/html/);
+    assert.equal(htmlRes.headers.get('cache-control'), 'no-cache');
     assert.match(await htmlRes.text(), /TidyDesk Mobile/);
 
     const manifestRes = await fetch(`http://127.0.0.1:${port}/manifest.webmanifest`);
     assert.equal(manifestRes.status, 200);
     assert.match(manifestRes.headers.get('content-type') || '', /application\/manifest\+json/);
+    assert.equal(manifestRes.headers.get('cache-control'), 'no-cache');
     const parsedManifest = await manifestRes.json();
     assert.equal(parsedManifest.start_url, '/?mode=mobile');
+
+    const assetRes = await fetch(`http://127.0.0.1:${port}/assets/app-abc123.js`);
+    assert.equal(assetRes.status, 200);
+    assert.equal(assetRes.headers.get('cache-control'), 'public, max-age=31536000, immutable');
   } finally {
     await new Promise(resolve => webSrv.close(resolve));
     fs.rmSync(webRoot, { recursive: true, force: true });

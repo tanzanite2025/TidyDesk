@@ -1,24 +1,43 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { nativeClient } from '../../native/native-client';
 import type { UpdateMetadata, UpdateSnapshot } from '../../types/update';
 import {
   createCheckingUpdateSnapshot,
   createDownloadingUpdateSnapshot,
   createErrorUpdateSnapshot,
-  createInstallingUpdateSnapshot
+  createInstallingUpdateSnapshot,
+  isActionableUpdateSnapshot
 } from '../../types/update';
-
 
 interface UpdateManagerState {
   metadata: UpdateMetadata | null;
   snapshot: UpdateSnapshot | null;
 }
 
+/**
+ * Manages desktop auto-update lifecycle, optimistic pending transitions,
+ * real-time backend snapshot events, and download cancellation.
+ */
 export function useUpdateManager() {
   const [{ metadata, snapshot }, setState] = useState<UpdateManagerState>({
     metadata: null,
     snapshot: null
   });
+  const metadataRef = useRef<UpdateMetadata | null>(null);
+  const snapshotRef = useRef<UpdateSnapshot | null>(null);
+  const eventReceivedRef = useRef(false);
+
+  const commitState = useCallback(
+    (updater: (current: UpdateManagerState) => UpdateManagerState) => {
+      setState(current => {
+        const next = updater(current);
+        metadataRef.current = next.metadata;
+        snapshotRef.current = next.snapshot;
+        return next;
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     let disposed = false;
@@ -31,10 +50,10 @@ export function useUpdateManager() {
         ));
 
         if (disposed) return;
-        setState({
+        commitState(current => ({
           metadata: nextMetadata,
-          snapshot: nextSnapshot
-        });
+          snapshot: eventReceivedRef.current && current.snapshot ? current.snapshot : nextSnapshot
+        }));
       } catch (err) {
         if (disposed) return;
         const fallbackMetadata: UpdateMetadata = {
@@ -45,19 +64,20 @@ export function useUpdateManager() {
           channel: 'stable',
           updaterAvailable: false
         };
-        setState({
+        commitState(() => ({
           metadata: fallbackMetadata,
           snapshot: createErrorUpdateSnapshot(
             fallbackMetadata,
             err instanceof Error ? err.message : String(err)
           )
-        });
+        }));
       }
     };
 
     const unsubscribe = nativeClient.updates.onChange(payload => {
       if (disposed) return;
-      setState(current => ({
+      eventReceivedRef.current = true;
+      commitState(current => ({
         metadata: current.metadata,
         snapshot: payload
       }));
@@ -69,37 +89,42 @@ export function useUpdateManager() {
       disposed = true;
       unsubscribe?.();
     };
-  }, []);
+  }, [commitState]);
 
   const runWithPendingState = useCallback(
     async (
-      pendingFactory: (current: UpdateSnapshot) => UpdateSnapshot,
+      pendingFactory: ((current: UpdateSnapshot) => UpdateSnapshot) | null,
       executor: () => Promise<UpdateSnapshot>
     ) => {
-      if (!metadata || !snapshot) return;
+      const currentMetadata = metadataRef.current;
+      const currentSnapshot = snapshotRef.current;
+      if (!currentMetadata || !currentSnapshot) return;
 
-      setState(current => ({
-        metadata: current.metadata,
-        snapshot: current.snapshot ? pendingFactory(current.snapshot) : current.snapshot
-      }));
+      if (pendingFactory) {
+        commitState(current => ({
+          metadata: current.metadata,
+          snapshot: current.snapshot ? pendingFactory(current.snapshot) : current.snapshot
+        }));
+      }
 
       try {
         const nextSnapshot = await executor();
-        setState(current => ({
+        commitState(current => ({
           metadata: current.metadata,
           snapshot: nextSnapshot
         }));
       } catch (err) {
-        setState(current => ({
+        commitState(current => ({
           metadata: current.metadata,
           snapshot: createErrorUpdateSnapshot(
-            metadata,
-            err instanceof Error ? err.message : String(err)
+            current.metadata ?? currentMetadata,
+            err instanceof Error ? err.message : String(err),
+            current.snapshot ?? currentSnapshot
           )
         }));
       }
     },
-    [metadata, snapshot]
+    [commitState]
   );
 
   const checkForUpdates = useCallback(async () => {
@@ -116,6 +141,12 @@ export function useUpdateManager() {
     );
   }, [runWithPendingState]);
 
+  const cancelDownload = useCallback(async () => {
+    const cancelFn = nativeClient.updates.cancelDownload;
+    if (!cancelFn) return;
+    await runWithPendingState(null, () => cancelFn());
+  }, [runWithPendingState]);
+
   const installUpdate = useCallback(async () => {
     await runWithPendingState(
       current => createInstallingUpdateSnapshot(current),
@@ -130,10 +161,13 @@ export function useUpdateManager() {
       isReady: Boolean(metadata && snapshot),
       isChecking: snapshot?.state === 'checking',
       isDownloading: snapshot?.state === 'downloading',
+      isInstalling: snapshot?.state === 'installing',
+      hasActionableUpdate: isActionableUpdateSnapshot(snapshot),
       checkForUpdates,
       downloadUpdate,
+      cancelDownload,
       installUpdate
     }),
-    [checkForUpdates, downloadUpdate, installUpdate, metadata, snapshot]
+    [cancelDownload, checkForUpdates, downloadUpdate, installUpdate, metadata, snapshot]
   );
 }

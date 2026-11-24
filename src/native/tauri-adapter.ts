@@ -308,6 +308,7 @@ export function createTauriNativeClient(): NativeClient {
           console.error('[TIDYDESK] Failed windows_control:', err);
         });
       },
+      getShellState: () => invoke<DrawerStatePayload>('windows_get_shell_state'),
       getPathForFile: () => unavailable('windows.getPathForFile'),
       onDrawerState: callback => onTauriEvent<DrawerStatePayload>('drawer-state', callback),
       onModuleState: callback => onTauriEvent<ModuleStatePayload>('module-state', callback)
@@ -366,6 +367,7 @@ export function createTauriNativeClient(): NativeClient {
       getState: () => invoke<UpdateSnapshot>('updates_get_state'),
       check: () => invoke<UpdateSnapshot>('updates_check'),
       download: () => invoke<UpdateSnapshot>('updates_download'),
+      cancelDownload: () => invoke<UpdateSnapshot>('updates_cancel_download'),
       install: () => invoke<UpdateSnapshot>('updates_install'),
       onChange: callback => onTauriEvent<UpdateSnapshot>('updates-state', callback)
     },

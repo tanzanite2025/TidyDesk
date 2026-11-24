@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { SettingsPanel } from '../../components/SettingsPanel';
 import { nativeClient } from '../../native/native-client';
+import type { UpdateSnapshot } from '../../types/update';
+import { isActionableUpdateSnapshot } from '../../types/update';
 import { useDrawerOperations } from './useDrawerOperations';
 import { DrawerHeader } from './DrawerHeader';
 import { InvalidShortcutsBanner } from './InvalidShortcutsBanner';
@@ -59,10 +61,37 @@ export const DrawerApp: React.FC = () => {
     openAppPicker
   } = useDrawerOperations();
 
+  const [updateSnapshot, setUpdateSnapshot] = React.useState<UpdateSnapshot | null>(null);
+
   React.useEffect(() => {
     if (!nativeClient.isAvailable()) return undefined;
     return nativeClient.resident.onOpenSettings(() => setShowSettings(true));
   }, [setShowSettings]);
+
+  React.useEffect(() => {
+    if (!nativeClient.isAvailable() || nativeClient.capabilities?.platformLayout === 'mobile') {
+      return undefined;
+    }
+    let disposed = false;
+    nativeClient.updates
+      .getState()
+      .then(snapshot => {
+        if (!disposed) setUpdateSnapshot(snapshot);
+      })
+      .catch(() => undefined);
+
+    const unsubscribe = nativeClient.updates.onChange(snapshot => {
+      if (!disposed) setUpdateSnapshot(snapshot);
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  const availableUpdateVersion = isActionableUpdateSnapshot(updateSnapshot)
+    ? (updateSnapshot?.availableVersion ?? '新版本')
+    : null;
 
   if (!isDrawerExpanded && windowMode !== 'drawer') {
     return (
@@ -87,18 +116,25 @@ export const DrawerApp: React.FC = () => {
     );
   }
 
+  const drawerAnimationClass = isClosing
+    ? 'animate-drawer-panel-out'
+    : isDrawerExpanded
+      ? 'animate-drawer-panel-in'
+      : 'translate-x-full pointer-events-none';
+
   return (
     <div className="relative flex h-screen w-full select-none overflow-hidden bg-transparent text-slate-100">
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
       <div
-        className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[#11131c] ${isClosing ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in'}`}
+        className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[#11131c] ${drawerAnimationClass}`}
         style={{ boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.5)' }}
       >
         <DrawerHeader
           searchQuery={searchQuery}
           isLoading={isLoading}
           isValidating={isValidating}
+          availableUpdateVersion={availableUpdateVersion}
           onOpenSettings={() => setShowSettings(true)}
           onValidateAll={handleValidateAll}
           onRefresh={refreshDesktop}

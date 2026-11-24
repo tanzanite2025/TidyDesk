@@ -13,6 +13,15 @@ pub struct WindowControlPayload {
 }
 
 #[tauri::command]
+pub fn windows_get_shell_state(shell: tauri::State<'_, ShellState>) -> Result<Value, String> {
+    let snapshot = shell_snapshot(&shell)?;
+    Ok(json!({
+        "expanded": snapshot.expanded,
+        "activeModule": snapshot.active_module
+    }))
+}
+
+#[tauri::command]
 pub async fn windows_control(
     app: AppHandle,
     shell: tauri::State<'_, ShellState>,

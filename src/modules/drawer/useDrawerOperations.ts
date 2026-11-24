@@ -31,7 +31,7 @@ export function useDrawerOperations() {
   const [draggingOverDrawerId, setDraggingOverDrawerId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDrawerExpanded, setIsDrawerExpanded] = useState(windowMode === 'drawer');
+  const [isDrawerExpanded, setIsDrawerExpanded] = useState(false);
   const [renamingDrawerId, setRenamingDrawerId] = useState<string | null>(null);
   const [draftDrawerName, setDraftDrawerName] = useState('');
   const [isClosing, setIsClosing] = useState(false);
@@ -75,23 +75,46 @@ export function useDrawerOperations() {
     if (!nativeClient.isAvailable()) return undefined;
     
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
 
-    const unsubscribe = nativeClient.windows.onDrawerState(payload => {
-      if (!payload.expanded && isDrawerExpandedRef.current) {
+    const applyExpandedState = (expanded: boolean) => {
+      if (!expanded && isDrawerExpandedRef.current) {
         setIsClosing(true);
         if (closeTimer) clearTimeout(closeTimer);
         closeTimer = setTimeout(() => {
           setIsDrawerExpanded(false);
           setIsClosing(false);
           closeTimer = undefined;
-        }, 160);
+        }, 205);
       } else {
-        setIsDrawerExpanded(payload.expanded);
+        if (closeTimer) {
+          clearTimeout(closeTimer);
+          closeTimer = undefined;
+        }
+        setIsDrawerExpanded(expanded);
         setIsClosing(false);
+      }
+    };
+
+    const unsubscribe = nativeClient.windows.onDrawerState(payload => {
+      if (!disposed) {
+        applyExpandedState(payload.expanded);
       }
     });
 
+    if (windowMode === 'drawer' && nativeClient.windows.getShellState) {
+      nativeClient.windows
+        .getShellState()
+        .then(snapshot => {
+          if (!disposed && snapshot.expanded && !isDrawerExpandedRef.current) {
+            applyExpandedState(true);
+          }
+        })
+        .catch(() => undefined);
+    }
+
     return () => {
+      disposed = true;
       if (closeTimer) clearTimeout(closeTimer);
       unsubscribe?.();
     };

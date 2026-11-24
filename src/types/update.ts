@@ -68,17 +68,51 @@ export function createUnsupportedUpdateSnapshot(
 
 export function createErrorUpdateSnapshot(
   metadata: Pick<UpdateMetadata, 'version'>,
-  message: string
+  message: string,
+  previous?: UpdateSnapshot | null
 ): UpdateSnapshot {
+  const preserveDownloadContext = Boolean(
+    previous?.availableVersion &&
+      (previous.state === 'available' ||
+        previous.state === 'downloading' ||
+        (previous.state === 'error' && previous.canDownload))
+  );
+  const preserveInstallContext = Boolean(
+    previous?.availableVersion &&
+      (previous.state === 'ready-to-install' ||
+        previous.state === 'installing' ||
+        (previous.state === 'error' && previous.canInstall))
+  );
+  const preserveMeta = preserveDownloadContext || preserveInstallContext;
+
   return {
     state: 'error',
     currentVersion: metadata.version,
+    availableVersion: preserveMeta ? previous?.availableVersion : undefined,
+    releaseDate: preserveMeta ? previous?.releaseDate : undefined,
+    releaseNotes: preserveMeta ? previous?.releaseNotes : undefined,
     message,
     reason: 'unknown',
     canCheck: true,
-    canDownload: false,
-    canInstall: false
+    canDownload: preserveDownloadContext,
+    canInstall: preserveInstallContext
   };
+}
+
+export function isActionableUpdateSnapshot(snapshot: UpdateSnapshot | null | undefined): boolean {
+  if (!snapshot) return false;
+  if (
+    snapshot.state === 'available' ||
+    snapshot.state === 'downloading' ||
+    snapshot.state === 'ready-to-install'
+  ) {
+    return true;
+  }
+  return (
+    snapshot.state === 'error' &&
+    Boolean(snapshot.availableVersion) &&
+    (snapshot.canDownload || snapshot.canInstall)
+  );
 }
 
 export function createCheckingUpdateSnapshot(snapshot: UpdateSnapshot): UpdateSnapshot {

@@ -55,32 +55,32 @@ export const RailBar: React.FC = () => {
       id: 'files',
       title: '文件抽屉',
       action: 'open-files',
-      icon: <PackageOpen size={17} />
+      icon: <PackageOpen size={21} strokeWidth={1.9} />
     },
     {
       id: 'todos',
       title: `待办 ${todoCounts.open} 个未完成`,
       action: 'open-todos',
-      icon: <ListTodo size={17} />,
+      icon: <ListTodo size={21} strokeWidth={1.9} />,
       badge: formatBadge(todoCounts.open)
     },
     {
       id: 'capture',
       title: '快捷记录',
       action: 'open-capture',
-      icon: <PencilLine size={17} />
+      icon: <PencilLine size={21} strokeWidth={1.9} />
     },
     {
       id: 'screenshot',
       title: '截图贴纸',
       action: 'start-screenshot',
-      icon: <Scissors size={17} />
+      icon: <Scissors size={21} strokeWidth={1.9} />
     }
   ];
 
   return (
     <div
-      className="flex h-screen w-full select-none flex-col items-center justify-center gap-3 overflow-hidden rounded-l-2xl bg-[#10131d] px-4 py-5 text-slate-100"
+      className="flex h-screen w-full select-none flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl bg-[#10131d] px-1.5 py-3 text-slate-100"
       style={{
         WebkitAppRegion: 'no-drag',
         WebkitMaskImage: '-webkit-radial-gradient(white, white)'
@@ -94,7 +94,7 @@ export const RailBar: React.FC = () => {
             type="button"
             onClick={() => openModule(item.action)}
             data-testid={`rail-${item.id}`}
-            className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-xl border transition-all ${
+            className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-xl border transition-all ${
               isActive
                 ? 'border-sky-400/20 bg-sky-400/18 text-sky-100 shadow-lg shadow-sky-950/20'
                 : 'border-white/[0.03] bg-white/[0.05] text-slate-300 hover:bg-white/[0.08] hover:text-slate-100'
@@ -103,7 +103,7 @@ export const RailBar: React.FC = () => {
           >
             {item.icon}
             {item.badge && (
-              <span className="absolute -right-1 -top-1 grid min-h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-black leading-4 text-white shadow">
+              <span className="absolute -right-0.5 -top-0.5 grid min-h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-black leading-4 text-white shadow">
                 {item.badge}
               </span>
             )}

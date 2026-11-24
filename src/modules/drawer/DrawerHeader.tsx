@@ -5,6 +5,7 @@ interface DrawerHeaderProps {
   searchQuery: string;
   isLoading: boolean;
   isValidating: boolean;
+  availableUpdateVersion?: string | null;
   onOpenSettings: () => void;
   onValidateAll: () => void;
   onRefresh: () => void;
@@ -19,6 +20,7 @@ export const DrawerHeader: React.FC<DrawerHeaderProps> = ({
   searchQuery,
   isLoading,
   isValidating,
+  availableUpdateVersion = null,
   onOpenSettings,
   onValidateAll,
   onRefresh,
@@ -43,10 +45,16 @@ export const DrawerHeader: React.FC<DrawerHeaderProps> = ({
             type="button"
             onClick={onOpenSettings}
             data-testid="drawer-settings"
-            className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100"
-            title="设置"
+            className="relative rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100"
+            title={availableUpdateVersion ? `设置（发现新版本 v${availableUpdateVersion}）` : '设置'}
           >
             <Settings size={14} />
+            {availableUpdateVersion && (
+              <span
+                data-testid="drawer-settings-update-badge"
+                className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.85)]"
+              />
+            )}
           </button>
           <button
             type="button"

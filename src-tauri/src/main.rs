@@ -56,7 +56,7 @@ use commands::tests::{
     tests_collapse_drawer, tests_get_window_snapshot, tests_open_files_drawer,
     tests_reset_window_state, tests_start_snip,
 };
-use commands::windows::windows_control;
+use commands::windows::{windows_control, windows_get_shell_state};
 use files::{
     drawers_create, drawers_delete_item, drawers_rename_item, files_import_external_files,
     files_open, files_read_desktop_files, files_read_icons, files_restore_to_desktop,
@@ -73,7 +73,10 @@ use resident::{
     resident_get_settings, resident_hide_handle, resident_open_settings, resident_show_handle,
     resident_update_settings,
 };
-use shell::{apply_window_bounds, ensure_handle_window, handle_window_bounds, ShellState};
+use shell::{
+    apply_window_bounds, ensure_drawer_window, ensure_handle_window, handle_window_bounds,
+    ShellState,
+};
 use shortcuts::{
     shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services,
     ShortcutWatcherState,
@@ -98,8 +101,8 @@ use todos::{
 };
 use tool_windows::{close_todo_window, open_todo_window};
 use updates::{
-    updates_check, updates_download, updates_get_metadata, updates_get_state, updates_install,
-    UpdaterSessionState,
+    updates_cancel_download, updates_check, updates_download, updates_get_metadata,
+    updates_get_state, updates_install, UpdaterSessionState,
 };
 
 #[cfg(any(debug_assertions, feature = "e2e-tests"))]
@@ -122,6 +125,7 @@ macro_rules! tidydesk_generate_handler {
             drawers_delete_item,
             apps_get_picker_target,
             windows_control,
+            windows_get_shell_state,
             tests_open_files_drawer,
             tests_collapse_drawer,
             tests_start_snip,
@@ -141,6 +145,7 @@ macro_rules! tidydesk_generate_handler {
             updates_get_state,
             updates_check,
             updates_download,
+            updates_cancel_download,
             updates_install,
             todos_read_state,
             todos_get_counts,
@@ -214,6 +219,7 @@ macro_rules! tidydesk_generate_handler {
             drawers_delete_item,
             apps_get_picker_target,
             windows_control,
+            windows_get_shell_state,
             clipboard_read_text,
             events_send,
             snip_complete_selection,
@@ -228,6 +234,7 @@ macro_rules! tidydesk_generate_handler {
             updates_get_state,
             updates_check,
             updates_download,
+            updates_cancel_download,
             updates_install,
             todos_read_state,
             todos_get_counts,
@@ -366,6 +373,7 @@ fn main() {
             }
             hotkeys::register_configured_hotkeys(&handle);
             let _ = ensure_handle_window(&handle);
+            let _ = ensure_drawer_window(&handle);
             if let Ok(bounds) = handle_window_bounds(&handle, false) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);
             }

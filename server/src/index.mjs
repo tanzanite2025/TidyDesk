@@ -50,6 +50,37 @@ function resolveDefaultDataDir() {
   return path.join(SERVER_PACKAGE_DIR, 'data');
 }
 
+function resolveServerAppVersion() {
+  const candidates = [
+    path.join(SERVER_PACKAGE_DIR, 'package.json'),
+    path.resolve(SERVER_PACKAGE_DIR, '..', 'package.json')
+  ];
+  for (const pkgPath of candidates) {
+    if (!fs.existsSync(pkgPath)) continue;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (parsed?.version && String(parsed.version).trim()) {
+        return String(parsed.version).trim();
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+  return null;
+}
+
+function resolveStaticCacheControl(target, rootResolved) {
+  const ext = path.extname(target).toLowerCase();
+  if (ext === '.html' || ext === '.webmanifest') {
+    return 'no-cache';
+  }
+  const relPosix = path.relative(rootResolved, target).split(path.sep).join('/');
+  if (relPosix.startsWith('assets/')) {
+    return 'public, max-age=31536000, immutable';
+  }
+  return 'public, max-age=3600';
+}
+
 function applyCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader(
@@ -115,7 +146,7 @@ function tryServeStaticWeb(webDistDir, pathname, res) {
   res.writeHead(200, {
     'Content-Type': contentType,
     'Content-Length': buf.length,
-    'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600'
+    'Cache-Control': resolveStaticCacheControl(target, rootResolved)
   });
   res.end(buf);
   return true;
@@ -183,7 +214,12 @@ export function createSyncServer({
       }
 
       if (method === 'GET' && pathname === '/health') {
-        sendJson(res, 200, { ok: true, service: 'tidydesk-sync-server', version: 1 });
+        sendJson(res, 200, {
+          ok: true,
+          service: 'tidydesk-sync-server',
+          version: 1,
+          appVersion: resolveServerAppVersion()
+        });
         return;
       }
 

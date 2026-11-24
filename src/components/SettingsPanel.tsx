@@ -26,8 +26,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
     isReady,
     isChecking,
     isDownloading,
+    isInstalling,
     checkForUpdates,
     downloadUpdate,
+    cancelDownload,
     installUpdate
   } = useUpdateManager();
 
@@ -124,9 +126,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             isReady={isReady}
             isChecking={isChecking}
             isDownloading={isDownloading}
+            isInstalling={isInstalling}
             onUpdateResident={payload => void updateResidentSettings(payload)}
             onCheckForUpdates={checkForUpdates}
             onDownloadUpdate={downloadUpdate}
+            onCancelDownload={cancelDownload}
             onInstallUpdate={handleInstallUpdate}
           />
         </div>

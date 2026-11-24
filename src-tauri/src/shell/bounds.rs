@@ -358,8 +358,12 @@ pub fn capture_window_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
     ))
 }
 
+const HANDLE_LOGICAL_WIDTH: u32 = 56;
+const HANDLE_LOGICAL_HEIGHT: u32 = 228;
+const HANDLE_RESERVE_WIDTH: u32 = 64;
+
 pub fn compute_drawer_width_for_work_area(work_area: WorkAreaMonitor) -> u32 {
-    let handle_reserve = scaled_px(88, work_area.scale_factor);
+    let handle_reserve = scaled_px(HANDLE_RESERVE_WIDTH, work_area.scale_factor);
     let max_available = work_area.bounds.width.saturating_sub(handle_reserve).max(1);
     let min_w = scaled_px(360, work_area.scale_factor).min(max_available);
     let max_w = scaled_px(560, work_area.scale_factor).clamp(min_w, max_available);
@@ -386,8 +390,10 @@ pub fn compute_handle_bounds_for_work_area(
     } else {
         0
     };
-    let width = scaled_px(80, work_area.scale_factor).min(work_area.bounds.width.max(1));
-    let height = scaled_px(300, work_area.scale_factor).min(work_area.bounds.height.max(1));
+    let width =
+        scaled_px(HANDLE_LOGICAL_WIDTH, work_area.scale_factor).min(work_area.bounds.width.max(1));
+    let height = scaled_px(HANDLE_LOGICAL_HEIGHT, work_area.scale_factor)
+        .min(work_area.bounds.height.max(1));
     ShellBounds {
         x: work_area.bounds.x + work_area.bounds.width as i32 - drawer_width as i32 - width as i32,
         y: work_area.bounds.y + ((work_area.bounds.height.saturating_sub(height)) / 2) as i32,
@@ -438,7 +444,7 @@ mod tests {
         assert_eq!(d_fhd.height, 1032);
         assert_eq!(d_fhd.width, 560);
         let h_fhd = compute_handle_bounds_for_work_area(fhd, true);
-        assert_eq!((h_fhd.width, h_fhd.height), (80, 300));
+        assert_eq!((h_fhd.width, h_fhd.height), (56, 228));
         assert_eq!(h_fhd.x + h_fhd.width as i32, d_fhd.x);
 
         let uhd_200 = WorkAreaMonitor {
@@ -454,6 +460,6 @@ mod tests {
         assert_eq!(d_uhd.height, 2064);
         assert_eq!(d_uhd.width, 1120);
         let h_uhd = compute_handle_bounds_for_work_area(uhd_200, false);
-        assert_eq!((h_uhd.width, h_uhd.height), (160, 600));
+        assert_eq!((h_uhd.width, h_uhd.height), (112, 456));
     }
 }
