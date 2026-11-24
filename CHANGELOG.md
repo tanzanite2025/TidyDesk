@@ -20,7 +20,10 @@
 - **实时协同推送与移动端 Web/H5 适配（Phase 4）**：
   - 服务端 `server/` 新增 SSE 实时推送接口 `GET /api/v1/sync/events`（`push` 提交后毫秒级广播 `sync-changed`）、CORS 放行及构建产物 `dist/` 同域静态托管；Rust 端新增 [realtime.rs](./src-tauri/src/sync/realtime.rs) 与 `sync_set_realtime_enabled` 开关（支持账号切换自动停流与断线退避重连，严守登录与拉取分离红线）。
   - 前端扩展 `NativeClient.capabilities` 能力开关，移动端自动隐藏桌面 GDI 截屏并开放手机原生后置相机直拍与相册多选；新增 [web-http-adapter.ts](./src/native/web-http-adapter.ts)（WebCrypto SHA-256 + 480px 缩略图生成 + 受控 Blob URL 渲染 + SSE 监听）与 [MobileTodoApp.tsx](./src/modules/mobile/MobileTodoApp.tsx)（`?mode=mobile`）。
-- 新增体系化跨端架构文档 [TODO_SYNC_AND_MOBILE_ARCHITECTURE.md](./docs/development/TODO_SYNC_AND_MOBILE_ARCHITECTURE.md) 与 [TODO_MEDIA_AND_COLLAB_ROADMAP.md](./docs/development/TODO_MEDIA_AND_COLLAB_ROADMAP.md) 双向互链。
+- **轻量账户管理、设备会话吊销与多工作区隔离**：
+  - 服务端新增 [users.mjs](./server/src/users.mjs) 与运维脚本 [cli.mjs](./server/src/cli.mjs)：原生 `scrypt` 密码哈希 + SHA-256 设备 Token 摘要存储 + `mtimeMs` 免重启热加载；新增 `/api/v1/auth/{login,logout,password,sessions,sessions/revoke}` 与 `/api/v1/workspaces`，支持 `private:<userId>` 私人空间强权限隔离（越权拒绝 `403`）。
+  - 桌面端与移动端支持「账号密码登录 / 白名单 Token」双模式、共享（`default`）与私人（`private:<userId>`）工作区切换（桌面端切区前强制校验未同步队列清零防串库），以及在线查看/吊销设备与改密，详细见 [TODO_AUTH_AND_WORKSPACE_GUIDE.md](./docs/development/TODO_AUTH_AND_WORKSPACE_GUIDE.md)。
+- 新增体系化跨端架构文档 [TODO_SYNC_AND_MOBILE_ARCHITECTURE.md](./docs/development/TODO_SYNC_AND_MOBILE_ARCHITECTURE.md)、[TODO_AUTH_AND_WORKSPACE_GUIDE.md](./docs/development/TODO_AUTH_AND_WORKSPACE_GUIDE.md) 与 [TODO_MEDIA_AND_COLLAB_ROADMAP.md](./docs/development/TODO_MEDIA_AND_COLLAB_ROADMAP.md) 双向互链。
 
 ### 计划中
 - 主题系统（浅色/深色/自动）

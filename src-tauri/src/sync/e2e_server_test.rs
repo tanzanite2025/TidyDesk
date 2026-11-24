@@ -354,3 +354,120 @@ fn rust_http_sync_client_roundtrips_with_live_node_server() {
         );
     });
 }
+
+#[test]
+fn rust_http_client_password_login_and_private_workspace_isolation() {
+    let server = LiveSyncServer::spawn();
+    let cli_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace root")
+        .join("server")
+        .join("src")
+        .join("cli.mjs");
+
+    let output = Command::new("node")
+        .arg(&cli_script)
+        .args([
+            "useradd",
+            "dave",
+            "--password",
+            "dave-secret-1",
+            "--name",
+            "Dave",
+        ])
+        .env("TIDYDESK_DATA_DIR", &server.data_dir)
+        .output()
+        .expect("cli useradd should execute");
+    assert!(
+        output.status.success(),
+        "cli useradd failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let endpoint = server.endpoint.clone();
+    tauri::async_runtime::block_on(async move {
+        assert!(
+            HttpSyncClient::login_with_password(&endpoint, "dave", "wrong", "E2E")
+                .await
+                .is_err()
+        );
+
+        let login = HttpSyncClient::login_with_password(&endpoint, "dave", "dave-secret-1", "E2E")
+            .await
+            .expect("password login via Rust HttpSyncClient should succeed");
+        assert_eq!(login.user_id, "dave");
+        assert!(login.token.starts_with("tdk_"));
+
+        let dave_private = HttpSyncClient::new(&endpoint, "dave", &login.token)
+            .unwrap()
+            .with_workspace("private:dave")
+            .unwrap();
+        dave_private
+            .verify_credentials()
+            .await
+            .expect("owner verify on private workspace should succeed");
+
+        let alice_intruder = HttpSyncClient::new(&endpoint, "alice", "tok-alice-secret")
+            .unwrap()
+            .with_workspace("private:dave")
+            .unwrap();
+        assert!(
+            alice_intruder.verify_credentials().await.is_err(),
+            "other user verify on private workspace must be rejected"
+        );
+        assert!(
+            alice_intruder.pull_changes(None).await.is_err(),
+            "other user pull on private workspace must be rejected"
+        );
+
+        dave_private
+            .push_changes(&[OutboxEntry {
+                entity_kind: OutboxEntityKind::Card,
+                entity_id: "card-priv-1".to_string(),
+                operation: OutboxOperation::Upsert,
+                payload: json!({
+                    "id": "card-priv-1",
+                    "boardId": "board-default",
+                    "columnId": "todo",
+                    "title": "Dave private card",
+                    "content": "Secret notes",
+                    "tags": [],
+                    "archived": false,
+                    "subtasks": [],
+                    "attachments": [],
+                    "position": "000100",
+                    "revision": 0,
+                    "baseRevision": 0,
+                    "createdAt": "1000",
+                    "updatedAt": "1000"
+                }),
+                actor_id: "dave".to_string(),
+                updated_at: "1000".to_string(),
+            }])
+            .await
+            .expect("push to private workspace should succeed");
+
+        let dave_default = HttpSyncClient::new(&endpoint, "dave", &login.token).unwrap();
+        let default_pull = dave_default.pull_changes(None).await.unwrap();
+        assert!(default_pull.cards.is_empty());
+
+        let private_pull = dave_private.pull_changes(None).await.unwrap();
+        assert_eq!(private_pull.cards.len(), 1);
+        assert_eq!(private_pull.cards[0]["title"], json!("Dave private card"));
+
+        let sessions = dave_private.list_remote_sessions().await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].is_current);
+
+        let workspaces = dave_private.list_workspaces().await.unwrap();
+        assert!(workspaces
+            .iter()
+            .any(|w| w.workspace_id == "private:dave" && w.is_private));
+
+        dave_private.logout_session().await.unwrap();
+        assert!(
+            dave_private.pull_changes(None).await.is_err(),
+            "revoked token after logout_session must be rejected"
+        );
+    });
+}

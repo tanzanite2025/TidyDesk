@@ -37,8 +37,10 @@ pub use crate::paths::{
 };
 
 use accounts::{
-    accounts_get_session, accounts_import_local_todos, accounts_logout_to_local,
-    accounts_switch_session, AccountSessionState,
+    accounts_change_password, accounts_get_session, accounts_import_local_todos,
+    accounts_list_remote_sessions, accounts_list_workspaces, accounts_login_with_password,
+    accounts_logout_to_local, accounts_revoke_remote_session, accounts_switch_session,
+    AccountSessionState,
 };
 use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
@@ -150,6 +152,11 @@ macro_rules! tidydesk_generate_handler {
             todos_start_snip_for_card,
             accounts_get_session,
             accounts_switch_session,
+            accounts_login_with_password,
+            accounts_change_password,
+            accounts_list_remote_sessions,
+            accounts_revoke_remote_session,
+            accounts_list_workspaces,
             accounts_logout_to_local,
             accounts_import_local_todos,
             sync_get_status,
@@ -228,6 +235,11 @@ macro_rules! tidydesk_generate_handler {
             todos_start_snip_for_card,
             accounts_get_session,
             accounts_switch_session,
+            accounts_login_with_password,
+            accounts_change_password,
+            accounts_list_remote_sessions,
+            accounts_revoke_remote_session,
+            accounts_list_workspaces,
             accounts_logout_to_local,
             accounts_import_local_todos,
             sync_get_status,

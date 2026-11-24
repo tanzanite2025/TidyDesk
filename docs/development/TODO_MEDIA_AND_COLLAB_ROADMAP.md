@@ -137,6 +137,7 @@
 
 - [x] **SSE 实时广播与桌面端订阅**：`server/` 新增 `GET /api/v1/sync/events` 按 `workspaceId` 推送 `sync-changed`（并支持 CORS 与构建后 `dist/` 同域静态托管）；Rust 端新增 `src-tauri/src/sync/realtime.rs`（`sync_set_realtime_enabled` 控制开关、切号/登出自动停止连接、退避重连并在收到远端更新时自动调用 `execute_account_sync` 刷新）。
 - [x] **移动端适配与能力开关**：基于 `NativeClient.capabilities` 在移动端自动屏蔽桌面截屏、开放 `<input capture="environment">` 手机系统相机直拍与相册多选；新增 `src/native/web-http-adapter.ts` 与 `src/modules/mobile/MobileTodoApp.tsx`（`?mode=mobile`），实现“手机拍照建卡 / 子任务拍照 → 电脑端秒级收到推送并展示”。
+- [x] **轻量账户管理、设备会话吊销与共享/私人工作区隔离**：详见 [轻量账户管理、设备吊销与多工作区隔离指南](./TODO_AUTH_AND_WORKSPACE_GUIDE.md)——服务端新增 `scrypt` 密码哈希、SHA-256 Token 吊销、热加载运维 CLI（`server/src/cli.mjs`）及 `private:<userId>` 私有空间强隔离；桌面与移动端支持账号密码登录、设备管理、改密与工作区安全切换。
 
 #### 阶段验收标准
 - [ ] 在手机端浏览器访问 `http://<电脑局域网IP>:8787/?mode=mobile` 登录并拍照提交到指定看板列（含子任务拍照），开启桌面端「实时推送」后数秒内收到更新并显示缩略图，点开灯箱正常懒加载原图。

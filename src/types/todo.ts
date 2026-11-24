@@ -32,6 +32,8 @@ export interface TodoAttachment {
   sizeBytes?: number;
   mimeType?: string;
   createdAt?: string;
+  updatedAt?: string;
+  deletedAt?: string | null;
   assetUrl?: string;
   thumbUrl?: string;
 }
@@ -96,6 +98,7 @@ export interface AccountSessionSnapshot {
   activeUserId: string | null;
   displayName: string | null;
   serverEndpoint: string | null;
+  workspaceId: string;
   hasToken: boolean;
   lastSyncCursor: string | null;
   lastSyncAt: string | null;
@@ -106,7 +109,38 @@ export interface SwitchAccountSessionInput {
   userId: string;
   displayName?: string;
   serverEndpoint?: string;
+  workspaceId?: string;
   token?: string;
+}
+
+export interface LoginWithPasswordInput {
+  userId: string;
+  password: string;
+  serverEndpoint: string;
+  workspaceId?: string;
+  deviceLabel?: string;
+}
+
+export interface ChangePasswordInput {
+  oldPassword: string;
+  newPassword: string;
+  revokeAll?: boolean;
+}
+
+export interface RemoteAuthSessionInfo {
+  tokenId: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
+  isCurrent: boolean;
+}
+
+export interface RemoteWorkspaceInfo {
+  workspaceId: string;
+  title: string;
+  role: string;
+  isPrivate: boolean;
 }
 
 export interface SyncStatusSnapshot {
@@ -114,6 +148,7 @@ export interface SyncStatusSnapshot {
   activeUserId: string | null;
   syncEnabled: boolean;
   serverEndpoint: string | null;
+  workspaceId: string;
   pendingCount: number;
   lastSyncCursor: string | null;
   lastSyncAt: string | null;

@@ -89,10 +89,7 @@ fn write_shortcut_link_with_com(
             .encode_utf16()
             .chain(Some(0))
             .collect();
-        let description_wide: Vec<u16> = format!("{}", description)
-            .encode_utf16()
-            .chain(Some(0))
-            .collect();
+        let description_wide: Vec<u16> = description.encode_utf16().chain(Some(0)).collect();
 
         shell_link
             .SetPath(PCWSTR(target_wide.as_ptr()))

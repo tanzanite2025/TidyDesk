@@ -1,7 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Cloud, FolderDown, LogOut, RefreshCw, Trash2, UserCheck } from 'lucide-react';
+import {
+  Cloud,
+  FolderDown,
+  KeyRound,
+  LogOut,
+  MonitorSmartphone,
+  RefreshCw,
+  Trash2,
+  UserCheck
+} from 'lucide-react';
 import { nativeClient } from '../../native/native-client';
-import type { AccountSessionSnapshot, SyncStatusSnapshot } from '../../types/todo';
+import type {
+  AccountSessionSnapshot,
+  RemoteAuthSessionInfo,
+  SyncStatusSnapshot
+} from '../../types/todo';
 
 /**
  * Settings card managing optional multi-account workspace isolation and pluggable sync readiness
@@ -10,11 +23,20 @@ import type { AccountSessionSnapshot, SyncStatusSnapshot } from '../../types/tod
 export const AccountSyncCard: React.FC = () => {
   const [session, setSession] = useState<AccountSessionSnapshot | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot | null>(null);
+  const [authMethod, setAuthMethod] = useState<'password' | 'token'>('password');
   const [userIdInput, setUserIdInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [endpointInput, setEndpointInput] = useState('');
+  const [workspaceInput, setWorkspaceInput] = useState('default');
   const [tokenInput, setTokenInput] = useState('');
   const [editingEndpoint, setEditingEndpoint] = useState(false);
+  const [showSessionsPanel, setShowSessionsPanel] = useState(false);
+  const [remoteSessions, setRemoteSessions] = useState<RemoteAuthSessionInfo[]>([]);
+  const [showPasswordPanel, setShowPasswordPanel] = useState(false);
+  const [oldPasswordInput, setOldPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [revokeAllOnPwd, setRevokeAllOnPwd] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -60,16 +82,102 @@ export const AccountSyncCard: React.FC = () => {
     setError('');
     setNotice('');
     try {
-      const nextSession = await nativeClient.accounts.switchSession({
-        userId: userIdInput,
-        displayName: displayNameInput || undefined,
-        serverEndpoint: endpointInput || undefined,
-        token: tokenInput || undefined
-      });
+      const targetWs = workspaceInput.trim() || 'default';
+      let nextSession: AccountSessionSnapshot;
+      if (authMethod === 'password') {
+        if (!nativeClient.accounts.loginWithPassword) {
+          throw new Error('当前运行环境不支持密码登录');
+        }
+        nextSession = await nativeClient.accounts.loginWithPassword({
+          userId: userIdInput,
+          password: passwordInput,
+          serverEndpoint: endpointInput,
+          workspaceId: targetWs,
+          deviceLabel: 'TidyDesk Windows'
+        });
+        setPasswordInput('');
+      } else {
+        nextSession = await nativeClient.accounts.switchSession({
+          userId: userIdInput,
+          displayName: displayNameInput || undefined,
+          serverEndpoint: endpointInput || undefined,
+          workspaceId: targetWs,
+          token: tokenInput || undefined
+        });
+        setTokenInput('');
+      }
       setSession(nextSession);
       setSyncStatus(await nativeClient.sync.getStatus());
-      setNotice(`已切换至账号工作区：${nextSession.activeUserId}`);
-      setTokenInput('');
+      setNotice(`已切换至账号工作区：${nextSession.activeUserId}（${nextSession.workspaceId}）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleLoadRemoteSessions = async () => {
+    if (!nativeClient.isAvailable() || !nativeClient.accounts.listRemoteSessions) return;
+    if (showSessionsPanel) {
+      setShowSessionsPanel(false);
+      return;
+    }
+    setBusyAction(true);
+    setError('');
+    try {
+      const list = await nativeClient.accounts.listRemoteSessions();
+      setRemoteSessions(list);
+      setShowSessionsPanel(true);
+      setShowPasswordPanel(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleRevokeSession = async (tokenId: string, isCurrent = false) => {
+    if (!nativeClient.isAvailable() || !nativeClient.accounts.revokeRemoteSession) return;
+    setBusyAction(true);
+    setError('');
+    try {
+      await nativeClient.accounts.revokeRemoteSession(tokenId);
+      if (isCurrent) {
+        setShowSessionsPanel(false);
+        setNotice('已吊销当前本机会话凭据，同步与设备管理将在重新登录后恢复');
+      } else {
+        if (nativeClient.accounts.listRemoteSessions) {
+          setRemoteSessions(await nativeClient.accounts.listRemoteSessions());
+        }
+        setNotice(`已吊销设备会话 ${tokenId}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!nativeClient.isAvailable() || !nativeClient.accounts.changePassword) return;
+    setBusyAction(true);
+    setError('');
+    setNotice('');
+    try {
+      await nativeClient.accounts.changePassword({
+        oldPassword: oldPasswordInput,
+        newPassword: newPasswordInput,
+        revokeAll: revokeAllOnPwd
+      });
+      setOldPasswordInput('');
+      setNewPasswordInput('');
+      setShowPasswordPanel(false);
+      setNotice(
+        revokeAllOnPwd
+          ? '密码已修改并吊销旧会话，如本机被吊销请使用新密码重新登录'
+          : '账号密码已更新'
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -86,6 +194,9 @@ export const AccountSyncCard: React.FC = () => {
       const nextSession = await nativeClient.accounts.logoutToLocal();
       setSession(nextSession);
       setSyncStatus(await nativeClient.sync.getStatus());
+      setShowSessionsPanel(false);
+      setShowPasswordPanel(false);
+      setEditingEndpoint(false);
       setNotice('已切回纯本地默认工作区');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -120,13 +231,14 @@ export const AccountSyncCard: React.FC = () => {
       const nextSession = await nativeClient.accounts.switchSession({
         userId: session.activeUserId,
         serverEndpoint: endpointInput,
+        workspaceId: workspaceInput.trim() || 'default',
         token: tokenInput || undefined
       });
       setSession(nextSession);
       setSyncStatus(await nativeClient.sync.getStatus());
       setEditingEndpoint(false);
       setTokenInput('');
-      setNotice('已保存当前账号云端同步配置');
+      setNotice(`已保存云端配置，当前工作区：${nextSession.workspaceId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -234,7 +346,12 @@ export const AccountSyncCard: React.FC = () => {
         {isAccountMode ? (
           <div className="space-y-2.5 rounded-lg border border-white/[0.08] bg-slate-950/35 p-3 text-[11px]">
             <div className="flex flex-wrap items-center justify-between gap-2 text-slate-400">
-              <span>账号 ID：<span className="font-mono text-slate-200">{session?.activeUserId}</span></span>
+              <span>
+                账号 ID：<span className="font-mono text-slate-200">{session?.activeUserId}</span>
+                <span className="ml-2 rounded border border-white/[0.08] bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-sky-200">
+                  {session?.workspaceId || 'default'}
+                </span>
+              </span>
               <span>待同步队列：<span className="font-semibold text-sky-300">{syncStatus?.pendingCount ?? 0}</span> 条</span>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 text-slate-400">
@@ -267,6 +384,30 @@ export const AccountSyncCard: React.FC = () => {
                     className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
                   />
                 </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input
+                    value={workspaceInput}
+                    onChange={event => setWorkspaceInput(event.target.value)}
+                    placeholder="工作区 ID（default 或 private:账号）"
+                    className="min-w-0 flex-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1 font-mono text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setWorkspaceInput('default')}
+                    className="rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.1]"
+                  >
+                    共享(default)
+                  </button>
+                  {session?.activeUserId && (
+                    <button
+                      type="button"
+                      onClick={() => setWorkspaceInput(`private:${session.activeUserId}`)}
+                      className="rounded border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] text-slate-300 hover:bg-white/[0.1]"
+                    >
+                      私人空间
+                    </button>
+                  )}
+                </div>
                 <div className="flex items-center justify-end gap-2">
                   <button
                     type="button"
@@ -282,6 +423,86 @@ export const AccountSyncCard: React.FC = () => {
                     className="rounded bg-sky-500/25 px-2.5 py-1 text-[10px] font-semibold text-sky-100 hover:bg-sky-500/35 disabled:opacity-50"
                   >
                     保存配置
+                  </button>
+                </div>
+              </form>
+            )}
+            {showSessionsPanel && (
+              <div className="space-y-1.5 rounded-md border border-white/[0.08] bg-black/25 p-2.5">
+                <div className="text-[10px] font-semibold text-slate-300">已授权登录设备列表</div>
+                {remoteSessions.length === 0 ? (
+                  <div className="text-[10px] text-slate-500">
+                    暂无记录（静态白名单 Token 不生成动态会话条目）
+                  </div>
+                ) : (
+                  remoteSessions.map(item => (
+                    <div
+                      key={item.tokenId}
+                      className="flex items-center justify-between gap-2 rounded bg-white/[0.03] px-2 py-1 text-[10px]"
+                    >
+                      <div className="min-w-0 truncate">
+                        <span className="font-semibold text-slate-200">{item.label}</span>
+                        <span className="ml-1.5 font-mono text-slate-500">{item.tokenId}</span>
+                        {item.isCurrent && (
+                          <span className="ml-1.5 rounded bg-emerald-500/20 px-1 text-emerald-200">
+                            本机
+                          </span>
+                        )}
+                        {item.revokedAt && (
+                          <span className="ml-1.5 text-rose-300">已吊销</span>
+                        )}
+                      </div>
+                      {!item.revokedAt && (
+                        <button
+                          type="button"
+                          disabled={busyAction}
+                          onClick={() => void handleRevokeSession(item.tokenId, item.isCurrent)}
+                          className="shrink-0 rounded border border-rose-400/25 bg-rose-500/15 px-1.5 py-0.5 text-[10px] text-rose-200 hover:bg-rose-500/25"
+                        >
+                          吊销
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+            {showPasswordPanel && (
+              <form
+                onSubmit={event => void handleChangePassword(event)}
+                className="space-y-2 rounded-md border border-white/[0.08] bg-black/25 p-2.5"
+              >
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="password"
+                    value={oldPasswordInput}
+                    onChange={event => setOldPasswordInput(event.target.value)}
+                    placeholder="当前密码"
+                    className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                  />
+                  <input
+                    type="password"
+                    value={newPasswordInput}
+                    onChange={event => setNewPasswordInput(event.target.value)}
+                    placeholder="新密码（至少 4 位）"
+                    className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1 text-[11px] text-slate-100 outline-none placeholder:text-slate-500"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-1.5 text-[10px] text-slate-400">
+                    <input
+                      type="checkbox"
+                      checked={revokeAllOnPwd}
+                      onChange={event => setRevokeAllOnPwd(event.target.checked)}
+                    />
+                    修改后同时吊销所有已登录会话
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={busyAction || !oldPasswordInput || newPasswordInput.length < 4}
+                    className="rounded bg-sky-500/25 px-2.5 py-1 text-[10px] font-semibold text-sky-100 hover:bg-sky-500/35 disabled:opacity-50"
+                  >
+                    确认修改
                   </button>
                 </div>
               </form>
@@ -320,6 +541,7 @@ export const AccountSyncCard: React.FC = () => {
                 disabled={busyAction}
                 onClick={() => {
                   setEndpointInput(session?.serverEndpoint || '');
+                  setWorkspaceInput(session?.workspaceId || 'default');
                   setTokenInput('');
                   setEditingEndpoint(prev => !prev);
                 }}
@@ -327,6 +549,31 @@ export const AccountSyncCard: React.FC = () => {
               >
                 配置服务端
               </button>
+              {session?.serverEndpoint && nativeClient.accounts.listRemoteSessions && (
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => void handleLoadRemoteSessions()}
+                  className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
+                >
+                  <MonitorSmartphone size={12} />
+                  设备管理
+                </button>
+              )}
+              {session?.serverEndpoint && nativeClient.accounts.changePassword && (
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => {
+                    setShowPasswordPanel(prev => !prev);
+                    setShowSessionsPanel(false);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
+                >
+                  <KeyRound size={12} />
+                  改密
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busyAction}
@@ -351,46 +598,123 @@ export const AccountSyncCard: React.FC = () => {
           </div>
         ) : (
           <form onSubmit={event => void handleSwitchAccount(event)} className="space-y-2 rounded-lg border border-white/[0.08] bg-slate-950/35 p-3">
-            <div className="text-[11px] font-semibold text-slate-300">
-              切换/测试多账号隔离工作区（可选）
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold text-slate-300">
+                登录云端账号或切换隔离工作区（可选）
+              </span>
+              <div className="flex rounded-md bg-black/30 p-0.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setAuthMethod('password')}
+                  className={`rounded px-2 py-0.5 ${
+                    authMethod === 'password' ? 'bg-sky-500/25 text-sky-100' : 'text-slate-400'
+                  }`}
+                >
+                  账号密码登录
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthMethod('token')}
+                  className={`rounded px-2 py-0.5 ${
+                    authMethod === 'token' ? 'bg-sky-500/25 text-sky-100' : 'text-slate-400'
+                  }`}
+                >
+                  Token / 本地隔离
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <input
                 value={userIdInput}
                 onChange={event => setUserIdInput(event.target.value)}
-                placeholder="账号 ID（如 user_01）"
+                placeholder="账号 ID（如 alice）"
                 className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
               />
-              <input
-                value={displayNameInput}
-                onChange={event => setDisplayNameInput(event.target.value)}
-                placeholder="显示名称（可选）"
-                className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
-              />
+              {authMethod === 'password' ? (
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={event => setPasswordInput(event.target.value)}
+                  placeholder="登录密码"
+                  className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+                />
+              ) : (
+                <input
+                  value={displayNameInput}
+                  onChange={event => setDisplayNameInput(event.target.value)}
+                  placeholder="显示名称（可选）"
+                  className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+                />
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <input
                 value={endpointInput}
                 onChange={event => setEndpointInput(event.target.value)}
-                placeholder="预留服务端 URL（可选）"
+                placeholder={
+                  authMethod === 'password'
+                    ? '服务端 URL（如 http://127.0.0.1:8787）'
+                    : '预留服务端 URL（可选）'
+                }
                 className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
               />
-              <input
-                type="password"
-                value={tokenInput}
-                onChange={event => setTokenInput(event.target.value)}
-                placeholder="Token（填服务端时必填）"
-                className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
-              />
+              {authMethod === 'token' ? (
+                <input
+                  type="password"
+                  value={tokenInput}
+                  onChange={event => setTokenInput(event.target.value)}
+                  placeholder="Token（填服务端时必填）"
+                  className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+                />
+              ) : (
+                <input
+                  value={workspaceInput}
+                  onChange={event => setWorkspaceInput(event.target.value)}
+                  placeholder="工作区 ID（默认 default）"
+                  className="rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-mono text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+                />
+              )}
             </div>
-            <button
-              type="submit"
-              disabled={busyAction || !userIdInput.trim()}
-              className="inline-flex items-center gap-1.5 rounded-md bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/30 disabled:opacity-50"
-            >
-              <UserCheck size={12} />
-              切换至独立账号目录
-            </button>
+            {authMethod === 'token' && (
+              <input
+                value={workspaceInput}
+                onChange={event => setWorkspaceInput(event.target.value)}
+                placeholder="工作区 ID（默认 default，或 private:账号）"
+                className="w-full rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-mono text-[11px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-sky-400/40"
+              />
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                <span>快捷工作区：</span>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceInput('default')}
+                  className="rounded border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-slate-300 hover:bg-white/[0.1]"
+                >
+                  共享看板
+                </button>
+                <button
+                  type="button"
+                  disabled={!userIdInput.trim()}
+                  onClick={() => setWorkspaceInput(`private:${userIdInput.trim()}`)}
+                  className="rounded border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-slate-300 hover:bg-white/[0.1] disabled:opacity-40"
+                >
+                  私人空间
+                </button>
+              </div>
+              <button
+                type="submit"
+                disabled={
+                  busyAction ||
+                  !userIdInput.trim() ||
+                  (authMethod === 'password' && (!passwordInput || !endpointInput.trim()))
+                }
+                className="inline-flex items-center gap-1.5 rounded-md bg-sky-500/20 px-3 py-1.5 text-[11px] font-semibold text-sky-100 hover:bg-sky-500/30 disabled:opacity-50"
+              >
+                <UserCheck size={12} />
+                {authMethod === 'password' ? '登录并挂载工作区' : '切换至独立账号目录'}
+              </button>
+            </div>
           </form>
         )}
       </div>

@@ -9,17 +9,37 @@ use tauri::AppHandle;
 const ACCOUNT_TOKEN_FILE: &str = "token.dpapi";
 const ACCOUNT_SYNC_PROFILE_FILE: &str = "sync-profile.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub const DEFAULT_WORKSPACE_ID: &str = "default";
+
+fn default_workspace_id() -> String {
+    DEFAULT_WORKSPACE_ID.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAccountSyncProfile {
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
     pub server_endpoint: Option<String>,
+    #[serde(default = "default_workspace_id")]
+    pub workspace_id: String,
     #[serde(default)]
     pub last_sync_cursor: Option<String>,
     #[serde(default)]
     pub last_sync_at: Option<String>,
+}
+
+impl Default for StoredAccountSyncProfile {
+    fn default() -> Self {
+        Self {
+            display_name: None,
+            server_endpoint: None,
+            workspace_id: default_workspace_id(),
+            last_sync_cursor: None,
+            last_sync_at: None,
+        }
+    }
 }
 
 fn token_file_path(app: &AppHandle, user_id: &str) -> Result<PathBuf, String> {
@@ -232,6 +252,7 @@ mod tests {
         let profile = StoredAccountSyncProfile {
             display_name: Some("Alice".to_string()),
             server_endpoint: Some("https://sync.example.com".to_string()),
+            workspace_id: DEFAULT_WORKSPACE_ID.to_string(),
             last_sync_cursor: Some("cur-42".to_string()),
             last_sync_at: Some("1700000000".to_string()),
         };

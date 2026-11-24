@@ -1,12 +1,14 @@
 use super::credentials::{
-    has_account_token, load_account_sync_profile, save_account_sync_profile, store_account_token,
-    StoredAccountSyncProfile,
+    has_account_token, load_account_sync_profile, load_account_token, save_account_sync_profile,
+    store_account_token, StoredAccountSyncProfile,
 };
 use super::session::{
-    account_todos_root, copy_dir_recursive_merge, legacy_local_todos_root, load_session,
-    sanitize_account_user_id, set_cached_session, snapshot_from_session, validate_server_endpoint,
-    AccountSessionSnapshot, StoredAccountSession,
+    account_todos_root, account_workspace_dir, copy_dir_recursive_merge, legacy_local_todos_root,
+    load_session, sanitize_account_user_id, sanitize_workspace_id, set_cached_session,
+    snapshot_from_session, validate_server_endpoint, AccountSessionSnapshot, StoredAccountSession,
 };
+use crate::sync::http_transport::{HttpSyncClient, RemoteAuthSessionInfo, RemoteWorkspaceInfo};
+use crate::sync::outbox::has_pending_outbox_for_user;
 use crate::todos::model::merge_imported_todo_index;
 use crate::todos::store::{
     clear_todo_content_cache, read_todo_index_unlocked, todo_index_path_in_root,
@@ -23,7 +25,146 @@ pub struct SwitchAccountSessionPayload {
     pub user_id: String,
     pub display_name: Option<String>,
     pub server_endpoint: Option<String>,
+    pub workspace_id: Option<String>,
     pub token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginWithPasswordPayload {
+    pub user_id: String,
+    pub password: String,
+    pub server_endpoint: String,
+    pub workspace_id: Option<String>,
+    pub device_label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangePasswordPayload {
+    pub old_password: String,
+    pub new_password: String,
+    #[serde(default)]
+    pub revoke_all: bool,
+}
+
+fn validate_workspace_transition(
+    app: &AppHandle,
+    user_id: &str,
+    existing_workspace: &str,
+    next_workspace: &str,
+) -> Result<bool, String> {
+    if existing_workspace == next_workspace {
+        return Ok(false);
+    }
+    if has_pending_outbox_for_user(app, user_id)? {
+        return Err(
+            "切换同步工作区前请先同步或清空该账号本地待上传队列，避免不同空间数据串联".to_string(),
+        );
+    }
+    Ok(true)
+}
+
+fn apply_account_session_sync(
+    app: &AppHandle,
+    user_id: String,
+    display_name: Option<String>,
+    server_endpoint: Option<String>,
+    workspace_id: String,
+    supplied_token: Option<String>,
+) -> Result<AccountSessionSnapshot, String> {
+    let existing_profile = load_account_sync_profile(app, &user_id)?;
+    let token_present = supplied_token.is_some() || has_account_token(app, &user_id);
+    if server_endpoint.is_some() && !token_present {
+        return Err("已填写同步服务端地址时，必须提供有效的访问 Token".to_string());
+    }
+    let workspace_changed = validate_workspace_transition(
+        app,
+        &user_id,
+        &existing_profile.workspace_id,
+        &workspace_id,
+    )?;
+
+    if let Some(ref token) = supplied_token {
+        store_account_token(app, &user_id, token)?;
+    }
+
+    let resolved_name = match display_name {
+        Some(ref raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                existing_profile.display_name.clone()
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => existing_profile.display_name.clone(),
+    };
+
+    let (next_cursor, next_sync_at) = if workspace_changed {
+        (None, None)
+    } else {
+        (
+            existing_profile.last_sync_cursor,
+            existing_profile.last_sync_at,
+        )
+    };
+
+    let next_profile = StoredAccountSyncProfile {
+        display_name: resolved_name.clone(),
+        server_endpoint: server_endpoint.clone(),
+        workspace_id: workspace_id.clone(),
+        last_sync_cursor: next_cursor.clone(),
+        last_sync_at: next_sync_at.clone(),
+    };
+    save_account_sync_profile(app, &user_id, &next_profile)?;
+
+    let user_todos_dir = account_workspace_dir(app, &user_id)?.join("todos");
+    let next = StoredAccountSession {
+        version: 1,
+        active_user_id: Some(user_id),
+        display_name: resolved_name,
+        server_endpoint,
+        workspace_id,
+        has_token: token_present,
+        last_sync_cursor: next_cursor,
+        last_sync_at: next_sync_at,
+    };
+    let snapshot = snapshot_from_session(&next);
+
+    with_todo_store_lock(app, |store| {
+        crate::sync::stop_realtime_sync(app);
+        if workspace_changed && user_todos_dir.exists() {
+            fs::remove_dir_all(&user_todos_dir).map_err(|err| {
+                format!(
+                    "切换工作区时清理本地缓存目录失败 {}: {err}",
+                    user_todos_dir.display()
+                )
+            })?;
+        }
+        set_cached_session(app, next)?;
+        clear_todo_content_cache(store);
+        Ok(())
+    })?;
+
+    crate::todos::commands::refresh_and_emit_active_todo_state(app)?;
+    emit_account_workspace_refreshed(app, &snapshot)?;
+    Ok(snapshot)
+}
+
+fn build_active_http_client(app: &AppHandle) -> Result<HttpSyncClient, String> {
+    let session = load_session(app)?;
+    let user_id = session
+        .active_user_id
+        .as_deref()
+        .ok_or_else(|| "纯本地模式未登录远端账号".to_string())?;
+    let endpoint = session
+        .server_endpoint
+        .as_deref()
+        .ok_or_else(|| "当前账号未配置同步服务端地址".to_string())?;
+    let token = load_account_token(app, user_id)?
+        .ok_or_else(|| "缺少有效的账号 Token，请重新登录后重试".to_string())?;
+    HttpSyncClient::new(endpoint, user_id, &token)?.with_workspace(&session.workspace_id)
 }
 
 fn emit_account_workspace_refreshed(
@@ -64,68 +205,150 @@ pub async fn accounts_switch_session(
             Some(ref raw) => validate_server_endpoint(Some(raw.as_str()))?,
             None => existing_profile.server_endpoint.clone(),
         };
-
+        let workspace_id = match payload.workspace_id {
+            Some(ref raw) => sanitize_workspace_id(Some(raw.as_str()))?,
+            None => sanitize_workspace_id(Some(&existing_profile.workspace_id))?,
+        };
         let supplied_token = payload
             .token
             .as_deref()
             .map(str::trim)
-            .filter(|v| !v.is_empty());
-        let token_present = supplied_token.is_some() || has_account_token(&app, &user_id);
-        if server_endpoint.is_some() && !token_present {
-            return Err("已填写同步服务端地址时，必须提供有效的访问 Token".to_string());
-        }
-        if let Some(token) = supplied_token {
-            store_account_token(&app, &user_id, token)?;
-        }
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
 
-        let display_name = match payload.display_name {
-            Some(ref raw) => {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    existing_profile.display_name.clone()
-                } else {
-                    Some(trimmed.to_string())
-                }
-            }
-            None => existing_profile.display_name.clone(),
-        };
-
-        let next_profile = StoredAccountSyncProfile {
-            display_name: display_name.clone(),
-            server_endpoint: server_endpoint.clone(),
-            last_sync_cursor: existing_profile.last_sync_cursor,
-            last_sync_at: existing_profile.last_sync_at,
-        };
-        save_account_sync_profile(&app, &user_id, &next_profile)?;
-
-        let next = StoredAccountSession {
-            version: 1,
-            active_user_id: Some(user_id),
-            display_name,
+        apply_account_session_sync(
+            &app,
+            user_id,
+            payload.display_name,
             server_endpoint,
-            has_token: token_present,
-            last_sync_cursor: next_profile.last_sync_cursor,
-            last_sync_at: next_profile.last_sync_at,
-        };
-        let snapshot = snapshot_from_session(&next);
-
-        with_todo_store_lock(&app, |store| {
-            crate::sync::stop_realtime_sync(&app);
-            set_cached_session(&app, next)?;
-            clear_todo_content_cache(store);
-            Ok(())
-        })?;
-
-        crate::todos::commands::refresh_and_emit_active_todo_state(&app)?;
-        emit_account_workspace_refreshed(&app, &snapshot)?;
-        Ok(snapshot)
+            workspace_id,
+            supplied_token,
+        )
     })
     .await
     .map_err(|err| format!("account session switch task failed: {err}"))?
 }
 
+/// Authenticate via User ID and password without coupling any business data pull.
+#[tauri::command]
+pub async fn accounts_login_with_password(
+    app: AppHandle,
+    payload: LoginWithPasswordPayload,
+) -> Result<AccountSessionSnapshot, String> {
+    let user_id = sanitize_account_user_id(&payload.user_id)?;
+    let endpoint = validate_server_endpoint(Some(&payload.server_endpoint))?
+        .ok_or_else(|| "请输入有效的服务端地址".to_string())?;
+    let requested_ws = payload.workspace_id.clone();
+
+    let (target_workspace, device_label) = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let user_id = user_id.clone();
+        move || {
+            let existing = load_account_sync_profile(&app, &user_id)?;
+            let next_ws = match requested_ws {
+                Some(ref raw) => sanitize_workspace_id(Some(raw.as_str()))?,
+                None => sanitize_workspace_id(Some(&existing.workspace_id))?,
+            };
+            validate_workspace_transition(&app, &user_id, &existing.workspace_id, &next_ws)?;
+            Ok::<_, String>((
+                next_ws,
+                payload
+                    .device_label
+                    .filter(|v| !v.trim().is_empty())
+                    .unwrap_or_else(|| "TidyDesk Desktop".to_string()),
+            ))
+        }
+    })
+    .await
+    .map_err(|err| format!("pre-login workspace validation failed: {err}"))??;
+
+    let login_res =
+        HttpSyncClient::login_with_password(&endpoint, &user_id, &payload.password, &device_label)
+            .await?;
+
+    let verify_client = HttpSyncClient::new(&endpoint, &login_res.user_id, &login_res.token)?
+        .with_workspace(&target_workspace)?;
+    if let Err(err) = verify_client.verify_credentials().await {
+        let _ = verify_client.logout_session().await;
+        return Err(err);
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        apply_account_session_sync(
+            &app,
+            login_res.user_id,
+            Some(login_res.display_name),
+            Some(endpoint),
+            target_workspace,
+            Some(login_res.token),
+        )
+    })
+    .await
+    .map_err(|err| format!("account login persistence failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn accounts_change_password(
+    app: AppHandle,
+    payload: ChangePasswordPayload,
+) -> Result<(), String> {
+    let client = tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app))
+        .await
+        .map_err(|err| format!("load active HTTP client failed: {err}"))??;
+    client
+        .change_password(
+            &payload.old_password,
+            &payload.new_password,
+            payload.revoke_all,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn accounts_list_remote_sessions(
+    app: AppHandle,
+) -> Result<Vec<RemoteAuthSessionInfo>, String> {
+    let client = tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app))
+        .await
+        .map_err(|err| format!("load active HTTP client failed: {err}"))??;
+    client.list_remote_sessions().await
+}
+
+#[tauri::command]
+pub async fn accounts_revoke_remote_session(
+    app: AppHandle,
+    token_id: String,
+) -> Result<(), String> {
+    let client = tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app))
+        .await
+        .map_err(|err| format!("load active HTTP client failed: {err}"))??;
+    client.revoke_remote_session(token_id.trim()).await
+}
+
+#[tauri::command]
+pub async fn accounts_list_workspaces(app: AppHandle) -> Result<Vec<RemoteWorkspaceInfo>, String> {
+    let client = tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app))
+        .await
+        .map_err(|err| format!("load active HTTP client failed: {err}"))??;
+    client.list_workspaces().await
+}
+
 #[tauri::command]
 pub async fn accounts_logout_to_local(app: AppHandle) -> Result<AccountSessionSnapshot, String> {
+    let active_client = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        move || build_active_http_client(&app)
+    })
+    .await
+    .ok()
+    .and_then(|res| res.ok());
+
+    if let Some(client) = active_client {
+        if let Err(err) = client.logout_session().await {
+            eprintln!("[WARN] Failed to revoke remote session token during logout: {err}");
+        }
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         let next = StoredAccountSession::default();
         let snapshot = snapshot_from_session(&next);

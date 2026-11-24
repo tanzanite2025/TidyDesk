@@ -85,7 +85,7 @@ fn resolve_endpoints_override() -> Result<Option<Vec<Url>>, String> {
     };
 
     let endpoints = raw
-        .split(|ch| ch == ';' || ch == ',' || ch == '\n')
+        .split([';', ',', '\n'])
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| {

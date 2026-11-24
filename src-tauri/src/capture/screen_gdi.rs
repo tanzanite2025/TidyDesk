@@ -41,18 +41,18 @@ pub fn capture_monitor_region_png(
 
     unsafe {
         let screen_dc = GetDC(None);
-        if screen_dc.0 == std::ptr::null_mut() {
+        if screen_dc.0.is_null() {
             return Err("failed to get screen device context".to_string());
         }
 
         let memory_dc = CreateCompatibleDC(Some(screen_dc));
-        if memory_dc.0 == std::ptr::null_mut() {
+        if memory_dc.0.is_null() {
             let _ = ReleaseDC(None, screen_dc);
             return Err("failed to create memory device context".to_string());
         }
 
         let bitmap = CreateCompatibleBitmap(screen_dc, capture_width, capture_height);
-        if bitmap.0 == std::ptr::null_mut() {
+        if bitmap.0.is_null() {
             let _ = DeleteDC(memory_dc);
             let _ = ReleaseDC(None, screen_dc);
             return Err("failed to create compatible bitmap".to_string());
@@ -79,14 +79,16 @@ pub fn capture_monitor_region_png(
             return Err("failed to copy screen contents".to_string());
         }
 
-        let mut bitmap_info = BITMAPINFO::default();
-        bitmap_info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: capture_width,
-            biHeight: -capture_height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+        let mut bitmap_info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: capture_width,
+                biHeight: -capture_height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

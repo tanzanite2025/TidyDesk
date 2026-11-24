@@ -166,7 +166,8 @@ pub async fn execute_account_sync(app: &AppHandle) -> Result<SyncExecutionReport
     let token = load_account_token(app, user_id)?
         .ok_or_else(|| "缺少有效的账号 Token，请重新输入凭据后重试".to_string())?;
 
-    let client = HttpSyncClient::new(endpoint, user_id, &token)?;
+    let client =
+        HttpSyncClient::new(endpoint, user_id, &token)?.with_workspace(&session.workspace_id)?;
     let mut entries = read_outbox_entries(app)?;
     let uploaded_blobs = upload_pending_attachments(app, &client, &entries).await?;
     enrich_card_outbox_media_keys(&mut entries, &uploaded_blobs);

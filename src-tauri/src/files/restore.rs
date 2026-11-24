@@ -76,13 +76,12 @@ fn files_restore_to_desktop_sync(
     }
 
     if let Some(storage_dir) = target_path.parent() {
-        if storage_dir != storage_root {
-            if fs::read_dir(storage_dir)
+        if storage_dir != storage_root
+            && fs::read_dir(storage_dir)
                 .map(|mut entries| entries.next().is_none())
                 .unwrap_or(false)
-            {
-                let _ = fs::remove_dir(storage_dir);
-            }
+        {
+            let _ = fs::remove_dir(storage_dir);
         }
     }
 

@@ -1,7 +1,9 @@
 use super::outbox::OutboxEntry;
+use crate::accounts::session::{sanitize_workspace_id, validate_server_endpoint};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+use url::form_urlencoded;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +48,50 @@ pub struct HttpPullResponse {
     pub removed_quick_note_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginResponse {
+    pub user_id: String,
+    pub display_name: String,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAuthSessionInfo {
+    pub token_id: String,
+    pub label: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteWorkspaceInfo {
+    pub workspace_id: String,
+    pub title: String,
+    pub role: String,
+    #[serde(default)]
+    pub is_private: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoteSessionsResponse {
+    #[serde(default)]
+    sessions: Vec<RemoteAuthSessionInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoteWorkspacesResponse {
+    #[serde(default)]
+    workspaces: Vec<RemoteWorkspaceInfo>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PushRequestBody<'a> {
@@ -58,14 +104,13 @@ pub struct HttpSyncClient {
     endpoint: String,
     user_id: String,
     token: String,
+    workspace_id: String,
 }
 
 impl HttpSyncClient {
     pub fn new(endpoint: &str, user_id: &str, token: &str) -> Result<Self, String> {
-        let trimmed_endpoint = endpoint.trim().trim_end_matches('/').to_string();
-        if trimmed_endpoint.is_empty() {
-            return Err("服务端地址不能为空".to_string());
-        }
+        let trimmed_endpoint = validate_server_endpoint(Some(endpoint))?
+            .ok_or_else(|| "服务端地址不能为空".to_string())?;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
@@ -75,7 +120,158 @@ impl HttpSyncClient {
             endpoint: trimmed_endpoint,
             user_id: user_id.trim().to_string(),
             token: token.trim().to_string(),
+            workspace_id: "default".to_string(),
         })
+    }
+
+    pub fn with_workspace(mut self, workspace_id: &str) -> Result<Self, String> {
+        self.workspace_id = sanitize_workspace_id(Some(workspace_id))?;
+        Ok(self)
+    }
+
+    pub async fn login_with_password(
+        endpoint: &str,
+        user_id: &str,
+        password: &str,
+        device_label: &str,
+    ) -> Result<LoginResponse, String> {
+        let base = validate_server_endpoint(Some(endpoint))?
+            .ok_or_else(|| "服务端地址不能为空".to_string())?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|err| format!("failed to build auth HTTP client: {err}"))?;
+        let resp = client
+            .post(format!("{base}/api/v1/auth/login"))
+            .json(&json!({
+                "userId": user_id.trim(),
+                "password": password,
+                "deviceLabel": device_label,
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("连接同步服务端登录失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("登录失败 ({status}): {text}"));
+        }
+        resp.json::<LoginResponse>()
+            .await
+            .map_err(|err| format!("解析登录响应失败: {err}"))
+    }
+
+    pub async fn verify_credentials(&self) -> Result<(), String> {
+        let url = self.resolve_url("/api/v1/auth/verify");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({
+                "userId": self.user_id,
+                "workspaceId": self.workspace_id,
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("校验服务端凭据失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("凭据或工作区权限校验失败 ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    pub async fn logout_session(&self) -> Result<(), String> {
+        let url = self.resolve_url("/api/v1/auth/logout");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .send()
+            .await
+            .map_err(|err| format!("通知服务端登出吊销凭据失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("服务端吊销会话失败 ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    pub async fn change_password(
+        &self,
+        old_password: &str,
+        new_password: &str,
+        revoke_all: bool,
+    ) -> Result<(), String> {
+        let url = self.resolve_url("/api/v1/auth/password");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({
+                "oldPassword": old_password,
+                "newPassword": new_password,
+                "revokeAll": revoke_all,
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("修改密码请求失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("修改密码被拒绝 ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    pub async fn list_remote_sessions(&self) -> Result<Vec<RemoteAuthSessionInfo>, String> {
+        let url = self.resolve_url("/api/v1/auth/sessions");
+        let resp = self
+            .apply_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|err| format!("查询设备会话失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("读取设备会话被拒绝 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteSessionsResponse>()
+            .await
+            .map_err(|err| format!("解析设备会话响应失败: {err}"))?;
+        Ok(parsed.sessions)
+    }
+
+    pub async fn revoke_remote_session(&self, token_id: &str) -> Result<(), String> {
+        let url = self.resolve_url("/api/v1/auth/sessions/revoke");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({ "tokenId": token_id }))
+            .send()
+            .await
+            .map_err(|err| format!("吊销设备会话请求失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("吊销设备会话失败 ({status}): {text}"));
+        }
+        Ok(())
+    }
+
+    pub async fn list_workspaces(&self) -> Result<Vec<RemoteWorkspaceInfo>, String> {
+        let url = self.resolve_url("/api/v1/workspaces");
+        let resp = self
+            .apply_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|err| format!("查询可访问工作区失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("读取工作区列表失败 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspacesResponse>()
+            .await
+            .map_err(|err| format!("解析工作区列表失败: {err}"))?;
+        Ok(parsed.workspaces)
     }
 
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -168,7 +364,7 @@ impl HttpSyncClient {
         let resp = self
             .apply_auth(self.client.post(&url))
             .json(&PushRequestBody {
-                workspace_id: "default",
+                workspace_id: &self.workspace_id,
                 entries,
             })
             .send()
@@ -185,10 +381,15 @@ impl HttpSyncClient {
     }
 
     pub async fn pull_changes(&self, cursor: Option<&str>) -> Result<HttpPullResponse, String> {
-        let mut url = self.resolve_url("/api/v1/sync/pull");
-        if let Some(c) = cursor.map(str::trim).filter(|v| !v.is_empty()) {
-            url = format!("{url}?cursor={c}");
-        }
+        let query = {
+            let mut ser = form_urlencoded::Serializer::new(String::new());
+            ser.append_pair("workspaceId", &self.workspace_id);
+            if let Some(c) = cursor.map(str::trim).filter(|v| !v.is_empty()) {
+                ser.append_pair("cursor", c);
+            }
+            ser.finish()
+        };
+        let url = self.resolve_url(&format!("/api/v1/sync/pull?{query}"));
         let resp = self
             .apply_auth(self.client.get(&url))
             .send()

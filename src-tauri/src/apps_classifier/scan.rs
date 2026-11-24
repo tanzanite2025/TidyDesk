@@ -22,23 +22,23 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
     let mut seen_shortcuts = HashSet::new();
     let resolver = crate::ShortcutResolver::new().ok();
 
+    let mut ctx = ShortcutScanContext {
+        source: "startMenu",
+        recursive: true,
+        max_depth,
+        skip_directories: &skip_directories,
+        seen_shortcuts: &mut seen_shortcuts,
+        shortcuts: &mut shortcuts,
+        resolver: resolver.as_ref(),
+    };
+
     for start_menu_path in start_menu_paths() {
         let path = PathBuf::from(&start_menu_path);
         if !path.exists() {
             continue;
         }
         scanned_paths.push(start_menu_path);
-        scan_shortcut_directory(
-            &path,
-            "startMenu",
-            true,
-            0,
-            max_depth,
-            &skip_directories,
-            &mut seen_shortcuts,
-            &mut shortcuts,
-            resolver.as_ref(),
-        );
+        scan_shortcut_directory(&path, 0, &mut ctx);
     }
 
     let desktop_path = crate::files::desktop_path();
@@ -46,17 +46,9 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
         let path = PathBuf::from(&desktop_path);
         if path.exists() {
             scanned_paths.push(desktop_path);
-            scan_shortcut_directory(
-                &path,
-                "desktop",
-                false,
-                0,
-                max_depth,
-                &skip_directories,
-                &mut seen_shortcuts,
-                &mut shortcuts,
-                resolver.as_ref(),
-            );
+            ctx.source = "desktop";
+            ctx.recursive = false;
+            scan_shortcut_directory(&path, 0, &mut ctx);
         }
     }
 
@@ -75,18 +67,18 @@ pub fn scan_shortcut_metadata() -> ScanMetadataResult {
     }
 }
 
-fn scan_shortcut_directory(
-    dir_path: &Path,
-    source: &str,
+struct ShortcutScanContext<'a> {
+    source: &'a str,
     recursive: bool,
-    depth: usize,
     max_depth: usize,
-    skip_directories: &HashSet<String>,
-    seen_shortcuts: &mut HashSet<String>,
-    shortcuts: &mut Vec<ShortcutMetadata>,
-    resolver: Option<&crate::ShortcutResolver>,
-) {
-    if depth > max_depth {
+    skip_directories: &'a HashSet<String>,
+    seen_shortcuts: &'a mut HashSet<String>,
+    shortcuts: &'a mut Vec<ShortcutMetadata>,
+    resolver: Option<&'a crate::ShortcutResolver>,
+}
+
+fn scan_shortcut_directory(dir_path: &Path, depth: usize, ctx: &mut ShortcutScanContext<'_>) {
+    if depth > ctx.max_depth {
         return;
     }
 
@@ -105,18 +97,8 @@ fn scan_shortcut_directory(
 
         if file_type.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if recursive && !skip_directories.contains(&name.to_lowercase()) {
-                scan_shortcut_directory(
-                    &full_path,
-                    source,
-                    recursive,
-                    depth + 1,
-                    max_depth,
-                    skip_directories,
-                    seen_shortcuts,
-                    shortcuts,
-                    resolver,
-                );
+            if ctx.recursive && !ctx.skip_directories.contains(&name.to_lowercase()) {
+                scan_shortcut_directory(&full_path, depth + 1, ctx);
             }
             continue;
         }
@@ -136,7 +118,7 @@ fn scan_shortcut_directory(
         }
 
         let normalized_path = full_path.to_string_lossy().to_lowercase();
-        if !seen_shortcuts.insert(normalized_path) {
+        if !ctx.seen_shortcuts.insert(normalized_path) {
             continue;
         }
 
@@ -145,16 +127,17 @@ fn scan_shortcut_directory(
         };
 
         let shortcut_path_str = full_path.display().to_string();
-        let target_path = resolver
+        let target_path = ctx
+            .resolver
             .and_then(|active| active.resolve_target(&shortcut_path_str).ok())
             .flatten()
             .filter(|value| !value.is_empty());
 
-        shortcuts.push(ShortcutMetadata {
+        ctx.shortcuts.push(ShortcutMetadata {
             name: Some(name.clone()),
             shortcut_path: Some(shortcut_path_str),
             target_path,
-            source: Some(source.to_string()),
+            source: Some(ctx.source.to_string()),
             category: Some(classify::categorize_shortcut(&name, &full_path)),
             size: Some(metadata.len()),
             modified_at: metadata.modified().ok().and_then(system_time_millis),

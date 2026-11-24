@@ -74,8 +74,7 @@ fn invalid_result(reason: &str, message: &str) -> HotkeyValidationResult {
 fn normalize_accelerator(raw: &str) -> Result<String, String> {
     let normalized_raw = raw
         .replace(' ', "")
-        .replace('-', "+")
-        .replace('_', "+")
+        .replace(['-', '_'], "+")
         .to_ascii_lowercase();
     let mut ctrl = false;
     let mut alt = false;

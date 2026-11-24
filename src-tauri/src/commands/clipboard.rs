@@ -6,7 +6,7 @@ fn require_command_window(
     command: &str,
 ) -> Result<(), String> {
     let label = window.label();
-    if allowed_labels.iter().any(|allowed| *allowed == label) {
+    if allowed_labels.contains(&label) {
         Ok(())
     } else {
         Err(format!("{command} is not available from window `{label}`"))

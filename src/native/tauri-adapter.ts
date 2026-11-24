@@ -6,9 +6,13 @@ import type {
 } from '../types/quick-note';
 import type {
   AccountSessionSnapshot,
+  ChangePasswordInput,
   CreateTodoCardInput,
   ImportLocalTodosResult,
+  LoginWithPasswordInput,
   MoveTodoCardInput,
+  RemoteAuthSessionInfo,
+  RemoteWorkspaceInfo,
   SwitchAccountSessionInput,
   SyncStatusSnapshot,
   TodoCounts,
@@ -230,6 +234,14 @@ export function createTauriNativeClient(): NativeClient {
       getSession: () => invoke<AccountSessionSnapshot>('accounts_get_session'),
       switchSession: (payload: SwitchAccountSessionInput) =>
         invoke<AccountSessionSnapshot>('accounts_switch_session', { payload }),
+      loginWithPassword: (payload: LoginWithPasswordInput) =>
+        invoke<AccountSessionSnapshot>('accounts_login_with_password', { payload }),
+      changePassword: (payload: ChangePasswordInput) =>
+        invoke<void>('accounts_change_password', { payload }),
+      listRemoteSessions: () => invoke<RemoteAuthSessionInfo[]>('accounts_list_remote_sessions'),
+      revokeRemoteSession: (tokenId: string) =>
+        invoke<void>('accounts_revoke_remote_session', { tokenId }),
+      listWorkspaces: () => invoke<RemoteWorkspaceInfo[]>('accounts_list_workspaces'),
       logoutToLocal: () => invoke<AccountSessionSnapshot>('accounts_logout_to_local'),
       importLocalTodos: () => invoke<ImportLocalTodosResult>('accounts_import_local_todos'),
       onSessionChanged: callback =>

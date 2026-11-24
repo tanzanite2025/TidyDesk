@@ -25,6 +25,7 @@ pub struct SyncStatusSnapshot {
     pub active_user_id: Option<String>,
     pub sync_enabled: bool,
     pub server_endpoint: Option<String>,
+    pub workspace_id: String,
     pub pending_count: usize,
     pub last_sync_cursor: Option<String>,
     pub last_sync_at: Option<String>,

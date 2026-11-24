@@ -1,4 +1,6 @@
-use super::credentials::{load_account_sync_profile, save_account_sync_profile};
+use super::credentials::{
+    load_account_sync_profile, save_account_sync_profile, DEFAULT_WORKSPACE_ID,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +10,11 @@ use url::Url;
 
 const ACCOUNT_SESSION_FILE: &str = "account-session.json";
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn default_workspace_id() -> String {
+    DEFAULT_WORKSPACE_ID.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAccountSession {
     #[serde(default = "default_session_version")]
@@ -19,12 +25,29 @@ pub struct StoredAccountSession {
     pub display_name: Option<String>,
     #[serde(default)]
     pub server_endpoint: Option<String>,
+    #[serde(default = "default_workspace_id")]
+    pub workspace_id: String,
     #[serde(default)]
     pub has_token: bool,
     #[serde(default)]
     pub last_sync_cursor: Option<String>,
     #[serde(default)]
     pub last_sync_at: Option<String>,
+}
+
+impl Default for StoredAccountSession {
+    fn default() -> Self {
+        Self {
+            version: default_session_version(),
+            active_user_id: None,
+            display_name: None,
+            server_endpoint: None,
+            workspace_id: default_workspace_id(),
+            has_token: false,
+            last_sync_cursor: None,
+            last_sync_at: None,
+        }
+    }
 }
 
 fn default_session_version() -> u8 {
@@ -38,6 +61,7 @@ pub struct AccountSessionSnapshot {
     pub active_user_id: Option<String>,
     pub display_name: Option<String>,
     pub server_endpoint: Option<String>,
+    pub workspace_id: String,
     pub has_token: bool,
     pub last_sync_cursor: Option<String>,
     pub last_sync_at: Option<String>,
@@ -47,6 +71,26 @@ pub struct AccountSessionSnapshot {
 #[derive(Debug, Default)]
 pub struct AccountSessionState {
     cached: Mutex<Option<StoredAccountSession>>,
+}
+
+pub fn sanitize_workspace_id(raw: Option<&str>) -> Result<String, String> {
+    let trimmed = raw.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        return Ok(default_workspace_id());
+    }
+    if trimmed.len() > 64 {
+        return Err("工作区 ID 长度不能超过 64 个字符".to_string());
+    }
+    if !trimmed
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b':')
+    {
+        return Err("工作区 ID 仅支持字母、数字、下划线、连字符和冒号".to_string());
+    }
+    if let Some(owner) = trimmed.strip_prefix("private:") {
+        sanitize_account_user_id(owner)?;
+    }
+    Ok(trimmed.to_string())
 }
 
 pub fn sanitize_account_user_id(raw: &str) -> Result<String, String> {
@@ -99,12 +143,15 @@ fn read_session_from_disk(app: &AppHandle) -> Result<StoredAccountSession, Strin
                 if parsed.active_user_id.is_none() {
                     parsed.display_name = None;
                     parsed.server_endpoint = None;
+                    parsed.workspace_id = default_workspace_id();
                     parsed.has_token = false;
                 } else {
                     parsed.server_endpoint =
                         validate_server_endpoint(parsed.server_endpoint.as_deref())
                             .ok()
                             .flatten();
+                    parsed.workspace_id = sanitize_workspace_id(Some(&parsed.workspace_id))
+                        .unwrap_or_else(|_| default_workspace_id());
                 }
                 Ok(parsed)
             }
@@ -167,6 +214,8 @@ pub fn snapshot_from_session(session: &StoredAccountSession) -> AccountSessionSn
         active_user_id: session.active_user_id.clone(),
         display_name: session.display_name.clone(),
         server_endpoint: session.server_endpoint.clone(),
+        workspace_id: sanitize_workspace_id(Some(&session.workspace_id))
+            .unwrap_or_else(|_| default_workspace_id()),
         has_token: session.has_token,
         last_sync_cursor: session.last_sync_cursor.clone(),
         last_sync_at: session.last_sync_at.clone(),
@@ -244,6 +293,7 @@ pub fn update_sync_cursor_and_timestamp(
         let mut profile = load_account_sync_profile(app, user_id)?;
         profile.display_name = session.display_name.clone();
         profile.server_endpoint = session.server_endpoint.clone();
+        profile.workspace_id = session.workspace_id.clone();
         profile.last_sync_cursor = cursor;
         profile.last_sync_at = Some(synced_at);
         save_account_sync_profile(app, user_id, &profile)?;
@@ -303,5 +353,17 @@ mod tests {
         assert_eq!(validate_server_endpoint(Some("   ")).unwrap(), None);
         assert!(validate_server_endpoint(Some("file:///C:/secret")).is_err());
         assert!(validate_server_endpoint(Some("javascript:alert(1)")).is_err());
+    }
+
+    #[test]
+    fn sanitize_workspace_id_validates_shared_and_private_names() {
+        assert_eq!(sanitize_workspace_id(None).unwrap(), "default");
+        assert_eq!(sanitize_workspace_id(Some("  ")).unwrap(), "default");
+        assert_eq!(
+            sanitize_workspace_id(Some("private:alice")).unwrap(),
+            "private:alice"
+        );
+        assert!(sanitize_workspace_id(Some("private:local")).is_err());
+        assert!(sanitize_workspace_id(Some("../secret")).is_err());
     }
 }

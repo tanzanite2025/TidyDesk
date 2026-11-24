@@ -46,11 +46,15 @@ import type {
 import type {
   AccountSessionSnapshot,
   AddTodoAttachmentBytesInput,
+  ChangePasswordInput,
   CreateTodoCardInput,
   DeleteTodoAttachmentInput,
   ImportLocalTodosResult,
+  LoginWithPasswordInput,
   MoveTodoCardInput,
   PickTodoAttachmentResult,
+  RemoteAuthSessionInfo,
+  RemoteWorkspaceInfo,
   SetTodoCardCoverInput,
   SwitchAccountSessionInput,
   SyncStatusSnapshot,
@@ -185,6 +189,11 @@ export interface NativeEventsClient {
 export interface NativeAccountsClient {
   getSession: () => Promise<AccountSessionSnapshot>;
   switchSession: (payload: SwitchAccountSessionInput) => Promise<AccountSessionSnapshot>;
+  loginWithPassword?: (payload: LoginWithPasswordInput) => Promise<AccountSessionSnapshot>;
+  changePassword?: (payload: ChangePasswordInput) => Promise<void>;
+  listRemoteSessions?: () => Promise<RemoteAuthSessionInfo[]>;
+  revokeRemoteSession?: (tokenId: string) => Promise<void>;
+  listWorkspaces?: () => Promise<RemoteWorkspaceInfo[]>;
   logoutToLocal: () => Promise<AccountSessionSnapshot>;
   importLocalTodos: () => Promise<ImportLocalTodosResult>;
   onSessionChanged: (callback: (payload: AccountSessionSnapshot) => void) => (() => void) | undefined;

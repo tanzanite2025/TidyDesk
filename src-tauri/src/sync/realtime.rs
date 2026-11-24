@@ -107,7 +107,13 @@ pub fn set_realtime_sync_enabled(app: &AppHandle, enabled: bool) -> Result<bool,
     state.enabled.store(true, Ordering::Release);
 
     let app_handle = app.clone();
-    let sse_url = format!("{}/api/v1/sync/events", endpoint.trim_end_matches('/'));
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("workspaceId", &session.workspace_id);
+    let sse_url = format!(
+        "{}/api/v1/sync/events?{}",
+        endpoint.trim_end_matches('/'),
+        query.finish()
+    );
     let user_owned = user_id.to_string();
     tauri::async_runtime::spawn(async move {
         run_sse_loop(app_handle, next_gen, sse_url, user_owned, token).await;

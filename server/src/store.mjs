@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { atomicWriteJson, getPrivateWorkspaceOwner, sanitizeWorkspaceId } from './fs_utils.mjs';
 import { mergeCardOnServer } from './merge.mjs';
 
 const SAFE_KEY_RE = /^[a-zA-Z0-9._-]{1,128}$/;
@@ -22,52 +23,116 @@ function createInitialDb() {
   };
 }
 
-function atomicWriteJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(tmpPath, filePath);
-}
-
 export function createSyncStore(dataDir) {
   const rootDir = path.resolve(dataDir);
   const dbPath = path.join(rootDir, 'sync-db.json');
   const blobsDir = path.join(rootDir, 'blobs');
   fs.mkdirSync(blobsDir, { recursive: true });
 
-  let db = fs.existsSync(dbPath)
-    ? JSON.parse(fs.readFileSync(dbPath, 'utf8'))
-    : createInitialDb();
+  let db = createInitialDb();
+  let lastStamp = '';
+
+  function readStamp() {
+    try {
+      const st = fs.statSync(dbPath);
+      return `${st.mtimeMs}:${st.size}:${st.ino}`;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return 'missing';
+      throw err;
+    }
+  }
+
+  function reloadIfChanged() {
+    const stamp = readStamp();
+    if (stamp === lastStamp) return;
+    if (stamp === 'missing') {
+      db = createInitialDb();
+      lastStamp = stamp;
+      return;
+    }
+    db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+    lastStamp = stamp;
+  }
+
+  reloadIfChanged();
 
   function save() {
     atomicWriteJson(dbPath, db);
+    lastStamp = readStamp();
   }
 
   function ensureWorkspaceAccess(userId, workspaceId = 'default') {
-    if (!db.workspaces[workspaceId]) {
-      db.workspaces[workspaceId] = {
-        id: workspaceId,
-        title: workspaceId,
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    const privateOwner = getPrivateWorkspaceOwner(safeWsId);
+    if (privateOwner && privateOwner !== userId) {
+      const err = new Error(`私人工作区 "${safeWsId}" 仅限创建者本人访问`);
+      err.status = 403;
+      throw err;
+    }
+
+    if (!db.workspaces[safeWsId]) {
+      db.workspaces[safeWsId] = {
+        id: safeWsId,
+        title: privateOwner ? `${privateOwner} 私人空间` : safeWsId,
         members: { [userId]: 'owner' }
       };
       save();
       return 'owner';
     }
-    const ws = db.workspaces[workspaceId];
+    const ws = db.workspaces[safeWsId];
     if (!ws.members[userId]) {
       // First visit to shared workspace in MVP defaults to 'member' unless explicitly set (e.g. viewer in tests)
-      ws.members[userId] = 'member';
+      ws.members[userId] = privateOwner === userId ? 'owner' : 'member';
       save();
     }
     return ws.members[userId];
   }
 
   function setWorkspaceRole(workspaceId, userId, role) {
-    if (!db.workspaces[workspaceId]) {
-      db.workspaces[workspaceId] = { id: workspaceId, title: workspaceId, members: {} };
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (!db.workspaces[safeWsId]) {
+      db.workspaces[safeWsId] = { id: safeWsId, title: safeWsId, members: {} };
     }
-    db.workspaces[workspaceId].members[userId] = role;
+    db.workspaces[safeWsId].members[userId] = role;
     save();
+  }
+
+  function listWorkspacesForUser(userId) {
+    reloadIfChanged();
+    const results = new Map();
+    const defaultWs = db.workspaces.default;
+    results.set('default', {
+      workspaceId: 'default',
+      title: defaultWs?.title || '默认协同工作区',
+      role: defaultWs?.members?.[userId] || 'member',
+      isPrivate: false
+    });
+
+    const privateId = `private:${userId}`;
+    const privateWs = db.workspaces[privateId];
+    results.set(privateId, {
+      workspaceId: privateId,
+      title: privateWs?.title || '个人私有空间',
+      role: privateWs?.members?.[userId] || 'owner',
+      isPrivate: true
+    });
+
+    for (const [id, ws] of Object.entries(db.workspaces)) {
+      if (results.has(id)) continue;
+      const privateOwner = getPrivateWorkspaceOwner(id);
+      if (privateOwner && privateOwner !== userId) continue;
+      if (ws?.members?.[userId]) {
+        results.set(id, {
+          workspaceId: id,
+          title: ws.title || id,
+          role: ws.members[userId],
+          isPrivate: Boolean(privateOwner)
+        });
+      }
+    }
+    return Array.from(results.values());
   }
 
   function safeBlobPath(kind, key) {
@@ -269,6 +334,7 @@ export function createSyncStore(dataDir) {
   return {
     ensureWorkspaceAccess,
     setWorkspaceRole,
+    listWorkspacesForUser,
     presignMedia,
     writeBlob,
     readBlob,

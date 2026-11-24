@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { after, before, test } from 'node:test';
 import { createSyncServer } from '../src/index.mjs';
 
@@ -286,4 +287,187 @@ test('realtime SSE channel broadcasts sync-changed immediately upon push', async
   assert.ok(eventText.includes('event: sync-changed'));
   assert.ok(eventText.includes('"actorId":"bob"'));
   controller.abort();
+});
+
+test('password login, hot-reload CLI, device session revocation, and private workspace isolation', async () => {
+  // Spawn CLI in a separate process against same tmpDir to test hot-reload without restarting server
+  const cliPath = path.resolve(process.cwd(), 'server', 'src', 'cli.mjs');
+  execFileSync(
+    process.execPath,
+    [cliPath, 'useradd', 'carol', '--password', 'carol-pass-123', '--name', 'Carol'],
+    {
+      env: { ...process.env, TIDYDESK_DATA_DIR: tmpDir },
+      encoding: 'utf8'
+    }
+  );
+
+  // Wrong password rejected loudly
+  const badLogin = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { userId: 'carol', password: 'wrong-password' }
+  });
+  assert.equal(badLogin.status, 401);
+
+  // Valid password issues device tokens with zero business data attached
+  const phoneLogin = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { userId: 'carol', password: 'carol-pass-123', deviceLabel: 'Phone-A' }
+  });
+  assert.equal(phoneLogin.status, 200);
+  assert.equal(phoneLogin.data.userId, 'carol');
+  assert.equal(phoneLogin.data.displayName, 'Carol');
+  assert.ok(phoneLogin.data.token.startsWith('tdk_'));
+  assert.equal(phoneLogin.data.cards, undefined);
+
+  const pcLogin = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { userId: 'carol', password: 'carol-pass-123', deviceLabel: 'PC-Win' }
+  });
+  assert.equal(pcLogin.status, 200);
+
+  // List sessions and revoke Phone-A without affecting PC-Win
+  const sessionsRes = await api('/api/v1/auth/sessions', {
+    userId: 'carol',
+    token: pcLogin.data.token
+  });
+  assert.equal(sessionsRes.status, 200);
+  assert.equal(sessionsRes.data.sessions.length, 2);
+  const currentSess = sessionsRes.data.sessions.find(s => s.isCurrent);
+  assert.equal(currentSess.tokenId, pcLogin.data.tokenId);
+
+  const revokeRes = await api('/api/v1/auth/sessions/revoke', {
+    userId: 'carol',
+    token: pcLogin.data.token,
+    method: 'POST',
+    body: { tokenId: phoneLogin.data.tokenId }
+  });
+  assert.equal(revokeRes.status, 200);
+
+  const revokedPull = await api('/api/v1/sync/pull', {
+    userId: 'carol',
+    token: phoneLogin.data.token
+  });
+  assert.equal(revokedPull.status, 401);
+
+  // Private workspace isolation: alice cannot access private:carol
+  const aliceCrossPull = await api('/api/v1/sync/pull?workspaceId=private%3Acarol', {
+    userId: 'alice',
+    token: 'tok_alice_123'
+  });
+  assert.equal(aliceCrossPull.status, 403);
+
+  const aliceCrossPush = await api('/api/v1/sync/push', {
+    userId: 'alice',
+    token: 'tok_alice_123',
+    method: 'POST',
+    body: { workspaceId: 'private:carol', entries: [] }
+  });
+  assert.equal(aliceCrossPush.status, 403);
+
+  // Carol pushes to her private:carol workspace; default workspace stays separate
+  const wsRes = await api('/api/v1/workspaces', {
+    userId: 'carol',
+    token: pcLogin.data.token
+  });
+  assert.equal(wsRes.status, 200);
+  assert.ok(wsRes.data.workspaces.some(w => w.workspaceId === 'private:carol' && w.isPrivate));
+
+  const carolPrivatePush = await api('/api/v1/sync/push', {
+    userId: 'carol',
+    token: pcLogin.data.token,
+    method: 'POST',
+    body: {
+      workspaceId: 'private:carol',
+      entries: [
+        {
+          entityKind: 'card',
+          entityId: 'card-carol-priv',
+          operation: 'upsert',
+          payload: {
+            boardId: 'default-board',
+            columnId: 'todo',
+            title: 'Carol 私人待办',
+            content: '仅自己可见',
+            position: '000G',
+            baseRevision: 0,
+            updatedAt: '4000',
+            subtasks: [],
+            attachments: []
+          }
+        }
+      ]
+    }
+  });
+  assert.equal(carolPrivatePush.status, 200);
+
+  const defaultPull = await api('/api/v1/sync/pull?workspaceId=default', {
+    userId: 'bob',
+    token: 'tok_bob_456'
+  });
+  assert.ok(!defaultPull.data.cards.some(c => c.id === 'card-carol-priv'));
+
+  const carolPrivatePull = await api('/api/v1/sync/pull?workspaceId=private:carol', {
+    userId: 'carol',
+    token: pcLogin.data.token
+  });
+  assert.equal(carolPrivatePull.data.cards.length, 1);
+  assert.equal(carolPrivatePull.data.cards[0].title, 'Carol 私人待办');
+
+  // Too-short newPassword returns 400 and unknown tokenId returns 404 (never 500)
+  const shortPwd = await api('/api/v1/auth/password', {
+    userId: 'carol',
+    token: pcLogin.data.token,
+    method: 'POST',
+    body: { oldPassword: 'carol-pass-123', newPassword: '12' }
+  });
+  assert.equal(shortPwd.status, 400);
+
+  const missingRevoke = await api('/api/v1/auth/sessions/revoke', {
+    userId: 'carol',
+    token: pcLogin.data.token,
+    method: 'POST',
+    body: { tokenId: 'tok_nonexistent' }
+  });
+  assert.equal(missingRevoke.status, 404);
+
+  // Password change & CLI disable hot-reload check
+  const changePwd = await api('/api/v1/auth/password', {
+    userId: 'carol',
+    token: pcLogin.data.token,
+    method: 'POST',
+    body: { oldPassword: 'carol-pass-123', newPassword: 'carol-new-pass-456' }
+  });
+  assert.equal(changePwd.status, 200);
+
+  const loginNewPwd = await api('/api/v1/auth/login', {
+    method: 'POST',
+    body: { userId: 'carol', password: 'carol-new-pass-456', deviceLabel: 'Tablet' }
+  });
+  assert.equal(loginNewPwd.status, 200);
+
+  // Explicit logout revokes current session token
+  const logoutRes = await api('/api/v1/auth/logout', {
+    userId: 'carol',
+    token: loginNewPwd.data.token,
+    method: 'POST'
+  });
+  assert.equal(logoutRes.status, 200);
+  assert.equal(logoutRes.data.revoked, true);
+
+  const afterLogoutPull = await api('/api/v1/sync/pull', {
+    userId: 'carol',
+    token: loginNewPwd.data.token
+  });
+  assert.equal(afterLogoutPull.status, 401);
+
+  // Disabling via CLI immediately revokes remaining active PC-Win token via hot-reload
+  execFileSync(process.execPath, [cliPath, 'disable', 'carol'], {
+    env: { ...process.env, TIDYDESK_DATA_DIR: tmpDir },
+    encoding: 'utf8'
+  });
+  const disabledPull = await api('/api/v1/sync/pull', {
+    userId: 'carol',
+    token: pcLogin.data.token
+  });
+  assert.equal(disabledPull.status, 403);
 });

@@ -217,6 +217,17 @@ pub fn remove_acked_outbox_entries(
     Ok(remaining)
 }
 
+pub fn has_pending_outbox_for_user(app: &AppHandle, user_id: &str) -> Result<bool, String> {
+    let dir = crate::accounts::session::account_workspace_dir(app, user_id)?;
+    let path = dir.join(SYNC_OUTBOX_FILE);
+    let state = app.state::<SyncOutboxState>();
+    let _guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock sync outbox state".to_string())?;
+    Ok(!read_outbox_unlocked(&path)?.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,6 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { NativeClient } from '../native/types';
+import { compareCardsByPosition } from '../native/web-http-helpers';
 import {
   AddTodoAttachmentBytesInput,
   CreateTodoCardInput,
@@ -117,20 +118,6 @@ const simulatedTodoState: TodoState = {
   ],
   counts: { total: 3, open: 2, done: 1 }
 };
-
-function compareCardsByPosition(a: TodoCard, b: TodoCard): number {
-  const posA = a.position ?? '';
-  const posB = b.position ?? '';
-  if (posA !== posB) {
-    return posA < posB ? -1 : 1;
-  }
-  const createdA = a.createdAt ?? '';
-  const createdB = b.createdAt ?? '';
-  if (createdA !== createdB) {
-    return createdA < createdB ? -1 : 1;
-  }
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
 
 function applyTodoState(
   state: TodoState,

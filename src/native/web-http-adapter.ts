@@ -4,10 +4,11 @@ import type {
   CreateTodoCardInput,
   DeleteTodoAttachmentInput,
   MoveTodoCardInput,
+  RemoteAuthSessionInfo,
+  RemoteWorkspaceInfo,
   SetTodoCardCoverInput,
   SyncStatusSnapshot,
   TodoAttachment,
-  TodoBoard,
   TodoCard,
   TodoCounts,
   TodoState,
@@ -16,149 +17,22 @@ import type {
   UpdateTodoCardInput
 } from '../types/todo';
 import type { NativeCapabilities, NativeClient, SyncRealtimeAppliedPayload } from './types';
-
-const WEB_SESSION_STORAGE_KEY = 'tidydesk_mobile_session_v1';
-const THUMB_MAX_EDGE = 480;
-
-interface StoredWebSession {
-  userId: string;
-  displayName?: string;
-  serverEndpoint: string;
-  token: string;
-  lastSyncCursor?: string | null;
-  lastSyncAt?: string | null;
-}
-
-const DEFAULT_BOARD: TodoBoard = {
-  id: 'default-board',
-  title: '待办',
-  columns: [
-    { id: 'todo', title: '待处理' },
-    { id: 'doing', title: '进行中' },
-    { id: 'done', title: '已完成' }
-  ],
-  cardOrder: { todo: [], doing: [], done: [] },
-  createdAt: new Date(0).toISOString(),
-  updatedAt: new Date(0).toISOString()
-};
-
-function createUuid(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `mob-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-async function computeSha256Hex(bytes: Uint8Array): Promise<string> {
-  if (typeof crypto === 'undefined' || !crypto.subtle) {
-    throw new Error('当前浏览器不支持 WebCrypto SHA-256（需 HTTPS 或 localhost）');
-  }
-  const digest = await crypto.subtle.digest('SHA-256', bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
-  return Array.from(new Uint8Array(digest))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-async function createThumbAndDimensions(
-  bytes: Uint8Array,
-  mimeType: string
-): Promise<{ width: number; height: number; thumbBytes: Uint8Array }> {
-  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType });
-  const objectUrl = URL.createObjectURL(blob);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('无法解析所选图片格式'));
-      el.src = objectUrl;
-    });
-    const width = img.naturalWidth || 1;
-    const height = img.naturalHeight || 1;
-    const scale = Math.min(1, THUMB_MAX_EDGE / Math.max(width, height));
-    const tw = Math.max(1, Math.round(width * scale));
-    const th = Math.max(1, Math.round(height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = tw;
-    canvas.height = th;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return { width, height, thumbBytes: bytes };
-    }
-    ctx.drawImage(img, 0, 0, tw, th);
-    const thumbBlob = await new Promise<Blob | null>(resolve =>
-      canvas.toBlob(resolve, 'image/png')
-    );
-    if (!thumbBlob) {
-      return { width, height, thumbBytes: bytes };
-    }
-    return {
-      width,
-      height,
-      thumbBytes: new Uint8Array(await thumbBlob.arrayBuffer())
-    };
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
-function summarizeMarkdown(content: string): string {
-  for (const line of content.split(/\r?\n/)) {
-    const stripped = line
-      .trim()
-      .replace(/^#+\s*/, '')
-      .replace(/^- \[[ xX]\]\s*/, '')
-      .trim();
-    if (stripped) return stripped.slice(0, 140);
-  }
-  return '';
-}
-
-function defaultPositionBefore(existingCards: TodoCard[], columnId: string): string {
-  const colPositions = existingCards
-    .filter(c => !c.deletedAt && c.columnId === columnId && c.position)
-    .map(c => c.position as string)
-    .sort();
-  if (colPositions.length === 0) return '000G';
-  const first = colPositions[0];
-  return `0${first}`.slice(0, 16);
-}
-
-function computeCounts(cards: TodoCard[]): TodoCounts {
-  let total = 0;
-  let open = 0;
-  let done = 0;
-  for (const card of cards) {
-    if (card.deletedAt || card.archived) continue;
-    total += 1;
-    if (card.columnId === 'done') done += 1;
-    else open += 1;
-  }
-  return { total, open, done };
-}
-
-function readStoredWebSession(): StoredWebSession | null {
-  try {
-    const raw = sessionStorage.getItem(WEB_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredWebSession;
-    if (!parsed.userId || !parsed.serverEndpoint || !parsed.token) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredWebSession(session: StoredWebSession | null) {
-  try {
-    if (!session) {
-      sessionStorage.removeItem(WEB_SESSION_STORAGE_KEY);
-    } else {
-      sessionStorage.setItem(WEB_SESSION_STORAGE_KEY, JSON.stringify(session));
-    }
-  } catch {
-    // Ignore storage quota issues in private browsing contexts
-  }
-}
+import {
+  compareCardsByPosition,
+  computePositionForColumn,
+  computeSha256Hex,
+  computeTodoCounts,
+  createDesktopUnsupportedStubs,
+  createThumbAndDimensions,
+  createUuid,
+  DEFAULT_MOBILE_BOARD,
+  findFallbackCoverId,
+  parseSseSyncCursor,
+  readStoredWebSession,
+  summarizeMarkdown,
+  writeStoredWebSession,
+  type StoredWebSession
+} from './web-http-helpers';
 
 const MOBILE_WEB_CAPABILITIES: NativeCapabilities = {
   canScreenSnip: false,
@@ -188,6 +62,10 @@ export function createWebHttpNativeClient(): NativeClient {
   let visibilityCleanup: (() => void) | null = null;
   let wakeupReconnect: (() => void) | null = null;
 
+  function resolveWorkspaceId(s: StoredWebSession | null): string {
+    return (s?.workspaceId || '').trim() || 'default';
+  }
+
   function toSessionSnapshot(s: StoredWebSession | null): AccountSessionSnapshot {
     if (!s) {
       return {
@@ -196,6 +74,7 @@ export function createWebHttpNativeClient(): NativeClient {
         displayName: null,
         serverEndpoint:
           typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8787',
+        workspaceId: 'default',
         hasToken: false,
         lastSyncCursor: null,
         lastSyncAt: null,
@@ -207,6 +86,7 @@ export function createWebHttpNativeClient(): NativeClient {
       activeUserId: s.userId,
       displayName: s.displayName || s.userId,
       serverEndpoint: s.serverEndpoint,
+      workspaceId: resolveWorkspaceId(s),
       hasToken: Boolean(s.token),
       lastSyncCursor: s.lastSyncCursor ?? null,
       lastSyncAt: s.lastSyncAt ?? null,
@@ -214,11 +94,34 @@ export function createWebHttpNativeClient(): NativeClient {
     };
   }
 
+  function buildSyncStatus(statusMessage: string): SyncStatusSnapshot {
+    return {
+      authMode: session ? 'account' : 'local',
+      activeUserId: session?.userId ?? null,
+      syncEnabled: Boolean(session),
+      serverEndpoint: session?.serverEndpoint ?? null,
+      workspaceId: resolveWorkspaceId(session),
+      pendingCount: 0,
+      lastSyncCursor: session?.lastSyncCursor ?? null,
+      lastSyncAt: session?.lastSyncAt ?? null,
+      realtimeActive: Boolean(session && realtimeEnabled),
+      statusMessage
+    };
+  }
+
   function requireSession(): StoredWebSession {
     if (!session) {
-      throw new Error('请先输入服务端地址、账号 ID 与 Token 登录同步工作区');
+      throw new Error('请先输入服务端地址、账号 ID 与凭据登录同步工作区');
     }
     return session;
+  }
+
+  function authHeaders(active: StoredWebSession, contentType?: string): Record<string, string> {
+    return {
+      ...(contentType ? { 'Content-Type': contentType } : {}),
+      Authorization: `Bearer ${active.token}`,
+      'X-TidyDesk-User': active.userId
+    };
   }
 
   function clearBlobCache() {
@@ -246,12 +149,7 @@ export function createWebHttpNativeClient(): NativeClient {
       try {
         const res = await fetch(
           `${currentSession.serverEndpoint}/api/v1/media/blob/${kind}/${encodeURIComponent(key)}`,
-          {
-            headers: {
-              Authorization: `Bearer ${currentSession.token}`,
-              'X-TidyDesk-User': currentSession.userId
-            }
-          }
+          { headers: authHeaders(currentSession) }
         );
         if (!res.ok) return undefined;
         const blob = await res.blob();
@@ -293,10 +191,7 @@ export function createWebHttpNativeClient(): NativeClient {
     };
   }
 
-  async function enrichSummaryCard(
-    raw: TodoCard,
-    includeOriginals = false
-  ): Promise<TodoCard> {
+  async function enrichSummaryCard(raw: TodoCard, includeOriginals = false): Promise<TodoCard> {
     const activeSubtasks = (raw.subtasks || []).filter(sub => !sub.deletedAt);
     const enrichedSubs = await Promise.all(
       activeSubtasks.map(async sub => ({
@@ -323,7 +218,7 @@ export function createWebHttpNativeClient(): NativeClient {
 
     return {
       ...raw,
-      boardId: DEFAULT_BOARD.id,
+      boardId: DEFAULT_MOBILE_BOARD.id,
       summaryText: summarizeMarkdown(raw.content || ''),
       subtasks: enrichedSubs,
       subtaskTotal: enrichedSubs.length,
@@ -339,17 +234,17 @@ export function createWebHttpNativeClient(): NativeClient {
     const all = Array.from(cardsById.values()).filter(c => !c.deletedAt);
     const enriched = await Promise.all(all.map(card => enrichSummaryCard(card, false)));
     const cardOrder: Record<string, string[]> = { todo: [], doing: [], done: [] };
-    for (const col of DEFAULT_BOARD.columns) {
+    for (const col of DEFAULT_MOBILE_BOARD.columns) {
       cardOrder[col.id] = enriched
         .filter(c => c.columnId === col.id)
-        .sort((a, b) => (a.position || '').localeCompare(b.position || ''))
+        .sort(compareCardsByPosition)
         .map(c => c.id);
     }
     return {
-      activeBoardId: DEFAULT_BOARD.id,
-      boards: [{ ...DEFAULT_BOARD, cardOrder }],
+      activeBoardId: DEFAULT_MOBILE_BOARD.id,
+      boards: [{ ...DEFAULT_MOBILE_BOARD, cardOrder }],
       cards: enriched,
-      counts: computeCounts(enriched)
+      counts: computeTodoCounts(enriched)
     };
   }
 
@@ -360,12 +255,11 @@ export function createWebHttpNativeClient(): NativeClient {
 
   async function pullLatest(): Promise<TodoState> {
     const active = requireSession();
-    const res = await fetch(`${active.serverEndpoint}/api/v1/sync/pull?cursor=0`, {
-      headers: {
-        Authorization: `Bearer ${active.token}`,
-        'X-TidyDesk-User': active.userId
-      }
-    });
+    const wsId = resolveWorkspaceId(active);
+    const res = await fetch(
+      `${active.serverEndpoint}/api/v1/sync/pull?workspaceId=${encodeURIComponent(wsId)}&cursor=0`,
+      { headers: authHeaders(active) }
+    );
     if (!res.ok) {
       throw new Error(`拉取云端数据失败 (${res.status})`);
     }
@@ -399,13 +293,9 @@ export function createWebHttpNativeClient(): NativeClient {
     const active = requireSession();
     const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${active.token}`,
-        'X-TidyDesk-User': active.userId
-      },
+      headers: authHeaders(active, 'application/json'),
       body: JSON.stringify({
-        workspaceId: 'default',
+        workspaceId: resolveWorkspaceId(active),
         entries: [
           {
             entityKind: 'card',
@@ -490,13 +380,11 @@ export function createWebHttpNativeClient(): NativeClient {
         const controller = new AbortController();
         realtimeAbort = controller;
         try {
-          const res = await fetch(`${active.serverEndpoint}/api/v1/sync/events?workspaceId=default`, {
-            headers: {
-              Authorization: `Bearer ${active.token}`,
-              'X-TidyDesk-User': active.userId
-            },
-            signal: controller.signal
-          });
+          const wsId = resolveWorkspaceId(active);
+          const res = await fetch(
+            `${active.serverEndpoint}/api/v1/sync/events?workspaceId=${encodeURIComponent(wsId)}`,
+            { headers: authHeaders(active), signal: controller.signal }
+          );
           if (res.ok && res.body) {
             attempt = 0;
             const reader = res.body.getReader();
@@ -509,21 +397,24 @@ export function createWebHttpNativeClient(): NativeClient {
               const frames = buffer.split(/\r?\n\r?\n/);
               buffer = frames.pop() || '';
               for (const frame of frames) {
-                if (frame.includes('event: sync-changed')) {
-                  await pullLatest()
-                    .then(nextState => {
-                      for (const cb of realtimeListeners) {
-                        cb({
-                          pulledCards: nextState.cards.length,
-                          pulledNotes: 0,
-                          cursor: session?.lastSyncCursor || ''
-                        });
-                      }
-                    })
-                    .catch(err =>
-                      console.warn('[TIDYDESK][MOBILE] Realtime pull error:', err)
-                    );
+                if (!frame.includes('event: sync-changed')) continue;
+                const remoteCursor = parseSseSyncCursor(frame);
+                if (remoteCursor && session?.lastSyncCursor === remoteCursor) {
+                  continue;
                 }
+                await pullLatest()
+                  .then(nextState => {
+                    for (const cb of realtimeListeners) {
+                      cb({
+                        pulledCards: nextState.cards.length,
+                        pulledNotes: 0,
+                        cursor: session?.lastSyncCursor || ''
+                      });
+                    }
+                  })
+                  .catch(err =>
+                    console.warn('[TIDYDESK][MOBILE] Realtime pull error:', err)
+                  );
               }
             }
           } else if (!controller.signal.aborted) {
@@ -555,20 +446,62 @@ export function createWebHttpNativeClient(): NativeClient {
     })();
   }
 
+  async function verifyAndActivateSession(params: {
+    userId: string;
+    displayName?: string;
+    endpoint: string;
+    workspaceId: string;
+    token: string;
+  }): Promise<AccountSessionSnapshot> {
+    const verifyRes = await fetch(`${params.endpoint}/api/v1/auth/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${params.token}`,
+        'X-TidyDesk-User': params.userId
+      },
+      body: JSON.stringify({ userId: params.userId, workspaceId: params.workspaceId })
+    });
+    if (!verifyRes.ok) {
+      const msg = await verifyRes.text().catch(() => '');
+      const err = new Error(`工作区鉴权验证失败 (${verifyRes.status}): ${msg}`) as Error & {
+        status?: number;
+      };
+      err.status = verifyRes.status;
+      throw err;
+    }
+    const verified = (await verifyRes.json().catch(() => ({}))) as { displayName?: string };
+    const sameActiveUser = Boolean(session && session.userId === params.userId);
+    clearBlobCache();
+    cardsById.clear();
+    session = {
+      userId: params.userId,
+      displayName:
+        params.displayName?.trim() ||
+        (sameActiveUser ? session?.displayName : undefined) ||
+        verified.displayName ||
+        params.userId,
+      serverEndpoint: params.endpoint,
+      workspaceId: params.workspaceId,
+      token: params.token
+    };
+    writeStoredWebSession(session);
+    const snap = toSessionSnapshot(session);
+    for (const cb of sessionListeners) cb(snap);
+    startSseLoop();
+    return snap;
+  }
+
   if (session) {
     startSseLoop();
   }
-
-  const unsupportedDesktop = (name: string): never => {
-    throw new Error(`${name} 仅在 Windows 桌面端可用`);
-  };
 
   return {
     isAvailable: () => Boolean(session),
     capabilities: MOBILE_WEB_CAPABILITIES,
     todos: {
       readState: () => pullLatest(),
-      getCounts: async () => computeCounts(Array.from(cardsById.values())),
+      getCounts: async () => computeTodoCounts(Array.from(cardsById.values())),
       createCard: async (payload: CreateTodoCardInput) => {
         const active = requireSession();
         const now = String(Date.now());
@@ -576,7 +509,7 @@ export function createWebHttpNativeClient(): NativeClient {
         const colId = payload.columnId || 'todo';
         const card: TodoCard = {
           id: createUuid(),
-          boardId: DEFAULT_BOARD.id,
+          boardId: DEFAULT_MOBILE_BOARD.id,
           columnId: colId,
           title: (payload.title || '').trim() || '新待办',
           content: payload.content || '',
@@ -593,7 +526,7 @@ export function createWebHttpNativeClient(): NativeClient {
           })),
           attachments: [],
           coverAttachmentId: null,
-          position: defaultPositionBefore(existing, colId),
+          position: computePositionForColumn(existing, colId),
           revision: 0,
           updatedBy: active.userId,
           deletedAt: null,
@@ -652,15 +585,16 @@ export function createWebHttpNativeClient(): NativeClient {
       deleteCard: async (cardId: string) => {
         const existing = cardsById.get(cardId);
         if (!existing) return buildTodoStateSnapshot();
-        return pushCardMutation(
-          { ...existing, deletedAt: String(Date.now()) },
-          'delete'
-        );
+        return pushCardMutation({ ...existing, deletedAt: String(Date.now()) }, 'delete');
       },
       moveCard: async (payload: MoveTodoCardInput) => {
         const existing = cardsById.get(payload.id);
         if (!existing) throw new Error('Todo card not found');
-        const pos = defaultPositionBefore(Array.from(cardsById.values()), payload.columnId);
+        const pos = computePositionForColumn(
+          Array.from(cardsById.values()),
+          payload.columnId,
+          payload.beforeId
+        );
         return pushCardMutation(
           { ...existing, columnId: payload.columnId, position: pos, updatedAt: String(Date.now()) },
           'upsert'
@@ -689,11 +623,7 @@ export function createWebHttpNativeClient(): NativeClient {
 
         const presignRes = await fetch(`${active.serverEndpoint}/api/v1/media/presign`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${active.token}`,
-            'X-TidyDesk-User': active.userId
-          },
+          headers: authHeaders(active, 'application/json'),
           body: JSON.stringify({ sha256, mimeType })
         });
         if (!presignRes.ok) throw new Error(`媒体上传预检失败 (${presignRes.status})`);
@@ -710,8 +640,7 @@ export function createWebHttpNativeClient(): NativeClient {
             const up = await fetch(`${active.serverEndpoint}${pathOrUrl}`, {
               method: 'PUT',
               headers: {
-                Authorization: `Bearer ${active.token}`,
-                'X-TidyDesk-User': active.userId,
+                ...authHeaders(active),
                 'x-tidydesk-sha256': sha256
               },
               body: bodyBytes.buffer.slice(
@@ -781,7 +710,7 @@ export function createWebHttpNativeClient(): NativeClient {
           );
         }
         if (cloned.coverAttachmentId === payload.attachmentId) {
-          cloned.coverAttachmentId = cloned.attachments?.[0]?.id ?? null;
+          cloned.coverAttachmentId = findFallbackCoverId(cloned);
         }
         cloned.updatedAt = now;
         return pushCardMutation(cloned, 'upsert');
@@ -799,17 +728,22 @@ export function createWebHttpNativeClient(): NativeClient {
         if (!existing) throw new Error('Todo card not found');
         const now = String(Date.now());
         const cloned: TodoCard = structuredClone(existing);
-        const list = payload.subtaskId
-          ? (cloned.subtasks || []).find(s => s.id === payload.subtaskId)?.attachments || []
-          : cloned.attachments || [];
+        const parentSub = payload.subtaskId
+          ? (cloned.subtasks || []).find(s => s.id === payload.subtaskId)
+          : undefined;
+        const list = payload.subtaskId ? parentSub?.attachments || [] : cloned.attachments || [];
         const target = list.find(a => a.id === payload.attachmentId);
         if (!target) throw new Error('Todo attachment not found');
         if (payload.focalPoint) target.focalPoint = payload.focalPoint;
         if (payload.previewMode) target.previewMode = payload.previewMode;
+        target.updatedAt = now;
+        if (parentSub) parentSub.updatedAt = now;
         cloned.updatedAt = now;
         return pushCardMutation(cloned, 'upsert');
       },
-      startSnipForCard: async () => unsupportedDesktop('区域框选截屏'),
+      startSnipForCard: async () => {
+        throw new Error('移动端不支持桌面端屏幕区域截图，请直接拍照或从相册选择图片');
+      },
       onCountsUpdated: cb => {
         countListeners.add(cb);
         return () => countListeners.delete(cb);
@@ -824,40 +758,123 @@ export function createWebHttpNativeClient(): NativeClient {
       switchSession: async payload => {
         const userId = payload.userId.trim();
         const endpoint = (payload.serverEndpoint || window.location.origin).trim().replace(/\/+$/, '');
-        const token = (payload.token || '').trim();
+        const sameActiveUser = Boolean(session && session.userId === userId);
+        const token = (payload.token || (sameActiveUser ? session?.token : '') || '').trim();
+        const workspaceId = (payload.workspaceId || '').trim() || 'default';
         if (!userId || !token) {
           throw new Error('请输入账号 ID 与访问 Token');
         }
-        // Strictly verify User ID + Token without coupling business data pull
-        const res = await fetch(`${endpoint}/api/v1/auth/verify`, {
+        return verifyAndActivateSession({
+          userId,
+          displayName: payload.displayName,
+          endpoint,
+          workspaceId,
+          token
+        });
+      },
+      loginWithPassword: async payload => {
+        const userId = payload.userId.trim();
+        const endpoint = (payload.serverEndpoint || window.location.origin).trim().replace(/\/+$/, '');
+        const workspaceId = (payload.workspaceId || '').trim() || 'default';
+        if (!userId || !payload.password) {
+          throw new Error('请输入账号 ID 与密码');
+        }
+        const loginRes = await fetch(`${endpoint}/api/v1/auth/login`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-            'X-TidyDesk-User': userId
-          },
-          body: JSON.stringify({ userId, workspaceId: 'default' })
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            password: payload.password,
+            deviceLabel: payload.deviceLabel || 'Mobile Web'
+          })
+        });
+        if (!loginRes.ok) {
+          const msg = await loginRes.text().catch(() => '');
+          throw new Error(`账号密码验证失败 (${loginRes.status}): ${msg}`);
+        }
+        const issued = (await loginRes.json()) as {
+          userId: string;
+          displayName?: string;
+          token: string;
+        };
+
+        try {
+          return await verifyAndActivateSession({
+            userId: issued.userId,
+            displayName: issued.displayName,
+            endpoint,
+            workspaceId,
+            token: issued.token
+          });
+        } catch (err) {
+          await fetch(`${endpoint}/api/v1/auth/logout`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${issued.token}`,
+              'X-TidyDesk-User': issued.userId
+            }
+          }).catch(cleanupErr =>
+            console.warn('[TIDYDESK][MOBILE] Failed to cleanup denied login token:', cleanupErr)
+          );
+          throw err;
+        }
+      },
+      changePassword: async payload => {
+        const active = requireSession();
+        const res = await fetch(`${active.serverEndpoint}/api/v1/auth/password`, {
+          method: 'POST',
+          headers: authHeaders(active, 'application/json'),
+          body: JSON.stringify(payload)
         });
         if (!res.ok) {
           const msg = await res.text().catch(() => '');
-          throw new Error(`账号验证失败 (${res.status}): ${msg}`);
+          throw new Error(`修改密码失败 (${res.status}): ${msg}`);
         }
-        clearBlobCache();
-        cardsById.clear();
-        session = {
-          userId,
-          displayName: payload.displayName?.trim() || userId,
-          serverEndpoint: endpoint,
-          token
-        };
-        writeStoredWebSession(session);
-        const snap = toSessionSnapshot(session);
-        for (const cb of sessionListeners) cb(snap);
-        startSseLoop();
-        return snap;
+      },
+      listRemoteSessions: async (): Promise<RemoteAuthSessionInfo[]> => {
+        const active = requireSession();
+        const res = await fetch(`${active.serverEndpoint}/api/v1/auth/sessions`, {
+          headers: authHeaders(active)
+        });
+        if (!res.ok) {
+          throw new Error(`读取设备会话失败 (${res.status})`);
+        }
+        const data = (await res.json()) as { sessions?: RemoteAuthSessionInfo[] };
+        return data.sessions || [];
+      },
+      revokeRemoteSession: async tokenId => {
+        const active = requireSession();
+        const res = await fetch(`${active.serverEndpoint}/api/v1/auth/sessions/revoke`, {
+          method: 'POST',
+          headers: authHeaders(active, 'application/json'),
+          body: JSON.stringify({ tokenId })
+        });
+        if (!res.ok) {
+          throw new Error(`吊销设备会话失败 (${res.status})`);
+        }
+      },
+      listWorkspaces: async (): Promise<RemoteWorkspaceInfo[]> => {
+        const active = requireSession();
+        const res = await fetch(`${active.serverEndpoint}/api/v1/workspaces`, {
+          headers: authHeaders(active)
+        });
+        if (!res.ok) {
+          throw new Error(`获取工作区列表失败 (${res.status})`);
+        }
+        const data = (await res.json()) as { workspaces?: RemoteWorkspaceInfo[] };
+        return data.workspaces || [];
       },
       logoutToLocal: async () => {
+        const prev = session;
         stopSseLoop();
+        if (prev) {
+          await fetch(`${prev.serverEndpoint}/api/v1/auth/logout`, {
+            method: 'POST',
+            headers: authHeaders(prev)
+          }).catch(err => {
+            console.warn('[TIDYDESK][MOBILE] Failed to revoke server session on logout:', err);
+          });
+        }
         clearBlobCache();
         cardsById.clear();
         session = null;
@@ -873,144 +890,32 @@ export function createWebHttpNativeClient(): NativeClient {
       }
     },
     sync: {
-      getStatus: async (): Promise<SyncStatusSnapshot> => ({
-        authMode: session ? 'account' : 'local',
-        activeUserId: session?.userId ?? null,
-        syncEnabled: Boolean(session),
-        serverEndpoint: session?.serverEndpoint ?? null,
-        pendingCount: 0,
-        lastSyncCursor: session?.lastSyncCursor ?? null,
-        lastSyncAt: session?.lastSyncAt ?? null,
-        realtimeActive: Boolean(session && realtimeEnabled),
-        statusMessage: session
-          ? realtimeEnabled
-            ? '移动端 SSE 实时协同连接已就绪'
-            : '移动端已登录（手动同步模式）'
-          : '未登录云端工作区'
-      }),
-      clearOutbox: async () => unsupportedDesktop('本地 Outbox 管理'),
+      getStatus: async () =>
+        buildSyncStatus(
+          session
+            ? realtimeEnabled
+              ? '移动端 SSE 实时协同连接已就绪'
+              : '移动端已登录（手动同步模式）'
+            : '未登录云端工作区'
+        ),
+      clearOutbox: async () => {
+        throw new Error('本地 Outbox 管理 仅在 Windows 桌面端可用');
+      },
       runOnce: async () => {
         await pullLatest();
-        return {
-          authMode: 'account',
-          activeUserId: session?.userId ?? null,
-          syncEnabled: Boolean(session),
-          serverEndpoint: session?.serverEndpoint ?? null,
-          pendingCount: 0,
-          lastSyncCursor: session?.lastSyncCursor ?? null,
-          lastSyncAt: session?.lastSyncAt ?? null,
-          realtimeActive: Boolean(session && realtimeEnabled),
-          statusMessage: '已拉取最新云端协同状态'
-        };
+        return buildSyncStatus('已拉取最新云端协同状态');
       },
       setRealtimeEnabled: async enabled => {
         realtimeEnabled = enabled;
         if (enabled) startSseLoop();
         else stopSseLoop();
-        return {
-          authMode: session ? 'account' : 'local',
-          activeUserId: session?.userId ?? null,
-          syncEnabled: Boolean(session),
-          serverEndpoint: session?.serverEndpoint ?? null,
-          pendingCount: 0,
-          lastSyncCursor: session?.lastSyncCursor ?? null,
-          lastSyncAt: session?.lastSyncAt ?? null,
-          realtimeActive: Boolean(session && realtimeEnabled),
-          statusMessage: enabled ? '已开启实时同步推送' : '已暂停实时同步推送'
-        };
+        return buildSyncStatus(enabled ? '已开启实时同步推送' : '已暂停实时同步推送');
       },
       onRealtimeApplied: cb => {
         realtimeListeners.add(cb);
         return () => realtimeListeners.delete(cb);
       }
     },
-    quickNotes: {
-      readState: async () => ({ notes: [] }),
-      createNote: () => unsupportedDesktop('quickNotes'),
-      updateNote: () => unsupportedDesktop('quickNotes'),
-      deleteNote: () => unsupportedDesktop('quickNotes')
-    },
-    files: {
-      readDesktopFiles: () => unsupportedDesktop('files'),
-      readIcons: () => unsupportedDesktop('files'),
-      importExternalFiles: () => unsupportedDesktop('files'),
-      open: () => unsupportedDesktop('files'),
-      restoreToDesktop: () => unsupportedDesktop('files')
-    },
-    drawers: {
-      create: () => unsupportedDesktop('drawers'),
-      renameItem: () => unsupportedDesktop('drawers'),
-      deleteItem: () => unsupportedDesktop('drawers')
-    },
-    shortcuts: {
-      validateAll: () => unsupportedDesktop('shortcuts'),
-      repair: () => unsupportedDesktop('shortcuts'),
-      onTargetFileDeleted: () => undefined,
-      onTargetFileRestored: () => undefined,
-      onValidated: () => undefined
-    },
-    apps: {
-      scanInstalled: () => unsupportedDesktop('apps'),
-      refresh: () => unsupportedDesktop('apps'),
-      getCacheInfo: () => unsupportedDesktop('apps'),
-      openPicker: () => unsupportedDesktop('apps'),
-      closePicker: () => unsupportedDesktop('apps'),
-      getPickerTarget: () => unsupportedDesktop('apps'),
-      onSetTargetFolder: () => undefined,
-      onIconsUpdated: () => undefined,
-      addToDrawer: () => unsupportedDesktop('apps')
-    },
-    windows: {
-      control: () => undefined,
-      getPathForFile: () => '',
-      onDrawerState: () => undefined,
-      onModuleState: () => undefined
-    },
-    toolWindows: {
-      openTodo: () => unsupportedDesktop('toolWindows'),
-      closeTodo: () => unsupportedDesktop('toolWindows')
-    },
-    resident: {
-      getSettings: () => unsupportedDesktop('resident'),
-      updateSettings: () => unsupportedDesktop('resident'),
-      showHandle: () => unsupportedDesktop('resident'),
-      hideHandle: () => unsupportedDesktop('resident'),
-      openSettings: () => unsupportedDesktop('resident'),
-      onOpenSettings: () => undefined
-    },
-    hotkeys: {
-      getSettings: () => unsupportedDesktop('hotkeys'),
-      validateBinding: () => unsupportedDesktop('hotkeys'),
-      updateBinding: () => unsupportedDesktop('hotkeys'),
-      resetDefaults: () => unsupportedDesktop('hotkeys')
-    },
-    clipboard: {
-      readText: async () => ''
-    },
-    capture: {
-      onOpened: () => undefined,
-      completeSnipSelection: () => unsupportedDesktop('capture'),
-      cancelSnip: () => unsupportedDesktop('capture'),
-      getBackgroundImage: () => unsupportedDesktop('capture')
-    },
-    stickers: {
-      get: async () => null,
-      togglePin: () => unsupportedDesktop('stickers'),
-      copy: () => unsupportedDesktop('stickers'),
-      saveAs: () => unsupportedDesktop('stickers'),
-      close: () => unsupportedDesktop('stickers'),
-      onUpdated: () => undefined
-    },
-    updates: {
-      getMetadata: () => unsupportedDesktop('updates'),
-      getState: () => unsupportedDesktop('updates'),
-      check: () => unsupportedDesktop('updates'),
-      download: () => unsupportedDesktop('updates'),
-      install: () => unsupportedDesktop('updates'),
-      onChange: () => undefined
-    },
-    events: {
-      send: () => undefined
-    }
+    ...createDesktopUnsupportedStubs()
   };
 }

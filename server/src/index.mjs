@@ -3,7 +3,9 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createAuthService, canWriteWorkspace } from './auth.mjs';
+import { sanitizeWorkspaceId } from './fs_utils.mjs';
 import { createSyncStore } from './store.mjs';
+import { createUserRegistry } from './users.mjs';
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_BLOB_BYTES = 25 * 1024 * 1024;
@@ -96,7 +98,8 @@ export function createSyncServer({
   tokensMap = null,
   allowAnyDevToken = process.env.NODE_ENV !== 'production'
 } = {}) {
-  const auth = createAuthService({ tokensMap, allowAnyDevToken });
+  const userRegistry = createUserRegistry(dataDir);
+  const auth = createAuthService({ tokensMap, allowAnyDevToken, userRegistry });
   const store = createSyncStore(dataDir);
   const sseSubscribers = new Map();
 
@@ -161,6 +164,32 @@ export function createSyncServer({
         }
       }
 
+      if (method === 'POST' && pathname === '/api/v1/auth/login') {
+        const body = await readJsonBody(req);
+        const resAuth = userRegistry.verifyPassword(body.userId, body.password);
+        if (!resAuth.ok) {
+          sendJson(res, resAuth.status || 401, { error: resAuth.error });
+          return;
+        }
+        const rawLabel =
+          typeof body.deviceLabel === 'string' && body.deviceLabel.trim()
+            ? body.deviceLabel.trim()
+            : 'device';
+        const issued = userRegistry.issueToken({
+          userId: resAuth.user.userId,
+          label: rawLabel
+        });
+        sendJson(res, 200, {
+          ok: true,
+          userId: issued.userId,
+          displayName: issued.displayName,
+          token: issued.token,
+          tokenId: issued.tokenId,
+          label: issued.label
+        });
+        return;
+      }
+
       if (method === 'POST' && pathname === '/api/v1/auth/verify') {
         const body = await readJsonBody(req);
         const authRes = auth.authenticateRequest(req, body.userId);
@@ -168,8 +197,15 @@ export function createSyncServer({
           sendJson(res, authRes.status, { error: authRes.error });
           return;
         }
-        const role = store.ensureWorkspaceAccess(authRes.userId, body.workspaceId || 'default');
-        sendJson(res, 200, { ok: true, userId: authRes.userId, role });
+        const safeWsId = sanitizeWorkspaceId(body.workspaceId, 'default');
+        const role = store.ensureWorkspaceAccess(authRes.userId, safeWsId);
+        sendJson(res, 200, {
+          ok: true,
+          userId: authRes.userId,
+          displayName: authRes.displayName || authRes.userId,
+          workspaceId: safeWsId,
+          role
+        });
         return;
       }
 
@@ -179,7 +215,59 @@ export function createSyncServer({
         return;
       }
 
-      const workspaceId = url.searchParams.get('workspaceId') || 'default';
+      if (method === 'POST' && pathname === '/api/v1/auth/logout') {
+        const revoked = userRegistry.revokeTokenByValue(authRes.userId, authRes.token);
+        sendJson(res, 200, revoked);
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/v1/auth/password') {
+        const body = await readJsonBody(req);
+        const pwdCheck = userRegistry.verifyPassword(authRes.userId, body.oldPassword);
+        if (!pwdCheck.ok) {
+          sendJson(res, pwdCheck.status || 401, { error: pwdCheck.error || '原密码校验失败' });
+          return;
+        }
+        userRegistry.setPassword({
+          userId: authRes.userId,
+          newPassword: body.newPassword,
+          revokeAll: Boolean(body.revokeAll)
+        });
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/v1/auth/sessions') {
+        sendJson(res, 200, {
+          sessions: userRegistry.listSessionsForUser(authRes.userId, authRes.token)
+        });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/v1/auth/sessions/revoke') {
+        const body = await readJsonBody(req);
+        const tokenId = String(body.tokenId || '').trim();
+        if (!tokenId) {
+          sendJson(res, 400, { error: '缺少待吊销的 tokenId' });
+          return;
+        }
+        const revoked = userRegistry.revokeTokenById({
+          userId: authRes.userId,
+          tokenId,
+          isAdmin: false
+        });
+        sendJson(res, 200, { ok: true, ...revoked });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/v1/workspaces') {
+        sendJson(res, 200, {
+          workspaces: store.listWorkspacesForUser(authRes.userId)
+        });
+        return;
+      }
+
+      const workspaceId = sanitizeWorkspaceId(url.searchParams.get('workspaceId'), 'default');
       const role = store.ensureWorkspaceAccess(authRes.userId, workspaceId);
 
       if (method === 'GET' && pathname === '/api/v1/sync/events') {
@@ -250,12 +338,13 @@ export function createSyncServer({
       }
 
       if (method === 'POST' && pathname === '/api/v1/sync/push') {
-        if (!canWriteWorkspace(role)) {
+        const body = await readJsonBody(req);
+        const targetWorkspaceId = sanitizeWorkspaceId(body.workspaceId, workspaceId);
+        const targetRole = store.ensureWorkspaceAccess(authRes.userId, targetWorkspaceId);
+        if (!canWriteWorkspace(targetRole)) {
           sendJson(res, 403, { error: 'Workspace viewer cannot push changes' });
           return;
         }
-        const body = await readJsonBody(req);
-        const targetWorkspaceId = body.workspaceId || workspaceId;
         const entries = Array.isArray(body.entries) ? body.entries : [];
         const result = store.pushEntries({
           workspaceId: targetWorkspaceId,
@@ -283,7 +372,11 @@ export function createSyncServer({
 
       sendJson(res, 404, { error: `Unknown route: ${method} ${pathname}` });
     } catch (err) {
-      sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      const status =
+        err && typeof err === 'object' && 'status' in err && typeof err.status === 'number'
+          ? err.status
+          : 500;
+      sendJson(res, status, { error: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -298,7 +391,7 @@ export function createSyncServer({
     sseSubscribers.clear();
   });
 
-  return { server, store };
+  return { server, store, users: userRegistry };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

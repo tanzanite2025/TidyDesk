@@ -181,24 +181,26 @@ fn icon_handle_to_png_bytes(
 ) -> Result<Vec<u8>, String> {
     unsafe {
         let screen_dc = GetDC(None);
-        if screen_dc.0 == std::ptr::null_mut() {
+        if screen_dc.0.is_null() {
             return Err("failed to get screen device context for icon extraction".to_string());
         }
 
         let memory_dc = CreateCompatibleDC(Some(screen_dc));
-        if memory_dc.0 == std::ptr::null_mut() {
+        if memory_dc.0.is_null() {
             let _ = ReleaseDC(None, screen_dc);
             return Err("failed to create memory device context for icon extraction".to_string());
         }
 
-        let mut bitmap_info = BITMAPINFO::default();
-        bitmap_info.bmiHeader = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: ICON_SIZE,
-            biHeight: -ICON_SIZE,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
+        let bitmap_info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: ICON_SIZE,
+                biHeight: -ICON_SIZE,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
