@@ -1,7 +1,7 @@
 use serde_json::json;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
-    WebviewWindowBuilder,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
@@ -38,6 +38,15 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
     .skip_taskbar(true)
     .build()
     .map_err(|err| err.to_string())?;
+    let app_handle = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
+        ) {
+            crate::capture::handle_snip_window_aborted(&app_handle);
+        }
+    });
     prepare_snip_window(&window, &monitor)?;
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;

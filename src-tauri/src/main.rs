@@ -8,6 +8,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
+mod accounts;
 mod apps;
 mod apps_classifier;
 mod asset_protocol;
@@ -24,6 +25,7 @@ mod resident;
 mod shell;
 mod shortcuts;
 mod stickers;
+mod sync;
 mod todos;
 mod tool_windows;
 mod updates;
@@ -34,6 +36,10 @@ pub use crate::paths::{
     resolve_path_for_comparison, timestamp_string,
 };
 
+use accounts::{
+    accounts_get_session, accounts_import_local_todos, accounts_logout_to_local,
+    accounts_switch_session, AccountSessionState,
+};
 use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
     apps_scan_installed, close_app_picker, open_app_picker, AppPickerTargetState,
@@ -73,11 +79,15 @@ use stickers::{
     schedule_restore_stickers, sticker_close, sticker_copy, sticker_get, sticker_save_as,
     sticker_toggle_pin, StickerStoreState,
 };
+use sync::{
+    sync_clear_outbox, sync_get_status, sync_list_outbox, sync_run_once, sync_set_realtime_enabled,
+    SyncOutboxState, SyncRealtimeState,
+};
 use todos::{
     todos_add_attachment_bytes, todos_create_card, todos_delete_attachment, todos_delete_card,
     todos_get_card_detail, todos_get_counts, todos_move_card, todos_pick_and_add_attachment,
-    todos_read_state, todos_set_card_cover, todos_start_snip_for_card, todos_update_card,
-    TodoStoreState,
+    todos_read_state, todos_set_card_cover, todos_start_snip_for_card,
+    todos_update_attachment_meta, todos_update_card, TodoStoreState,
 };
 use tool_windows::{close_todo_window, open_todo_window};
 use updates::{
@@ -136,7 +146,17 @@ macro_rules! tidydesk_generate_handler {
             todos_pick_and_add_attachment,
             todos_delete_attachment,
             todos_set_card_cover,
+            todos_update_attachment_meta,
             todos_start_snip_for_card,
+            accounts_get_session,
+            accounts_switch_session,
+            accounts_logout_to_local,
+            accounts_import_local_todos,
+            sync_get_status,
+            sync_list_outbox,
+            sync_clear_outbox,
+            sync_run_once,
+            sync_set_realtime_enabled,
             quick_notes_read_state,
             quick_notes_create_note,
             quick_notes_update_note,
@@ -204,7 +224,17 @@ macro_rules! tidydesk_generate_handler {
             todos_pick_and_add_attachment,
             todos_delete_attachment,
             todos_set_card_cover,
+            todos_update_attachment_meta,
             todos_start_snip_for_card,
+            accounts_get_session,
+            accounts_switch_session,
+            accounts_logout_to_local,
+            accounts_import_local_todos,
+            sync_get_status,
+            sync_list_outbox,
+            sync_clear_outbox,
+            sync_run_once,
+            sync_set_realtime_enabled,
             quick_notes_read_state,
             quick_notes_create_note,
             quick_notes_update_note,
@@ -250,6 +280,9 @@ fn main() {
         .manage(StickerStoreState::default())
         .manage(SnipCaptureState::default())
         .manage(TodoStoreState::default())
+        .manage(AccountSessionState::default())
+        .manage(SyncOutboxState::default())
+        .manage(SyncRealtimeState::default())
         .manage(QuickNotesStoreState::default())
         .manage(UpdaterSessionState::default())
         .manage(HotkeyRuntimeState::default())

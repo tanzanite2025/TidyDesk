@@ -189,10 +189,16 @@ pub fn handle_asset_request(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>
             };
             let path = attachments_dir.join(&card_id).join(&file_name);
             match fs::read(path) {
-                Ok(bytes) => {
-                    build_response(StatusCode::OK, content_type, "public, max-age=86400", bytes)
+                Ok(bytes) => build_response(StatusCode::OK, content_type, "no-store", bytes),
+                Err(_) => {
+                    if let Some(fetched) =
+                        crate::sync::try_lazy_fetch_todo_attachment(app, &card_id, &file_name)
+                    {
+                        build_response(StatusCode::OK, content_type, "no-store", fetched)
+                    } else {
+                        text_error(StatusCode::NOT_FOUND, "Todo attachment not found")
+                    }
                 }
-                Err(_) => text_error(StatusCode::NOT_FOUND, "Todo attachment not found"),
             }
         }
     }

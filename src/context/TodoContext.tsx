@@ -8,6 +8,7 @@ import {
   TodoCard,
   TodoCounts,
   TodoState,
+  UpdateTodoAttachmentMetaInput,
   UpdateTodoCardInput
 } from '../types/todo';
 
@@ -22,14 +23,15 @@ interface TodoContextType {
   refreshTodos: () => Promise<void>;
   createCard: (payload: CreateTodoCardInput) => Promise<TodoCard | null>;
   updateCard: (payload: UpdateTodoCardInput) => Promise<boolean>;
-  deleteCard: (cardId: string) => Promise<void>;
+  deleteCard: (cardId: string) => Promise<boolean>;
   moveCard: (payload: MoveTodoCardInput) => Promise<void>;
   getCardDetail: (cardId: string) => Promise<TodoCard | null>;
   addAttachmentBytes: (payload: AddTodoAttachmentBytesInput) => Promise<boolean>;
-  pickAndAddAttachment: (cardId: string) => Promise<boolean>;
-  deleteAttachment: (cardId: string, attachmentId: string) => Promise<boolean>;
+  pickAndAddAttachment: (cardId: string, subtaskId?: string | null) => Promise<boolean>;
+  deleteAttachment: (cardId: string, attachmentId: string, subtaskId?: string | null) => Promise<boolean>;
   setCardCover: (cardId: string, attachmentId: string | null) => Promise<boolean>;
-  startSnipForCard: (cardId: string) => Promise<void>;
+  updateAttachmentMeta: (payload: UpdateTodoAttachmentMetaInput) => Promise<boolean>;
+  startSnipForCard: (cardId: string, subtaskId?: string | null) => Promise<void>;
   clearError: () => void;
 }
 
@@ -63,10 +65,14 @@ const simulatedTodoState: TodoState = {
       content: '# 整理发布清单\n\n- [ ] 检查构建\n- [ ] 写发布说明\n\n| 项目 | 状态 |\n| --- | --- |\n| Build | OK |',
       tags: [],
       archived: false,
+      subtasks: [],
+      subtaskTotal: 0,
+      subtaskCompleted: 0,
+      previewAttachments: [],
+      extraAttachmentCount: 0,
       attachments: [],
       attachmentCount: 0,
       coverAttachmentId: null,
-      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     },
@@ -78,10 +84,14 @@ const simulatedTodoState: TodoState = {
       content: '支持 **Markdown** 和剪贴板捕获。',
       tags: [],
       archived: false,
+      subtasks: [],
+      subtaskTotal: 0,
+      subtaskCompleted: 0,
+      previewAttachments: [],
+      extraAttachmentCount: 0,
       attachments: [],
       attachmentCount: 0,
       coverAttachmentId: null,
-      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     },
@@ -93,16 +103,34 @@ const simulatedTodoState: TodoState = {
       content: '- [x] 三个竖向入口',
       tags: [],
       archived: false,
+      subtasks: [],
+      subtaskTotal: 0,
+      subtaskCompleted: 0,
+      previewAttachments: [],
+      extraAttachmentCount: 0,
       attachments: [],
       attachmentCount: 0,
       coverAttachmentId: null,
-      coverThumbUrl: null,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString()
     }
   ],
   counts: { total: 3, open: 2, done: 1 }
 };
+
+function compareCardsByPosition(a: TodoCard, b: TodoCard): number {
+  const posA = a.position ?? '';
+  const posB = b.position ?? '';
+  if (posA !== posB) {
+    return posA < posB ? -1 : 1;
+  }
+  const createdA = a.createdAt ?? '';
+  const createdB = b.createdAt ?? '';
+  if (createdA !== createdB) {
+    return createdA < createdB ? -1 : 1;
+  }
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
 
 function applyTodoState(
   state: TodoState,
@@ -159,25 +187,41 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     const unsubState = client.todos.onUpdated(nextState => {
       applyTodoState(nextState, setBoard, setCards, setCounts);
     });
+    const unsubSnipError = client.todos.onSnipError?.(payload => {
+      if (payload?.error) {
+        setError(`截屏添加到待办失败: ${payload.error}`);
+      }
+    });
+    const unsubAccount = client.accounts.onSessionChanged(() => {
+      void refreshTodos();
+    });
     return () => {
       unsubCounts?.();
       unsubState?.();
+      unsubSnipError?.();
+      unsubAccount?.();
     };
-  }, [client]);
+  }, [client, refreshTodos]);
 
   const cardsByColumn = useMemo(() => {
     if (!board) return {};
 
-    const cardMap = new Map(cards.filter(card => !card.archived).map(card => [card.id, card]));
+    const activeCards = cards.filter(card => !card.archived && !card.deletedAt);
     const grouped: Record<string, TodoCard[]> = {};
 
     for (const column of board.columns) {
-      const ordered = (board.cardOrder[column.id] || [])
-        .map(cardId => cardMap.get(cardId))
-        .filter((card): card is TodoCard => Boolean(card));
-
-      const missing = cards.filter(card => !card.archived && card.columnId === column.id && !ordered.some(item => item.id === card.id));
-      grouped[column.id] = [...ordered, ...missing];
+      const columnCards = activeCards.filter(card => card.columnId === column.id);
+      const hasExplicitPositions = columnCards.every(card => Boolean(card.position));
+      if (hasExplicitPositions) {
+        grouped[column.id] = [...columnCards].sort(compareCardsByPosition);
+      } else {
+        const cardMap = new Map(columnCards.map(card => [card.id, card]));
+        const ordered = (board.cardOrder[column.id] || [])
+          .map(cardId => cardMap.get(cardId))
+          .filter((card): card is TodoCard => Boolean(card));
+        const missing = columnCards.filter(card => !ordered.some(item => item.id === card.id));
+        grouped[column.id] = [...ordered, ...missing];
+      }
     }
 
     return grouped;
@@ -209,14 +253,16 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
-  const deleteCard = useCallback(async (cardId: string) => {
-    if (!client.isAvailable()) return;
+  const deleteCard = useCallback(async (cardId: string): Promise<boolean> => {
+    if (!client.isAvailable()) return false;
 
     try {
       const state = await client.todos.deleteCard(cardId);
       applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
     } catch (err) {
       setError(`删除待办失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
     }
   }, [client]);
 
@@ -259,12 +305,12 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
-  const pickAndAddAttachment = useCallback(async (cardId: string) => {
+  const pickAndAddAttachment = useCallback(async (cardId: string, subtaskId?: string | null) => {
     if (!client.isAvailable()) return false;
     setIsUploadingAttachment(true);
     setError(null);
     try {
-      const result = await client.todos.pickAndAddAttachment(cardId);
+      const result = await client.todos.pickAndAddAttachment(cardId, subtaskId);
       if (!result.canceled && result.state) {
         applyTodoState(result.state, setBoard, setCards, setCounts);
         return true;
@@ -278,11 +324,15 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
-  const deleteAttachment = useCallback(async (cardId: string, attachmentId: string) => {
+  const deleteAttachment = useCallback(async (
+    cardId: string,
+    attachmentId: string,
+    subtaskId?: string | null
+  ) => {
     if (!client.isAvailable()) return false;
     setError(null);
     try {
-      const state = await client.todos.deleteAttachment({ cardId, attachmentId });
+      const state = await client.todos.deleteAttachment({ cardId, subtaskId, attachmentId });
       applyTodoState(state, setBoard, setCards, setCounts);
       return true;
     } catch (err) {
@@ -304,11 +354,24 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
-  const startSnipForCard = useCallback(async (cardId: string) => {
+  const updateAttachmentMeta = useCallback(async (payload: UpdateTodoAttachmentMetaInput) => {
+    if (!client.isAvailable()) return false;
+    setError(null);
+    try {
+      const state = await client.todos.updateAttachmentMeta(payload);
+      applyTodoState(state, setBoard, setCards, setCounts);
+      return true;
+    } catch (err) {
+      setError(`更新附件预览设置失败: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }, [client]);
+
+  const startSnipForCard = useCallback(async (cardId: string, subtaskId?: string | null) => {
     if (!client.isAvailable()) return;
     setError(null);
     try {
-      await client.todos.startSnipForCard(cardId);
+      await client.todos.startSnipForCard(cardId, subtaskId);
     } catch (err) {
       setError(`启动截图失败: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -335,6 +398,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       pickAndAddAttachment,
       deleteAttachment,
       setCardCover,
+      updateAttachmentMeta,
       startSnipForCard,
       clearError
     }),
@@ -356,6 +420,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       pickAndAddAttachment,
       deleteAttachment,
       setCardCover,
+      updateAttachmentMeta,
       startSnipForCard,
       clearError
     ]

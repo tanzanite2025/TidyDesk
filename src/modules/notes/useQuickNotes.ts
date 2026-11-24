@@ -112,9 +112,19 @@ export function useQuickNotes() {
       setNotice('已带入当前剪贴板文本');
     });
 
+    const unsubscribeAccountChanged = nativeClient.isAvailable()
+      ? nativeClient.accounts.onSessionChanged(() => {
+          if (disposed) return;
+          setNotice(null);
+          setError(null);
+          void load();
+        })
+      : undefined;
+
     return () => {
       disposed = true;
       unsubscribeCaptureOpened?.();
+      unsubscribeAccountChanged?.();
     };
   }, []);
 

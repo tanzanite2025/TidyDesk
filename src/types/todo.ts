@@ -3,19 +3,58 @@ export interface TodoColumn {
   title: string;
 }
 
+export type TodoAttachmentKind = 'image' | 'video';
+export type TodoAttachmentOrientation = 'portrait' | 'landscape' | 'square';
+export type TodoAttachmentPreviewMode = 'cover' | 'contain';
+
+export interface TodoAttachmentFocalPoint {
+  x: number;
+  y: number;
+}
+
 export interface TodoAttachment {
   id: string;
-  kind: 'image';
+  kind: TodoAttachmentKind;
   originalName: string;
-  fileName: string;
-  thumbFileName: string;
+  fileName?: string;
+  thumbFileName?: string;
   width: number;
   height: number;
-  sizeBytes: number;
-  mimeType: string;
-  createdAt: string;
+  aspectRatio?: number;
+  orientation?: TodoAttachmentOrientation;
+  exifOrientation?: number;
+  focalPoint?: TodoAttachmentFocalPoint;
+  previewMode?: TodoAttachmentPreviewMode;
+  sha256?: string;
+  syncState?: 'local' | 'pending' | 'synced';
+  remoteThumbKey?: string;
+  remoteOriginalKey?: string;
+  sizeBytes?: number;
+  mimeType?: string;
+  createdAt?: string;
   assetUrl?: string;
   thumbUrl?: string;
+}
+
+export interface TodoSubtask {
+  id: string;
+  title: string;
+  completed: boolean;
+  position: string;
+  attachments?: TodoAttachment[];
+  attachmentCount?: number;
+  deletedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TodoSubtaskInput {
+  id?: string;
+  title: string;
+  completed?: boolean;
+  position?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TodoBoard {
@@ -32,15 +71,58 @@ export interface TodoCard {
   boardId: string;
   columnId: string;
   title: string;
-  content: string;
+  summaryText?: string;
+  content?: string;
   tags: string[];
   archived: boolean;
+  subtasks?: TodoSubtask[];
+  subtaskTotal?: number;
+  subtaskCompleted?: number;
+  previewAttachments?: TodoAttachment[];
+  extraAttachmentCount?: number;
   attachments?: TodoAttachment[];
   attachmentCount?: number;
   coverAttachmentId?: string | null;
-  coverThumbUrl?: string | null;
+  position?: string;
+  revision?: number;
+  updatedBy?: string;
+  deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AccountSessionSnapshot {
+  authMode: 'local' | 'account';
+  activeUserId: string | null;
+  displayName: string | null;
+  serverEndpoint: string | null;
+  hasToken: boolean;
+  lastSyncCursor: string | null;
+  lastSyncAt: string | null;
+  syncEnabled: boolean;
+}
+
+export interface SwitchAccountSessionInput {
+  userId: string;
+  displayName?: string;
+  serverEndpoint?: string;
+  token?: string;
+}
+
+export interface SyncStatusSnapshot {
+  authMode: 'local' | 'account' | string;
+  activeUserId: string | null;
+  syncEnabled: boolean;
+  serverEndpoint: string | null;
+  pendingCount: number;
+  lastSyncCursor: string | null;
+  lastSyncAt: string | null;
+  realtimeActive?: boolean;
+  statusMessage: string;
+}
+
+export interface ImportLocalTodosResult {
+  importedCards: number;
 }
 
 export interface TodoCounts {
@@ -60,6 +142,7 @@ export interface CreateTodoCardInput {
   title?: string;
   content?: string;
   columnId?: string;
+  subtasks?: TodoSubtaskInput[];
 }
 
 export interface UpdateTodoCardInput {
@@ -69,6 +152,7 @@ export interface UpdateTodoCardInput {
   columnId?: string;
   tags?: string[];
   archived?: boolean;
+  subtasks?: TodoSubtaskInput[];
 }
 
 export interface MoveTodoCardInput {
@@ -79,18 +163,28 @@ export interface MoveTodoCardInput {
 
 export interface AddTodoAttachmentBytesInput {
   cardId: string;
+  subtaskId?: string | null;
   fileName: string;
   bytes: number[];
 }
 
 export interface DeleteTodoAttachmentInput {
   cardId: string;
+  subtaskId?: string | null;
   attachmentId: string;
 }
 
 export interface SetTodoCardCoverInput {
   cardId: string;
   attachmentId: string | null;
+}
+
+export interface UpdateTodoAttachmentMetaInput {
+  cardId: string;
+  subtaskId?: string | null;
+  attachmentId: string;
+  focalPoint?: TodoAttachmentFocalPoint;
+  previewMode?: TodoAttachmentPreviewMode;
 }
 
 export interface PickTodoAttachmentResult {

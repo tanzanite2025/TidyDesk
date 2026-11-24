@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const QUICK_NOTES_VERSION: u8 = 2;
 const QUICK_NOTES_FILE_NAME: &str = "quick-notes.json";
@@ -120,11 +120,11 @@ fn sort_quick_notes(notes: &mut [QuickNote]) {
 }
 
 fn quick_notes_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(crate::files::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME))
+    Ok(crate::accounts::account_quick_notes_root(app)?.join(QUICK_NOTES_FILE_NAME))
 }
 
 fn ensure_quick_notes_storage_unlocked(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(crate::files::file_storage_root(app)?)
+    fs::create_dir_all(crate::accounts::account_quick_notes_root(app)?)
         .map_err(|err| format!("failed to create quick notes storage root: {err}"))
 }
 
@@ -237,25 +237,32 @@ pub async fn quick_notes_create_note(
             let content = payload.content.unwrap_or_default();
             let now = crate::timestamp_string();
 
-            notes.insert(
-                0,
-                QuickNote {
-                    id: create_quick_note_id(),
-                    title: safe_quick_note_title(
-                        payload.title.as_deref().unwrap_or(""),
-                        &content,
-                        QUICK_NOTE_FALLBACK_TITLE,
-                    ),
-                    content,
-                    pinned: payload.pinned.unwrap_or(false),
-                    favorite: payload.favorite.unwrap_or(false),
-                    created_at: now.clone(),
-                    updated_at: now,
-                },
-            );
+            let created_note = QuickNote {
+                id: create_quick_note_id(),
+                title: safe_quick_note_title(
+                    payload.title.as_deref().unwrap_or(""),
+                    &content,
+                    QUICK_NOTE_FALLBACK_TITLE,
+                ),
+                content,
+                pinned: payload.pinned.unwrap_or(false),
+                favorite: payload.favorite.unwrap_or(false),
+                created_at: now.clone(),
+                updated_at: now,
+            };
+            let created_id = created_note.id.clone();
+            let created_payload = serde_json::to_value(&created_note).unwrap_or_default();
+            notes.insert(0, created_note);
 
             sort_quick_notes(&mut notes);
             write_quick_notes_unlocked(&app, &notes)?;
+            crate::sync::enqueue_outbox_event(
+                &app,
+                crate::sync::OutboxEntityKind::QuickNote,
+                &created_id,
+                crate::sync::OutboxOperation::Upsert,
+                created_payload,
+            )?;
             Ok(QuickNotesState { notes })
         })
     })
@@ -295,8 +302,17 @@ pub async fn quick_notes_update_note(
             }
 
             note.updated_at = crate::timestamp_string();
+            let updated_id = note.id.clone();
+            let updated_payload = serde_json::to_value(&*note).unwrap_or_default();
             sort_quick_notes(&mut notes);
             write_quick_notes_unlocked(&app, &notes)?;
+            crate::sync::enqueue_outbox_event(
+                &app,
+                crate::sync::OutboxEntityKind::QuickNote,
+                &updated_id,
+                crate::sync::OutboxOperation::Upsert,
+                updated_payload,
+            )?;
             Ok(QuickNotesState { notes })
         })
     })
@@ -314,9 +330,52 @@ pub async fn quick_notes_delete_note(
             let mut notes = read_quick_notes_unlocked(&app)?;
             notes.retain(|note| note.id != note_id);
             write_quick_notes_unlocked(&app, &notes)?;
+            crate::sync::enqueue_outbox_event(
+                &app,
+                crate::sync::OutboxEntityKind::QuickNote,
+                &note_id,
+                crate::sync::OutboxOperation::Delete,
+                serde_json::json!({ "id": note_id }),
+            )?;
             Ok(QuickNotesState { notes })
         })
     })
     .await
     .map_err(|err| format!("quick notes delete task failed: {err}"))?
+}
+
+/// Apply remote QuickNote upserts and deletions pulled from the cloud sync server.
+pub(crate) fn apply_pulled_quick_notes(
+    app: &AppHandle,
+    upserts: &[serde_json::Value],
+    removed_ids: &[String],
+) -> Result<(), String> {
+    if upserts.is_empty() && removed_ids.is_empty() {
+        return Ok(());
+    }
+    let next_state = with_quick_notes_store_lock(app, || {
+        let mut notes = read_quick_notes_unlocked(app)?;
+        for rid in removed_ids {
+            notes.retain(|note| &note.id != rid);
+        }
+        for raw in upserts {
+            let Ok(remote) = serde_json::from_value::<QuickNote>(raw.clone()) else {
+                continue;
+            };
+            if let Some(existing) = notes.iter_mut().find(|n| n.id == remote.id) {
+                if remote.updated_at >= existing.updated_at {
+                    *existing = remote;
+                }
+            } else {
+                notes.push(remote);
+            }
+        }
+        sort_quick_notes(&mut notes);
+        write_quick_notes_unlocked(app, &notes)?;
+        Ok(QuickNotesState { notes })
+    })?;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit("quick-notes-updated", next_state);
+    }
+    Ok(())
 }

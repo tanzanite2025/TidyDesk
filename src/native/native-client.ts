@@ -1,8 +1,29 @@
 import { createTauriNativeClient } from './tauri-adapter';
-import type { NativeClient } from './types';
+import { createWebHttpNativeClient } from './web-http-adapter';
+import type { NativeCapabilities, NativeClient } from './types';
 import type { OpenAppPickerPayload } from '../types/tidydesk-api';
 
-export const nativeClient: NativeClient = createTauriNativeClient();
+function isMobileWebMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  const isTauri = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+  if (isTauri) return false;
+  return new URLSearchParams(window.location.search).get('mode') === 'mobile';
+}
+
+export const nativeClient: NativeClient = isMobileWebMode()
+  ? createWebHttpNativeClient()
+  : createTauriNativeClient();
+
+export function getNativeCapabilities(): NativeCapabilities {
+  return (
+    nativeClient.capabilities ?? {
+      canScreenSnip: true,
+      canUseNativeFileDialog: true,
+      canUseGlobalHotkeys: true,
+      platformLayout: 'desktop'
+    }
+  );
+}
 
 interface TidyDeskTestBridge {
   isTauriAvailable: () => boolean;

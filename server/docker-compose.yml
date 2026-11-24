@@ -1,0 +1,43 @@
+services:
+  sync-api:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "src/index.mjs"]
+    ports:
+      - "8787:8787"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      TIDYDESK_DATA_DIR: "/data/sync"
+      # 生产环境请配置严格 Token 映射，示例：{"alice":"replace-strong-token"}
+      # TIDYDESK_SYNC_TOKENS: '{"alice":"secret-token"}'
+    volumes:
+      - ./:/app:ro
+      - tidydesk_sync_data:/data/sync
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tidydesk
+      POSTGRES_USER: tidydesk
+      POSTGRES_PASSWORD: change-me-in-production
+    volumes:
+      - tidydesk_pg:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    profiles: ["prod-db"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: tidydesk
+      MINIO_ROOT_PASSWORD: change-me-in-production
+    volumes:
+      - tidydesk_minio:/data
+    profiles: ["prod-db"]
+
+volumes:
+  tidydesk_sync_data:
+  tidydesk_pg:
+  tidydesk_minio:

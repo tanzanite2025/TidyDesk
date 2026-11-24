@@ -7,16 +7,22 @@
 
 ## [未发布]
 
-### ✨ 新增与演进（Phase 1）
-- **TODO 看板富媒体与拍照附件**：
-  - 支持 TODO 卡片新增图片附件（摄像头实时拍照抓拍、卡片详情一键框选截屏附带、`rfd` 本地选图、编辑区 `Ctrl+V` 贴图），并支持设为看板封面缩略图与点击大图预览。
-  - 原图与最大边 360px 缩略图独立保存至 `todos/attachments/<card_id>/`，经 `tidydesk-asset://localhost/todos/<card_id>/<file>` 受控只读协议加载；删卡自动两阶段隔离清理整卡附件目录。
+### ✨ 新增与演进（Phase 1 ~ Phase 4）
+- **TODO 看板富媒体与拍照附件（Phase 1 & 多维边界加固）**：
+  - **三层非破坏性图片管线与跨平台纯 Rust SHA-256**：原图母版无损保留并采用纯 Rust FIPS 180-4 算法计算 SHA-256 指纹（移除对 Win32 `BCrypt` 的依赖），Rust 解码端读取标准 EXIF 朝向并设解码像素上限，生成 `480px` 缩略图、默认竖图偏上 `focalPoint` 与独立全屏灯箱 `TodoLightboxModal`。
+  - **结构化子任务系统与统一多媒体归属模型**：主卡与子任务共用 `cardId + optional subtaskId` 归属抽象与相机/截屏/拖拽/`Ctrl+V` 贴图流水线，并落地新建防误关、拖图/外链防跳转、子任务串行保存排队、窗体隐藏自动停相机与截屏异常强制恢窗等多维防呆机制。
+- **本地优先多账号隔离与同步底座（Phase 2 & Phase 2.5）**：
+  - 账号目录隔离至 `accounts/<user_id>/`；Windows DPAPI 加密落盘访问 Token（`token.dpapi`），账号级 `sync-profile.json` 保留各自历史 `lastSyncCursor` 与服务端点。
+  - 看板列表前后端统一改按 `ranking.rs` `position` 字典序单源排序；Outbox `Card` 快照补全 `.md` 正文与 `baseRevision`，接入 `OutboxEntityKind::Attachment` 文件级队列与导入批量入队，满队列显式阻断报错不丢数。
+- **最小可用协同服务端与异步双向增量同步（Phase 3）**：
+  - 新增 `server/`（零依赖 Node.js 22 服务端 MVP、RBAC 权限校验、SHA-256 媒体去重秒传、Blob 读写、`push/pull` 增量游标及成员级合并，配套 PostgreSQL `schema.sql` 与 `docker-compose.yml`）。
+  - 客户端接入 `reqwest 0.13.3` 实现 `HttpSyncClient` 与 `execute_account_sync`（缩略图先传与自动预取、原图秒传/上传、`subtasks` 显式软删墓碑 + `sync/merge.rs` 成员级并集归并 + 长正文冲突保留副本 + Tombstone GC、`asset_protocol.rs` 缺失原图按需懒下载回写），`AccountSyncCard` 支持在线更新服务端点与凭据，且严格保持登录只鉴权、不阻塞拉取业务数据。
+- **实时协同推送与移动端 Web/H5 适配（Phase 4）**：
+  - 服务端 `server/` 新增 SSE 实时推送接口 `GET /api/v1/sync/events`（`push` 提交后毫秒级广播 `sync-changed`）、CORS 放行及构建产物 `dist/` 同域静态托管；Rust 端新增 [realtime.rs](./src-tauri/src/sync/realtime.rs) 与 `sync_set_realtime_enabled` 开关（支持账号切换自动停流与断线退避重连，严守登录与拉取分离红线）。
+  - 前端扩展 `NativeClient.capabilities` 能力开关，移动端自动隐藏桌面 GDI 截屏并开放手机原生后置相机直拍与相册多选；新增 [web-http-adapter.ts](./src/native/web-http-adapter.ts)（WebCrypto SHA-256 + 480px 缩略图生成 + 受控 Blob URL 渲染 + SSE 监听）与 [MobileTodoApp.tsx](./src/modules/mobile/MobileTodoApp.tsx)（`?mode=mobile`）。
+- 新增体系化跨端架构文档 [TODO_SYNC_AND_MOBILE_ARCHITECTURE.md](./docs/development/TODO_SYNC_AND_MOBILE_ARCHITECTURE.md) 与 [TODO_MEDIA_AND_COLLAB_ROADMAP.md](./docs/development/TODO_MEDIA_AND_COLLAB_ROADMAP.md) 双向互链。
 
 ### 计划中
-- 客户端多账号本地隔离与协作并发元数据（Phase 2）
-- 最小可用服务端与离线优先增量同步（Phase 3）
-- WebSocket 实时推送与 Web/移动端拍照扩展（Phase 4）
-- 云同步功能
 - 主题系统（浅色/深色/自动）
 - 文件搜索功能
 - 导出/导入配置

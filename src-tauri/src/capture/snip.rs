@@ -15,7 +15,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use std::time::Duration;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 #[derive(Debug, Clone)]
 pub struct PendingSticker {
@@ -29,12 +29,14 @@ pub enum SnipTarget {
     Sticker,
     TodoCard {
         card_id: String,
+        subtask_id: Option<String>,
     },
 }
 
 #[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
+    pub snip_session_active: AtomicBool,
     pub frozen_image_version: AtomicU64,
     pub frozen_image_bytes: Mutex<Option<(u64, Arc<Vec<u8>>)>>,
     pub frozen_image_error: Mutex<Option<String>>,
@@ -74,15 +76,37 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
     open_snip_window_with_target(app, SnipTarget::Sticker)
 }
 
-pub fn open_snip_window_for_todo_card(app: &AppHandle, card_id: String) -> Result<(), String> {
+pub fn open_snip_window_for_todo_card(
+    app: &AppHandle,
+    card_id: String,
+    subtask_id: Option<String>,
+) -> Result<(), String> {
+    if is_snip_capture_in_flight(app) {
+        return Err("截屏正在进行中，请先完成或取消当前截屏".to_string());
+    }
     crate::tool_windows::hide_todo_window_for_snip(app)?;
     std::thread::sleep(Duration::from_millis(90));
-    open_snip_window_with_target(app, SnipTarget::TodoCard { card_id })
+    if let Err(err) = open_snip_window_with_target(
+        app,
+        SnipTarget::TodoCard {
+            card_id,
+            subtask_id,
+        },
+    ) {
+        app.state::<SnipCaptureState>()
+            .snip_session_active
+            .store(false, Ordering::Release);
+        let _ = take_snip_target(app);
+        let _ = clear_frozen_background(app);
+        let _ = crate::tool_windows::show_todo_window_after_snip(app);
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(), String> {
     if is_snip_capture_in_flight(app) {
-        return Ok(());
+        return Err("A screenshot capture is already in progress".to_string());
     }
 
     let state = app.state::<SnipCaptureState>();
@@ -93,6 +117,7 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
             .map_err(|_| "failed to lock snip target".to_string())?;
         *target_guard = target;
     }
+    state.snip_session_active.store(true, Ordering::Release);
 
     // 在打开窗口之前，先静默截取全屏
     let monitor = snip_open_monitor(app)?;
@@ -185,6 +210,9 @@ pub async fn snip_complete_selection(
 ) -> Result<Value, String> {
     require_snip_window(&window, "snip_complete_selection")?;
     begin_snip_capture(&app)?;
+    app.state::<SnipCaptureState>()
+        .snip_session_active
+        .store(false, Ordering::Release);
     let target = take_snip_target(&app);
     let is_todo_target = matches!(target, SnipTarget::TodoCard { .. });
     let app_handle = app.clone();
@@ -196,6 +224,13 @@ pub async fn snip_complete_selection(
     let result = capture_result
         .map_err(|err| err.to_string())
         .and_then(|result| result);
+    if is_todo_target {
+        if let Err(err) = &result {
+            if let Some(todo_win) = app.get_webview_window("todos") {
+                let _ = todo_win.emit("todo-snip-error", json!({ "error": err }));
+            }
+        }
+    }
     if let Err(cleanup_err) = cleanup_after_snip_selection(&app, is_todo_target) {
         if result.is_ok() {
             return Err(cleanup_err);
@@ -212,6 +247,9 @@ pub async fn snip_complete_selection(
 
 #[tauri::command]
 pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
+    app.state::<SnipCaptureState>()
+        .snip_session_active
+        .store(false, Ordering::Release);
     let target = take_snip_target(&app);
     crate::tool_windows::close_snip_window(&app)?;
     clear_frozen_background(&app)?;
@@ -222,6 +260,25 @@ pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
         crate::shell::recover_shell_windows(&app)?;
     }
     Ok(json!({ "success": true }))
+}
+
+/// Recover target window state if the snip overlay window was closed externally by OS/Alt+F4.
+pub fn handle_snip_window_aborted(app: &AppHandle) {
+    let was_active = app
+        .state::<SnipCaptureState>()
+        .snip_session_active
+        .swap(false, Ordering::AcqRel);
+    if !was_active {
+        return;
+    }
+    let target = take_snip_target(app);
+    let _ = clear_frozen_background(app);
+    finish_snip_capture(app);
+    if matches!(target, SnipTarget::TodoCard { .. }) {
+        let _ = crate::tool_windows::show_todo_window_after_snip(app);
+    } else {
+        let _ = crate::shell::recover_shell_windows(app);
+    }
 }
 
 pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> {
@@ -356,8 +413,18 @@ fn capture_selection(
     crate::tool_windows::close_snip_window(app)?;
     clear_frozen_background(app)?;
 
-    if let SnipTarget::TodoCard { card_id } = target {
-        crate::todos::attach_png_to_todo_card(app, &card_id, "screenshot.png", &png)?;
+    if let SnipTarget::TodoCard {
+        card_id,
+        subtask_id,
+    } = target
+    {
+        crate::todos::attach_png_to_todo_card(
+            app,
+            &card_id,
+            subtask_id.as_deref(),
+            "screenshot.png",
+            &png,
+        )?;
         return Ok(CapturedSticker {
             sticker_id: None,
             pasted: false,

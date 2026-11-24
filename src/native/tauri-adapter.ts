@@ -5,8 +5,12 @@ import type {
   UpdateQuickNoteInput
 } from '../types/quick-note';
 import type {
+  AccountSessionSnapshot,
   CreateTodoCardInput,
+  ImportLocalTodosResult,
   MoveTodoCardInput,
+  SwitchAccountSessionInput,
+  SyncStatusSnapshot,
   TodoCounts,
   TodoState,
   UpdateTodoCardInput
@@ -176,6 +180,12 @@ function normalizeDesktopFilesResult(result: DesktopFilesResult): DesktopFilesRe
 export function createTauriNativeClient(): NativeClient {
   return {
     isAvailable: isTauriRuntime,
+    capabilities: {
+      canScreenSnip: true,
+      canUseNativeFileDialog: true,
+      canUseGlobalHotkeys: true,
+      platformLayout: 'desktop'
+    },
     files: {
       readDesktopFiles: async () => normalizeDesktopFilesResult(await invoke<DesktopFilesResult>('files_read_desktop_files')),
       readIcons: (files: FileIconRequest[]) =>
@@ -205,12 +215,33 @@ export function createTauriNativeClient(): NativeClient {
       moveCard: (payload: MoveTodoCardInput) => invoke<TodoState>('todos_move_card', { payload }),
       getCardDetail: (cardId: string) => invoke('todos_get_card_detail', { cardId }),
       addAttachmentBytes: payload => invoke<TodoState>('todos_add_attachment_bytes', { payload }),
-      pickAndAddAttachment: (cardId: string) => invoke('todos_pick_and_add_attachment', { cardId }),
+      pickAndAddAttachment: (cardId: string, subtaskId?: string | null) =>
+        invoke('todos_pick_and_add_attachment', { cardId, subtaskId: subtaskId ?? null }),
       deleteAttachment: payload => invoke<TodoState>('todos_delete_attachment', { payload }),
       setCardCover: payload => invoke<TodoState>('todos_set_card_cover', { payload }),
-      startSnipForCard: (cardId: string) => invoke('todos_start_snip_for_card', { cardId }),
+      updateAttachmentMeta: payload => invoke<TodoState>('todos_update_attachment_meta', { payload }),
+      startSnipForCard: (cardId: string, subtaskId?: string | null) =>
+        invoke('todos_start_snip_for_card', { cardId, subtaskId: subtaskId ?? null }),
       onCountsUpdated: callback => onTauriEvent<TodoCounts>('todo-counts-updated', callback),
-      onUpdated: callback => onTauriEvent<TodoState>('todos-updated', callback)
+      onUpdated: callback => onTauriEvent<TodoState>('todos-updated', callback),
+      onSnipError: callback => onTauriEvent<{ error: string }>('todo-snip-error', callback)
+    },
+    accounts: {
+      getSession: () => invoke<AccountSessionSnapshot>('accounts_get_session'),
+      switchSession: (payload: SwitchAccountSessionInput) =>
+        invoke<AccountSessionSnapshot>('accounts_switch_session', { payload }),
+      logoutToLocal: () => invoke<AccountSessionSnapshot>('accounts_logout_to_local'),
+      importLocalTodos: () => invoke<ImportLocalTodosResult>('accounts_import_local_todos'),
+      onSessionChanged: callback =>
+        onTauriEvent<AccountSessionSnapshot>('account-session-changed', callback)
+    },
+    sync: {
+      getStatus: () => invoke<SyncStatusSnapshot>('sync_get_status'),
+      clearOutbox: () => invoke<SyncStatusSnapshot>('sync_clear_outbox'),
+      runOnce: () => invoke<SyncStatusSnapshot>('sync_run_once'),
+      setRealtimeEnabled: (enabled: boolean) =>
+        invoke<SyncStatusSnapshot>('sync_set_realtime_enabled', { enabled }),
+      onRealtimeApplied: callback => onTauriEvent('sync-realtime-applied', callback)
     },
     quickNotes: {
       readState: () => invoke<QuickNotesState>('quick_notes_read_state'),

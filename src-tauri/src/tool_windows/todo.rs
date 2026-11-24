@@ -1,9 +1,13 @@
 use crate::shell::{
     apply_window_bounds, handle_window_bounds, hide_drawer_window_now, set_handle_always_on_top,
-    shell_snapshot, update_active_module, update_shell_state, webview_url_for_mode, ShellState,
+    shell_snapshot, todo_window_bounds, update_active_module, update_shell_state,
+    webview_url_for_mode, ShellState,
 };
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
+};
 
 const TODO_WINDOW_LABEL: &str = "todos";
 const TODO_MODULE_ID: &str = "todos";
@@ -38,19 +42,37 @@ fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
     });
 }
 
+fn bring_todo_window_to_front(window: &WebviewWindow) -> Result<(), String> {
+    if window.is_minimized().unwrap_or(false) {
+        window.unminimize().map_err(|err| err.to_string())?;
+    }
+    window.show().map_err(|err| err.to_string())?;
+    let _ = window.set_always_on_top(true);
+    let focus_res = window.set_focus();
+    let _ = window.set_always_on_top(false);
+    focus_res.map_err(|err| err.to_string())
+}
+
 fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(TODO_WINDOW_LABEL).is_some() {
         return Ok(());
     }
 
+    let bounds = todo_window_bounds(app)?;
     let window =
         WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("tauri-todos")?)
             .title("TidyDesk Todos")
-            .inner_size(980.0, 680.0)
+            .min_inner_size(760.0, 560.0)
             .resizable(true)
-            .center()
+            .visible(false)
             .build()
             .map_err(|err| err.to_string())?;
+    window
+        .set_size(PhysicalSize::new(bounds.width, bounds.height))
+        .map_err(|err| err.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(bounds.x, bounds.y))
+        .map_err(|err| err.to_string())?;
     register_todo_window_lifecycle(&window, app.clone());
     Ok(())
 }
@@ -59,8 +81,16 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
     let shell = app.state::<ShellState>();
     let current = shell_snapshot(&shell)?;
     if current.active_module.as_deref() == Some(TODO_MODULE_ID) {
-        close_todo_window_internal(app)?;
-        return Ok(());
+        let should_restore = app
+            .get_webview_window(TODO_WINDOW_LABEL)
+            .map(|window| {
+                !window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false)
+            })
+            .unwrap_or(true);
+        if !should_restore {
+            close_todo_window_internal(app)?;
+            return Ok(());
+        }
     }
 
     hide_drawer_window_now(app, &shell)?;
@@ -69,7 +99,7 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
     }
     ensure_todo_window(app)?;
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
-        window.show().map_err(|err| err.to_string())?;
+        bring_todo_window_to_front(&window)?;
     }
     update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))
 }
@@ -92,8 +122,7 @@ pub fn show_todo_window_after_snip(app: &AppHandle) -> Result<(), String> {
     let shell = app.state::<ShellState>();
     ensure_todo_window(app)?;
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
-        window.show().map_err(|err| err.to_string())?;
-        window.set_focus().map_err(|err| err.to_string())?;
+        bring_todo_window_to_front(&window)?;
     }
     update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))
 }

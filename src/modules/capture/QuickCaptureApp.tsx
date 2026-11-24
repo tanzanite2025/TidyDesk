@@ -62,7 +62,7 @@ export const QuickCaptureApp: React.FC = () => {
 
   return (
     <div
-      className="flex h-screen w-full select-none flex-col overflow-hidden rounded-xl border border-white/[0.1] bg-[#121621]/96 text-slate-100 shadow-2xl"
+      className="flex h-screen w-full select-none flex-col overflow-hidden rounded-xl border border-white/[0.1] bg-[#121621]/[0.96] text-slate-100 shadow-2xl"
       onKeyDown={event => {
         if (event.key === 'Escape') close();
         if (event.ctrlKey && event.key === 'Enter') {
@@ -112,7 +112,7 @@ export const QuickCaptureApp: React.FC = () => {
           type="button"
           onClick={save}
           disabled={isSaving || (!title.trim() && !content.trim())}
-          className="flex h-9 items-center gap-2 rounded-lg bg-sky-400/18 px-3 text-[12px] font-bold text-sky-100 hover:bg-sky-400/26 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 items-center gap-2 rounded-lg bg-sky-400/20 px-3 text-[12px] font-bold text-sky-100 hover:bg-sky-400/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           保存

@@ -163,3 +163,6 @@ public
 # Tauri build artifacts
 /release/
 /src-tauri/target/
+
+# Sync server runtime storage
+/server/data/

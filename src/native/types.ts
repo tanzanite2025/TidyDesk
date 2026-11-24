@@ -44,15 +44,20 @@ import type {
   UpdateQuickNoteInput
 } from '../types/quick-note';
 import type {
+  AccountSessionSnapshot,
   AddTodoAttachmentBytesInput,
   CreateTodoCardInput,
   DeleteTodoAttachmentInput,
+  ImportLocalTodosResult,
   MoveTodoCardInput,
   PickTodoAttachmentResult,
   SetTodoCardCoverInput,
+  SwitchAccountSessionInput,
+  SyncStatusSnapshot,
   TodoCard,
   TodoCounts,
   TodoState,
+  UpdateTodoAttachmentMetaInput,
   UpdateTodoCardInput
 } from '../types/todo';
 
@@ -87,12 +92,14 @@ export interface NativeTodosClient {
   moveCard: (payload: MoveTodoCardInput) => Promise<TodoState>;
   getCardDetail: (cardId: string) => Promise<TodoCard>;
   addAttachmentBytes: (payload: AddTodoAttachmentBytesInput) => Promise<TodoState>;
-  pickAndAddAttachment: (cardId: string) => Promise<PickTodoAttachmentResult>;
+  pickAndAddAttachment: (cardId: string, subtaskId?: string | null) => Promise<PickTodoAttachmentResult>;
   deleteAttachment: (payload: DeleteTodoAttachmentInput) => Promise<TodoState>;
   setCardCover: (payload: SetTodoCardCoverInput) => Promise<TodoState>;
-  startSnipForCard: (cardId: string) => Promise<unknown>;
+  updateAttachmentMeta: (payload: UpdateTodoAttachmentMetaInput) => Promise<TodoState>;
+  startSnipForCard: (cardId: string, subtaskId?: string | null) => Promise<unknown>;
   onCountsUpdated: (callback: (payload: TodoCounts) => void) => (() => void) | undefined;
   onUpdated: (callback: (payload: TodoState) => void) => (() => void) | undefined;
+  onSnipError?: (callback: (payload: { error: string }) => void) => (() => void) | undefined;
 }
 
 export interface NativeQuickNotesClient {
@@ -175,12 +182,44 @@ export interface NativeEventsClient {
   send: (channel: TidyDeskSendChannel) => void;
 }
 
+export interface NativeAccountsClient {
+  getSession: () => Promise<AccountSessionSnapshot>;
+  switchSession: (payload: SwitchAccountSessionInput) => Promise<AccountSessionSnapshot>;
+  logoutToLocal: () => Promise<AccountSessionSnapshot>;
+  importLocalTodos: () => Promise<ImportLocalTodosResult>;
+  onSessionChanged: (callback: (payload: AccountSessionSnapshot) => void) => (() => void) | undefined;
+}
+
+export interface SyncRealtimeAppliedPayload {
+  pulledCards: number;
+  pulledNotes: number;
+  cursor: string;
+}
+
+export interface NativeSyncClient {
+  getStatus: () => Promise<SyncStatusSnapshot>;
+  clearOutbox: () => Promise<SyncStatusSnapshot>;
+  runOnce: () => Promise<SyncStatusSnapshot>;
+  setRealtimeEnabled?: (enabled: boolean) => Promise<SyncStatusSnapshot>;
+  onRealtimeApplied?: (callback: (payload: SyncRealtimeAppliedPayload) => void) => (() => void) | undefined;
+}
+
+export interface NativeCapabilities {
+  canScreenSnip: boolean;
+  canUseNativeFileDialog: boolean;
+  canUseGlobalHotkeys: boolean;
+  platformLayout: 'desktop' | 'mobile';
+}
+
 export interface NativeClient {
   isAvailable: () => boolean;
+  capabilities?: NativeCapabilities;
   files: NativeFilesClient;
   drawers: NativeDrawersClient;
   shortcuts: NativeShortcutsClient;
   todos: NativeTodosClient;
+  accounts: NativeAccountsClient;
+  sync: NativeSyncClient;
   quickNotes: NativeQuickNotesClient;
   apps: NativeAppsClient;
   windows: NativeWindowsClient;

@@ -7,6 +7,7 @@ import { HotkeySettingsDialog } from './HotkeySettingsDialog';
 import { AppInfoCard } from './settings/AppInfoCard';
 import { StickerSettingsCard } from './settings/StickerSettingsCard';
 import { ResidentSettingsCard } from './settings/ResidentSettingsCard';
+import { AccountSyncCard } from './settings/AccountSyncCard';
 import { UpdateSectionCard } from './settings/UpdateSectionCard';
 
 interface SettingsPanelProps {
@@ -115,6 +116,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             isSavingResident={isSavingResident}
             onUpdateResident={payload => void updateResidentSettings(payload)}
           />
+          <AccountSyncCard />
           <UpdateSectionCard
             residentSettings={residentSettings}
             isSavingResident={isSavingResident}

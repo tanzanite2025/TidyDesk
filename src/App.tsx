@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { DrawerApp } from './modules/drawer/DrawerApp';
 import { HandleApp } from './modules/handle/HandleApp';
 import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
+import { MobileTodoApp } from './modules/mobile/MobileTodoApp';
 import { RailApp } from './modules/rail/RailApp';
 import { SnipOverlayApp } from './modules/stickers/SnipOverlayApp';
 import { TodoPanelApp } from './modules/todos/TodoPanel';
@@ -23,6 +24,8 @@ const App: React.FC = () => {
     content = <RailApp />;
   } else if (windowMode === 'todos') {
     content = <TodoPanelApp />;
+  } else if (windowMode === 'mobile') {
+    content = <MobileTodoApp />;
   } else if (windowMode === 'capture') {
     content = <QuickCaptureApp />;
   } else if (windowMode === 'snip') {

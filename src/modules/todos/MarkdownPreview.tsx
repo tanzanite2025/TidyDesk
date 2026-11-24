@@ -27,7 +27,7 @@ function parseInline(text: string): React.ReactNode[] {
       const label = linkMatch?.[1] || token;
       const href = linkMatch?.[2] || '';
       nodes.push(isSafeLink(href)
-        ? <a key={`${match.index}-link`} href={href} className="text-sky-200 underline underline-offset-2">{label}</a>
+        ? <a key={`${match.index}-link`} href={href} target="_blank" rel="noopener noreferrer" className="text-sky-200 underline underline-offset-2">{label}</a>
         : label
       );
     }

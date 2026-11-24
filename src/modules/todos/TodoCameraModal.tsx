@@ -17,6 +17,7 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const mountedRef = useRef(true);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
   const [capturedPreviewUrl, setCapturedPreviewUrl] = useState<string | null>(null);
@@ -94,8 +95,10 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
   }, [capturedPreviewUrl]);
 
   useEffect(() => {
+    mountedRef.current = true;
     void startCamera();
     return () => {
+      mountedRef.current = false;
       stopStream();
       setCapturedPreviewUrl(prev => {
         if (prev) URL.revokeObjectURL(prev);
@@ -122,11 +125,13 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     canvas.toBlob(async blob => {
+      if (!mountedRef.current) return;
       if (!blob) {
         setCameraError('照片编码失败。');
         return;
       }
       const buffer = await blob.arrayBuffer();
+      if (!mountedRef.current) return;
       const bytes = Array.from(new Uint8Array(buffer));
       clearPreview();
       setCapturedBytes(bytes);
@@ -145,15 +150,39 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
     }
   };
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     stopStream();
     clearPreview();
     onClose();
-  };
+  }, [clearPreview, onClose, stopStream]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isUploading) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleClose();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopStream();
+        if (!isUploading) {
+          handleClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [handleClose, isUploading]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-      <div className="flex w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#131724] shadow-2xl">
+      <div className="flex w-full max-w-[540px] flex-col overflow-hidden rounded-2xl border border-white/[0.12] bg-[#131724] shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/[0.08] px-4 py-3">
           <div className="flex items-center gap-2 text-[13px] font-bold text-slate-100">
             <Camera size={16} className="text-sky-300" />
@@ -161,8 +190,9 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
           </div>
           <button
             type="button"
+            disabled={isUploading}
             onClick={handleClose}
-            className="rounded-md p-1.5 text-slate-400 hover:bg-white/10 hover:text-slate-100"
+            className="rounded-md p-1.5 text-slate-400 hover:bg-white/10 hover:text-slate-100 disabled:opacity-40"
           >
             <X size={15} />
           </button>
@@ -229,8 +259,9 @@ export const TodoCameraModal: React.FC<TodoCameraModalProps> = ({
         <div className="flex items-center justify-end gap-2 border-t border-white/[0.08] px-4 py-3">
           <button
             type="button"
+            disabled={isUploading}
             onClick={handleClose}
-            className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-slate-400 hover:bg-white/[0.08] hover:text-slate-100"
+            className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-slate-400 hover:bg-white/[0.08] hover:text-slate-100 disabled:opacity-40"
           >
             取消
           </button>
