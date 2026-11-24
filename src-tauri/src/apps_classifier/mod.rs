@@ -160,7 +160,7 @@ pub fn complete_installed_apps(metadata: ScanMetadataResult) -> ScanInstalledRes
         });
     }
 
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
 
     ScanInstalledResult {
         apps,

@@ -112,7 +112,7 @@ pub fn capture_monitor_region_png(
             return Err("failed to read captured bitmap data".to_string());
         }
 
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
             pixel[3] = 255;
         }

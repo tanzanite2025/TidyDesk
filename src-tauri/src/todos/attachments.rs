@@ -127,11 +127,10 @@ pub(crate) fn compute_sha256_hex(bytes: &[u8]) -> Result<String, String> {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
-        for (slot, word_bytes) in w[..16].iter_mut().zip(chunk.chunks_exact(4)) {
-            *slot =
-                u32::from_be_bytes([word_bytes[0], word_bytes[1], word_bytes[2], word_bytes[3]]);
+        for (slot, word_bytes) in w[..16].iter_mut().zip(chunk.as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*word_bytes);
         }
         for i in 16..64 {
             let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);

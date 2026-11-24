@@ -246,7 +246,7 @@ fn icon_handle_to_png_bytes(
         let _ = ReleaseDC(None, screen_dc);
 
         let mut rgba = pixels;
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
 
