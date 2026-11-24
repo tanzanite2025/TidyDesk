@@ -174,7 +174,10 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const draftRef = useRef({ cardId: null as string | null, title: '', content: '' });
+  const isDirtyRef = useRef(false);
+  isDirtyRef.current = isDirty;
   const subtaskSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSubtaskSavesRef = useRef(0);
 
   // Reset form when entering Create mode
   useEffect(() => {
@@ -224,12 +227,14 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
           setEditorMode('write');
           setIsDirty(false);
           setModalNotice(null);
-        } else if (!isDirty) {
+        } else if (!isDirtyRef.current) {
           setTitle(detail.title);
           setContent(detail.content ?? '');
         }
         setColumnId(detail.columnId);
-        setSubtasks(detail.subtasks || []);
+        if (isInitialHydrate || pendingSubtaskSavesRef.current === 0) {
+          setSubtasks(detail.subtasks || []);
+        }
       })
       .finally(() => {
         if (!disposed) setIsLoadingDetail(false);
@@ -241,7 +246,6 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
   }, [
     detailCard?.id,
     getCardDetail,
-    isDirty,
     mode,
     selectedCardSummary?.id,
     selectedCardSummary?.revision
@@ -444,14 +448,19 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
       updatedAt: item.updatedAt
     }));
 
+    pendingSubtaskSavesRef.current += 1;
     const task = subtaskSaveQueueRef.current.then(async () => {
-      const ok = await updateCard({ id: cardId, subtasks: serialized });
-      if (!ok) {
-        const fresh = await getCardDetail(cardId);
-        if (fresh && draftRef.current.cardId === cardId) {
-          setDetailCard(fresh);
-          setSubtasks(fresh.subtasks || []);
+      try {
+        const ok = await updateCard({ id: cardId, subtasks: serialized });
+        if (!ok) {
+          const fresh = await getCardDetail(cardId);
+          if (fresh && draftRef.current.cardId === cardId) {
+            setDetailCard(fresh);
+            setSubtasks(fresh.subtasks || []);
+          }
         }
+      } finally {
+        pendingSubtaskSavesRef.current = Math.max(0, pendingSubtaskSavesRef.current - 1);
       }
     });
     subtaskSaveQueueRef.current = task.catch(() => undefined);

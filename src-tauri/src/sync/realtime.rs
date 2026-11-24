@@ -6,10 +6,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
+const REALTIME_PUSH_DEBOUNCE_MS: u64 = 1200;
+
 #[derive(Debug, Default)]
 pub struct SyncRealtimeState {
     pub enabled: AtomicBool,
     pub generation: AtomicU64,
+    pub push_generation: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -78,10 +81,62 @@ pub fn is_realtime_sync_active(app: &AppHandle) -> bool {
         .load(Ordering::Acquire)
 }
 
+fn emit_realtime_state_changed(app: &AppHandle, realtime_active: bool, reason: Option<&str>) {
+    let _ = app.emit(
+        "sync-realtime-state-changed",
+        serde_json::json!({
+            "realtimeActive": realtime_active,
+            "reason": reason
+        }),
+    );
+}
+
 pub fn stop_realtime_sync(app: &AppHandle) {
     let state = app.state::<SyncRealtimeState>();
     state.enabled.store(false, Ordering::Release);
     state.generation.fetch_add(1, Ordering::AcqRel);
+    state.push_generation.fetch_add(1, Ordering::AcqRel);
+    emit_realtime_state_changed(app, false, None);
+}
+
+pub fn schedule_realtime_push_if_active(app: &AppHandle) {
+    if !is_realtime_sync_active(app) {
+        return;
+    }
+    let state = app.state::<SyncRealtimeState>();
+    let realtime_gen = state.generation.load(Ordering::Acquire);
+    let push_gen = state.push_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let app_handle = app.clone();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(REALTIME_PUSH_DEBOUNCE_MS));
+        if !is_generation_current(&app_handle, realtime_gen)
+            || app_handle
+                .state::<SyncRealtimeState>()
+                .push_generation
+                .load(Ordering::Acquire)
+                != push_gen
+        {
+            return;
+        }
+        let app_for_sync = app_handle.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Ok(report) = execute_account_sync(&app_for_sync).await {
+                let cursor = load_session(&app_for_sync)
+                    .ok()
+                    .and_then(|s| s.last_sync_cursor)
+                    .unwrap_or_default();
+                let _ = app_for_sync.emit(
+                    "sync-realtime-applied",
+                    serde_json::json!({
+                        "pulledCards": report.pulled_cards,
+                        "pulledNotes": report.pulled_notes,
+                        "cursor": cursor
+                    }),
+                );
+            }
+        });
+    });
 }
 
 pub fn set_realtime_sync_enabled(app: &AppHandle, enabled: bool) -> Result<bool, String> {
@@ -119,6 +174,7 @@ pub fn set_realtime_sync_enabled(app: &AppHandle, enabled: bool) -> Result<bool,
         run_sse_loop(app_handle, next_gen, sse_url, user_owned, token).await;
     });
 
+    emit_realtime_state_changed(app, true, None);
     Ok(true)
 }
 
@@ -175,6 +231,18 @@ async fn run_sse_loop(
                     }
                 }
             }
+            Ok(resp)
+                if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+                    || resp.status() == reqwest::StatusCode::FORBIDDEN =>
+            {
+                eprintln!(
+                    "[TIDYDESK][SSE] Stopping realtime sync after auth rejection ({})",
+                    resp.status()
+                );
+                stop_realtime_sync(&app);
+                emit_realtime_state_changed(&app, false, Some("auth_rejected"));
+                break;
+            }
             _ => {}
         }
 
@@ -228,16 +296,14 @@ async fn handle_sse_frame(app: &AppHandle, my_gen: u64, frame: &str) {
         return;
     }
     if let Ok(report) = execute_account_sync(app).await {
-        if let Some(main_win) = app.get_webview_window("main") {
-            let _ = main_win.emit(
-                "sync-realtime-applied",
-                serde_json::json!({
-                    "pulledCards": report.pulled_cards,
-                    "pulledNotes": report.pulled_notes,
-                    "cursor": remote_cursor
-                }),
-            );
-        }
+        let _ = app.emit(
+            "sync-realtime-applied",
+            serde_json::json!({
+                "pulledCards": report.pulled_cards,
+                "pulledNotes": report.pulled_notes,
+                "cursor": remote_cursor
+            }),
+        );
     }
 }
 

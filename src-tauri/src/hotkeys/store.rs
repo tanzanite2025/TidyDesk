@@ -11,6 +11,9 @@ pub(super) const DEFAULT_PASTE_PENDING_STICKER: &str = "ctrl+alt+v";
 #[serde(rename_all = "snake_case")]
 pub enum HotkeyAction {
     PastePendingSticker,
+    ToggleQuickCapture,
+    ToggleFilesDrawer,
+    NewStickyNote,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -32,6 +35,9 @@ pub(super) struct HotkeySettingsFile {
 pub(super) fn action_label(action: &HotkeyAction) -> &'static str {
     match action {
         HotkeyAction::PastePendingSticker => "贴出最近截图",
+        HotkeyAction::ToggleQuickCapture => "打开/收起快捷记录",
+        HotkeyAction::ToggleFilesDrawer => "打开/收起收纳抽屉",
+        HotkeyAction::NewStickyNote => "一键新建桌面便签",
     }
 }
 
@@ -95,20 +101,30 @@ fn default_hotkey_settings() -> HotkeySettingsFile {
     }
 }
 
-fn default_binding(action: HotkeyAction) -> StoredHotkeyBinding {
-    let accelerator = match action {
-        HotkeyAction::PastePendingSticker => Some(DEFAULT_PASTE_PENDING_STICKER.to_string()),
+pub(super) fn default_binding(action: HotkeyAction) -> StoredHotkeyBinding {
+    let (accelerator, enabled) = match action {
+        HotkeyAction::PastePendingSticker => {
+            (Some(DEFAULT_PASTE_PENDING_STICKER.to_string()), true)
+        }
+        HotkeyAction::ToggleQuickCapture
+        | HotkeyAction::ToggleFilesDrawer
+        | HotkeyAction::NewStickyNote => (None, false),
     };
     StoredHotkeyBinding {
         action,
         accelerator,
-        enabled: true,
+        enabled,
         updated_at: crate::timestamp_string(),
     }
 }
 
-fn all_actions() -> Vec<HotkeyAction> {
-    vec![HotkeyAction::PastePendingSticker]
+pub(super) fn all_actions() -> Vec<HotkeyAction> {
+    vec![
+        HotkeyAction::PastePendingSticker,
+        HotkeyAction::ToggleQuickCapture,
+        HotkeyAction::ToggleFilesDrawer,
+        HotkeyAction::NewStickyNote,
+    ]
 }
 
 pub(super) fn update_stored_binding(

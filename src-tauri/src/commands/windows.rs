@@ -4,7 +4,7 @@ use crate::shell::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +20,7 @@ pub async fn windows_control(
 ) -> Result<Value, String> {
     match payload.action.as_str() {
         "close" => {
-            for label in ["capture", "todos", "drawer", "main"] {
+            for label in ["capture", "todos", "app-picker", "main"] {
                 if let Some(window) = app.get_webview_window(label) {
                     let _ = window.close();
                 }
@@ -52,32 +52,10 @@ pub async fn windows_control(
             }
         }
         "open-capture" => {
-            let current = shell_snapshot(&shell)?;
-            if current.expanded && current.active_module.as_deref() == Some("capture") {
-                apply_drawer_state(&app, &shell, false)?;
-            } else {
-                if let Some(window) = app.get_webview_window("todos") {
-                    window.hide().map_err(|err| err.to_string())?;
-                }
-                apply_drawer_state(&app, &shell, true)?;
-                update_active_module(&app, &shell, Some("capture".to_string()))?;
-                emit_capture_opened(&app).await?;
-            }
+            crate::tool_windows::open_or_toggle_capture_window(&app, true).await?;
         }
-        "show-files-tab" => {
-            let current = shell_snapshot(&shell)?;
-            if !current.expanded {
-                apply_drawer_state(&app, &shell, true)?;
-            }
-            update_active_module(&app, &shell, Some("files".to_string()))?;
-        }
-        "show-capture-tab" => {
-            let current = shell_snapshot(&shell)?;
-            if !current.expanded {
-                apply_drawer_state(&app, &shell, true)?;
-            }
-            update_active_module(&app, &shell, Some("capture".to_string()))?;
-            emit_capture_opened(&app).await?;
+        "close-capture" => {
+            crate::tool_windows::close_capture_window(&app)?;
         }
         "close-panel" => {
             if shell_snapshot(&shell)?.active_module.as_deref() == Some("todos") {
@@ -105,22 +83,4 @@ pub async fn windows_control(
     }
 
     Ok(json!({ "success": true }))
-}
-
-async fn emit_capture_opened(app: &AppHandle) -> Result<(), String> {
-    let clipboard_text = tauri::async_runtime::spawn_blocking(|| match arboard::Clipboard::new() {
-        Ok(mut cb) => cb.get_text().unwrap_or_default(),
-        Err(_) => String::new(),
-    })
-    .await
-    .unwrap_or_default();
-    let payload = json!({ "clipboardText": clipboard_text });
-    for label in ["capture", "main"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .emit("capture-opened", payload.clone())
-                .map_err(|err| err.to_string())?;
-        }
-    }
-    Ok(())
 }

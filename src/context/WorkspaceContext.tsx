@@ -142,10 +142,15 @@ export const WorkspaceProvider: React.FC<{ children: ReactNode }> = ({ children 
       void refreshDesktop();
     });
 
+    const unsubscribeDrawerFilesChanged = nativeClient.files.onDrawerFilesChanged?.(() => {
+      void refreshDesktop();
+    });
+
     return () => {
       unsubscribeDeleted?.();
       unsubscribeRestored?.();
       unsubscribeValidated?.();
+      unsubscribeDrawerFilesChanged?.();
     };
   }, [refreshDesktop]);
 

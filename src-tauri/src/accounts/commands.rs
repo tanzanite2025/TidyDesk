@@ -3,12 +3,12 @@ use super::credentials::{
     store_account_token, StoredAccountSyncProfile,
 };
 use super::session::{
-    account_todos_root, account_workspace_dir, copy_dir_recursive_merge, legacy_local_todos_root,
-    load_session, sanitize_account_user_id, sanitize_workspace_id, set_cached_session,
-    snapshot_from_session, validate_server_endpoint, AccountSessionSnapshot, StoredAccountSession,
+    account_todos_root, copy_dir_recursive_merge, legacy_local_todos_root, load_session,
+    sanitize_account_user_id, sanitize_workspace_id, set_cached_session, snapshot_from_session,
+    validate_server_endpoint, workspace_data_dir, AccountSessionSnapshot, StoredAccountSession,
 };
 use crate::sync::http_transport::{HttpSyncClient, RemoteAuthSessionInfo, RemoteWorkspaceInfo};
-use crate::sync::outbox::has_pending_outbox_for_user;
+use crate::sync::outbox::has_pending_outbox_for_workspace;
 use crate::todos::model::merge_imported_todo_index;
 use crate::todos::store::{
     clear_todo_content_cache, read_todo_index_unlocked, todo_index_path_in_root,
@@ -54,10 +54,12 @@ fn validate_workspace_transition(
     existing_workspace: &str,
     next_workspace: &str,
 ) -> Result<bool, String> {
-    if existing_workspace == next_workspace {
+    let existing_norm = sanitize_workspace_id(Some(existing_workspace))?;
+    let next_norm = sanitize_workspace_id(Some(next_workspace))?;
+    if existing_norm == next_norm {
         return Ok(false);
     }
-    if has_pending_outbox_for_user(app, user_id)? {
+    if has_pending_outbox_for_workspace(app, user_id, &existing_norm)? {
         return Err(
             "切换同步工作区前请先同步或清空该账号本地待上传队列，避免不同空间数据串联".to_string(),
         );
@@ -119,7 +121,7 @@ fn apply_account_session_sync(
     };
     save_account_sync_profile(app, &user_id, &next_profile)?;
 
-    let user_todos_dir = account_workspace_dir(app, &user_id)?.join("todos");
+    let user_todos_dir = workspace_data_dir(app, &user_id, &workspace_id)?.join("todos");
     let next = StoredAccountSession {
         version: 1,
         active_user_id: Some(user_id),
@@ -148,6 +150,9 @@ fn apply_account_session_sync(
     })?;
 
     crate::todos::commands::refresh_and_emit_active_todo_state(app)?;
+    if let Err(err) = crate::quick_notes::refresh_and_emit_active_quick_notes_state(app) {
+        eprintln!("[TIDYDESK] Failed to refresh quick notes after workspace switch: {err}");
+    }
     emit_account_workspace_refreshed(app, &snapshot)?;
     Ok(snapshot)
 }
@@ -171,6 +176,7 @@ fn emit_account_workspace_refreshed(
     app: &AppHandle,
     snapshot: &AccountSessionSnapshot,
 ) -> Result<(), String> {
+    crate::sticky_notes::reload_sticky_notes_for_active_account(app);
     for label in ["handle", "main", "todos", "capture"] {
         if let Some(window) = app.get_webview_window(label) {
             window
@@ -292,16 +298,19 @@ pub async fn accounts_change_password(
     app: AppHandle,
     payload: ChangePasswordPayload,
 ) -> Result<(), String> {
-    let client = tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app))
-        .await
-        .map_err(|err| format!("load active HTTP client failed: {err}"))??;
+    let revoke_all = payload.revoke_all;
+    let app_for_client = app.clone();
+    let client =
+        tauri::async_runtime::spawn_blocking(move || build_active_http_client(&app_for_client))
+            .await
+            .map_err(|err| format!("load active HTTP client failed: {err}"))??;
     client
-        .change_password(
-            &payload.old_password,
-            &payload.new_password,
-            payload.revoke_all,
-        )
-        .await
+        .change_password(&payload.old_password, &payload.new_password, revoke_all)
+        .await?;
+    if revoke_all {
+        crate::sync::stop_realtime_sync(&app);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -361,6 +370,9 @@ pub async fn accounts_logout_to_local(app: AppHandle) -> Result<AccountSessionSn
         })?;
 
         crate::todos::commands::refresh_and_emit_active_todo_state(&app)?;
+        if let Err(err) = crate::quick_notes::refresh_and_emit_active_quick_notes_state(&app) {
+            eprintln!("[TIDYDESK] Failed to refresh quick notes after logout: {err}");
+        }
         emit_account_workspace_refreshed(&app, &snapshot)?;
         Ok(snapshot)
     })

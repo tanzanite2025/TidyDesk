@@ -250,6 +250,43 @@ pub fn account_workspace_dir(app: &AppHandle, user_id: &str) -> Result<PathBuf, 
     Ok(workspace)
 }
 
+fn encode_workspace_storage_key(workspace_id: &str) -> String {
+    let mut encoded = String::with_capacity(workspace_id.len());
+    for ch in workspace_id.chars() {
+        match ch {
+            '-' => encoded.push_str("--"),
+            ':' => encoded.push_str("-c"),
+            _ => encoded.push(ch),
+        }
+    }
+    encoded
+}
+
+pub(crate) fn workspace_data_dir_from_account_dir(
+    account_dir: &Path,
+    workspace_id: &str,
+) -> Result<PathBuf, String> {
+    let safe_ws = sanitize_workspace_id(Some(workspace_id))?;
+    if safe_ws == DEFAULT_WORKSPACE_ID {
+        return Ok(account_dir.to_path_buf());
+    }
+    let workspaces_root = account_dir.join("workspaces");
+    let target = workspaces_root.join(encode_workspace_storage_key(&safe_ws));
+    if !crate::is_path_inside(&target, &workspaces_root) {
+        return Err("Unsafe workspace storage path".to_string());
+    }
+    Ok(target)
+}
+
+pub fn workspace_data_dir(
+    app: &AppHandle,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<PathBuf, String> {
+    let account_dir = account_workspace_dir(app, user_id)?;
+    workspace_data_dir_from_account_dir(&account_dir, workspace_id)
+}
+
 pub fn legacy_local_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -260,7 +297,7 @@ pub fn legacy_local_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn account_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
     let session = load_session(app)?;
     match session.active_user_id {
-        Some(uid) => Ok(account_workspace_dir(app, &uid)?.join("todos")),
+        Some(uid) => Ok(workspace_data_dir(app, &uid, &session.workspace_id)?.join("todos")),
         None => legacy_local_todos_root(app),
     }
 }
@@ -268,7 +305,7 @@ pub fn account_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn account_quick_notes_root(app: &AppHandle) -> Result<PathBuf, String> {
     let session = load_session(app)?;
     match session.active_user_id {
-        Some(uid) => account_workspace_dir(app, &uid),
+        Some(uid) => workspace_data_dir(app, &uid, &session.workspace_id),
         None => crate::files::file_storage_root(app),
     }
 }
@@ -276,7 +313,7 @@ pub fn account_quick_notes_root(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn account_sync_root(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let session = load_session(app)?;
     match session.active_user_id {
-        Some(uid) => Ok(Some(account_workspace_dir(app, &uid)?)),
+        Some(uid) => Ok(Some(workspace_data_dir(app, &uid, &session.workspace_id)?)),
         None => Ok(None),
     }
 }
@@ -365,5 +402,32 @@ mod tests {
         );
         assert!(sanitize_workspace_id(Some("private:local")).is_err());
         assert!(sanitize_workspace_id(Some("../secret")).is_err());
+    }
+
+    #[test]
+    fn workspace_data_dir_isolates_workspaces_without_collisions() {
+        let account_dir = PathBuf::from("C:/tmp/tidydesk/accounts/alice");
+        let default_dir = workspace_data_dir_from_account_dir(&account_dir, "default").unwrap();
+        assert_eq!(default_dir, account_dir);
+
+        let private_dir =
+            workspace_data_dir_from_account_dir(&account_dir, "private:alice").unwrap();
+        let hyphen_colon_dir =
+            workspace_data_dir_from_account_dir(&account_dir, "private-calice").unwrap();
+        let double_hyphen_dir =
+            workspace_data_dir_from_account_dir(&account_dir, "private-alice").unwrap();
+
+        assert_eq!(
+            private_dir,
+            account_dir.join("workspaces").join("private-calice")
+        );
+        assert_eq!(
+            hyphen_colon_dir,
+            account_dir.join("workspaces").join("private--calice")
+        );
+        assert_ne!(private_dir, default_dir);
+        assert_ne!(private_dir, hyphen_colon_dir);
+        assert_ne!(private_dir, double_hyphen_dir);
+        assert_ne!(hyphen_colon_dir, double_hyphen_dir);
     }
 }

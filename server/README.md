@@ -4,12 +4,24 @@
 
 ## 本地一键启动
 
+### 方式 A：使用 GitHub Release 一体部署包（无需手动构建前端）
+从 GitHub Releases 下载并解压 `tidydesk-sync-server-v<version>.zip` 后，直接双击 `start.bat`（Windows）或在目录内运行：
+
 ```bash
+node src/index.mjs
+```
+
+压缩包已内置预编译的 `dist/` 移动端 PWA 静态资源，服务会自动发现并托管 `/?mode=mobile` 与 `/manifest.webmanifest`。
+
+### 方式 B：从代码仓库启动
+
+```bash
+npm run build
 node server/src/index.mjs
 ```
 
-默认监听 `http://0.0.0.0:8787`（支持同局域网手机端直连），先执行 `npm run build` 构建前端后，即可在手机或电脑浏览器直接访问移动端面板：
-- 移动端 URL：`http://<电脑局域网IP>:8787/?mode=mobile`
+默认监听 `http://0.0.0.0:8787`（支持同局域网手机端直连），启动后即可在手机或电脑浏览器直接访问移动端面板：
+- 移动端 URL：`http://<电脑局域网IP>:8787/?mode=mobile`（支持在 iOS Safari / Android Chrome 点击「添加到主屏幕」作为独立 PWA 应用运行）
 - 账号 ID：`user_01`（如 `alice` / `bob`）
 - 服务端 URL：`http://<电脑局域网IP>:8787`
 - Token：任意非空字符串（或通过环境变量 `TIDYDESK_SYNC_TOKENS='{"user_01":"secret"}'` 严格校验）

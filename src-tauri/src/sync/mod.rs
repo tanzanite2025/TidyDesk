@@ -10,7 +10,7 @@ pub mod realtime;
 pub use commands::{
     sync_clear_outbox, sync_get_status, sync_list_outbox, sync_run_once, sync_set_realtime_enabled,
 };
-pub use engine::try_lazy_fetch_todo_attachment;
+pub use engine::{try_lazy_fetch_todo_attachment, SyncExecutionLockState};
 pub use outbox::{
     enqueue_outbox_batch, enqueue_outbox_event, OutboxBatchItem, OutboxEntityKind, OutboxOperation,
     SyncOutboxState,

@@ -139,11 +139,11 @@ export function useSnipSelection() {
       }
     } catch (error) {
       console.error('[TIDYDESK] Failed to complete snip selection:', error);
-      cancelSnip();
+      setBgError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsCapturing(false);
     }
-  }, [bgImage, cancelSnip, clearSelection, isCapturing]);
+  }, [bgImage, clearSelection, isCapturing]);
 
   const completeSelectionRef = useRef(completeSelection);
   completeSelectionRef.current = completeSelection;

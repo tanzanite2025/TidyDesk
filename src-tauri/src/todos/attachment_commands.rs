@@ -166,6 +166,7 @@ pub async fn todos_add_attachment_bytes(
             &payload.bytes,
         )?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -205,6 +206,7 @@ pub async fn todos_pick_and_add_attachment(
             &bytes,
         )?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(json!({ "canceled": false, "state": state }))
     })
     .await
@@ -268,6 +270,7 @@ pub async fn todos_delete_attachment(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -323,6 +326,7 @@ pub async fn todos_set_card_cover(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -395,6 +399,7 @@ pub async fn todos_update_attachment_meta(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await

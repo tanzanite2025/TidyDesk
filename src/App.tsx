@@ -4,8 +4,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { DrawerApp } from './modules/drawer/DrawerApp';
 import { HandleApp } from './modules/handle/HandleApp';
 import { QuickCaptureApp } from './modules/capture/QuickCaptureApp';
+import { StickyNoteApp } from './modules/notes/StickyNoteApp';
 import { MobileTodoApp } from './modules/mobile/MobileTodoApp';
-import { RailApp } from './modules/rail/RailApp';
 import { SnipOverlayApp } from './modules/stickers/SnipOverlayApp';
 import { TodoPanelApp } from './modules/todos/TodoPanel';
 
@@ -20,14 +20,14 @@ const App: React.FC = () => {
 
   if (windowMode === 'handle') {
     content = <HandleApp />;
-  } else if (windowMode === 'rail') {
-    content = <RailApp />;
-  } else if (windowMode === 'todos') {
+  } else if (windowMode === 'todos' || windowMode === 'tauri-todos') {
     content = <TodoPanelApp />;
   } else if (windowMode === 'mobile') {
     content = <MobileTodoApp />;
   } else if (windowMode === 'capture') {
     content = <QuickCaptureApp />;
+  } else if (windowMode === 'sticky') {
+    content = <StickyNoteApp />;
   } else if (windowMode === 'snip') {
     content = <SnipOverlayApp />;
   } else {

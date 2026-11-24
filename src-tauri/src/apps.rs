@@ -213,6 +213,9 @@ pub fn apps_add_to_drawer(
     let target_dir = crate::files::resolve_drawer_path(&app, &payload.target_folder)?;
     fs::create_dir_all(&target_dir).map_err(|err| format!("failed to create drawer: {err}"))?;
     let destination = copy_shortcut_to_drawer(shortcut_path, &target_dir)?;
+    if let Err(err) = app.emit("drawer-files-changed", ()) {
+        eprintln!("[TIDYDESK] Failed to emit drawer-files-changed: {err}");
+    }
 
     Ok(AddAppToDrawerResult {
         success: true,

@@ -455,6 +455,45 @@ fn rust_http_client_password_login_and_private_workspace_isolation() {
         assert_eq!(private_pull.cards.len(), 1);
         assert_eq!(private_pull.cards[0]["title"], json!("Dave private card"));
 
+        // Private workspace media presign/upload/download isolation check
+        let priv_orig_bytes = b"dave-private-png-payload".to_vec();
+        let priv_thumb_bytes = b"dave-private-thumb-payload".to_vec();
+        let priv_sha = compute_sha256_hex(&priv_orig_bytes).unwrap();
+        let priv_presign = dave_private
+            .presign_media(&priv_sha, "image/png")
+            .await
+            .expect("private workspace media presign should succeed");
+        dave_private
+            .upload_blob(
+                &priv_presign.thumb_upload_path,
+                priv_thumb_bytes.clone(),
+                &priv_sha,
+            )
+            .await
+            .expect("private workspace thumb upload should succeed");
+        dave_private
+            .upload_blob(
+                &priv_presign.original_upload_path,
+                priv_orig_bytes.clone(),
+                &priv_sha,
+            )
+            .await
+            .expect("private workspace original upload should succeed");
+
+        let downloaded_priv_orig = dave_private
+            .download_blob("original", &priv_presign.original_key)
+            .await
+            .expect("private workspace owner download should succeed");
+        assert_eq!(downloaded_priv_orig, priv_orig_bytes);
+
+        assert!(
+            dave_default
+                .download_blob("original", &priv_presign.original_key)
+                .await
+                .is_err(),
+            "default workspace must not download private workspace media blob"
+        );
+
         let sessions = dave_private.list_remote_sessions().await.unwrap();
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].is_current);

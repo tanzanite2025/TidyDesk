@@ -272,6 +272,7 @@ pub async fn todos_create_card(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -447,6 +448,7 @@ pub async fn todos_update_card(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -524,6 +526,7 @@ pub async fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value,
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await
@@ -586,6 +589,7 @@ pub async fn todos_move_card(
             Ok((state, counts))
         })?;
         emit_todo_counts(&app, &counts)?;
+        emit_todos_updated(&app, &state)?;
         Ok(state)
     })
     .await

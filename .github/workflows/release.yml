@@ -1,4 +1,4 @@
-name: Release Tauri updater artifacts
+name: Release desktop & mobile sync bundles
 
 on:
   push:
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   windows:
-    name: Build Windows updater release
+    name: Build Windows installer & Sync/Mobile PWA bundle
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -45,17 +45,28 @@ jobs:
       - name: Verify release version
         run: npm run tauri:verify-version
 
-      - name: Run checks
-        run: npm run check
+      - name: Run web & TypeScript checks
+        run: |
+          npm run test:web
+          npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+          npm run check
 
-      - name: Run Rust unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Run sync server tests
+        run: node --test server/test/sync.test.mjs
 
-      - name: Build signed updater artifacts
+      - name: Run Rust Clippy & tests
+        run: |
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build signed desktop updater artifacts
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:release
+
+      - name: Package sync server + mobile PWA bundle
+        run: npm run server:package
 
       - name: Upload artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -66,3 +77,4 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe.sig
             release-tauri/latest.json
+            release-server/*.zip

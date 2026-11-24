@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    name: Full-stack checks (Web, Sync Server, Rust)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust MSVC toolchain
+        shell: pwsh
+        run: rustup toolchain install stable-x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run web tests
+        run: npm run test:web
+
+      - name: Strict TypeScript check
+        run: npx tsc --noEmit --noUnusedLocals --noUnusedParameters
+
+      - name: Build frontend & check Rust format/compile
+        run: npm run check
+
+      - name: Run sync server tests
+        run: node --test server/test/sync.test.mjs
+
+      - name: Check Rust e2e feature & Clippy lints
+        run: |
+          cargo check --manifest-path src-tauri/Cargo.toml --features e2e-tests
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust unit & integration tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Package sync server + mobile web bundle
+        run: npm run server:package

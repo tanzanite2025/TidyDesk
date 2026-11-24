@@ -144,7 +144,10 @@ pub fn enqueue_outbox_batch(app: &AppHandle, items: Vec<OutboxBatchItem>) -> Res
             },
         )?;
     }
-    write_outbox_unlocked(&path, &entries)
+    write_outbox_unlocked(&path, &entries)?;
+    drop(_guard);
+    crate::sync::realtime::schedule_realtime_push_if_active(app);
+    Ok(())
 }
 
 pub fn enqueue_outbox_event(
@@ -217,8 +220,12 @@ pub fn remove_acked_outbox_entries(
     Ok(remaining)
 }
 
-pub fn has_pending_outbox_for_user(app: &AppHandle, user_id: &str) -> Result<bool, String> {
-    let dir = crate::accounts::session::account_workspace_dir(app, user_id)?;
+pub fn has_pending_outbox_for_workspace(
+    app: &AppHandle,
+    user_id: &str,
+    workspace_id: &str,
+) -> Result<bool, String> {
+    let dir = crate::accounts::session::workspace_data_dir(app, user_id, workspace_id)?;
     let path = dir.join(SYNC_OUTBOX_FILE);
     let state = app.state::<SyncOutboxState>();
     let _guard = state

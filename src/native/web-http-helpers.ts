@@ -245,7 +245,7 @@ export function findFallbackCoverId(card: TodoCard): string | null {
 
 type DesktopOnlyNamespaces = Pick<
   NativeClient,
-  | 'quickNotes'
+  | 'stickyNotes'
   | 'files'
   | 'drawers'
   | 'shortcuts'
@@ -267,11 +267,12 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
   };
 
   return {
-    quickNotes: {
-      readState: async () => ({ notes: [] }),
-      createNote: () => unsupportedDesktop('quickNotes'),
-      updateNote: () => unsupportedDesktop('quickNotes'),
-      deleteNote: () => unsupportedDesktop('quickNotes')
+    stickyNotes: {
+      list: async () => ({ stickies: [] }),
+      open: () => unsupportedDesktop('stickyNotes'),
+      unpin: () => unsupportedDesktop('stickyNotes'),
+      updateOptions: () => unsupportedDesktop('stickyNotes'),
+      onUpdated: () => undefined
     },
     files: {
       readDesktopFiles: () => unsupportedDesktop('files'),

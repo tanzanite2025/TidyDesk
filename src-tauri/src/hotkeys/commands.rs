@@ -4,8 +4,8 @@ use super::runtime::{
     unregister_registered_accelerator, HotkeyRegistrationStatus, RuntimeHotkeyBinding,
 };
 use super::store::{
-    action_label, read_hotkey_settings, update_stored_binding, write_hotkey_settings, HotkeyAction,
-    HotkeySettingsFile, DEFAULT_PASTE_PENDING_STICKER,
+    action_label, all_actions, default_binding, read_hotkey_settings, update_stored_binding,
+    write_hotkey_settings, HotkeyAction, HotkeySettingsFile,
 };
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -173,14 +173,32 @@ pub fn hotkeys_update_binding(
 
 #[tauri::command]
 pub fn hotkeys_reset_defaults(app: AppHandle) -> Result<HotkeyUpdateResult, String> {
-    hotkeys_update_binding(
-        app,
-        HotkeyBindingUpdatePayload {
-            action: HotkeyAction::PastePendingSticker,
-            accelerator: Some(DEFAULT_PASTE_PENDING_STICKER.to_string()),
-            enabled: true,
+    let mut final_result: Option<HotkeyUpdateResult> = None;
+    for action in all_actions().into_iter().rev() {
+        let def = default_binding(action);
+        let res = hotkeys_update_binding(
+            app.clone(),
+            HotkeyBindingUpdatePayload {
+                action: def.action,
+                accelerator: def.accelerator,
+                enabled: def.enabled,
+            },
+        )?;
+        let failed = !res.success;
+        final_result = Some(res);
+        if failed {
+            break;
+        }
+    }
+    Ok(final_result.unwrap_or_else(|| HotkeyUpdateResult {
+        success: true,
+        reason: None,
+        message: "已恢复默认快捷键".to_string(),
+        settings: HotkeySettingsPayload {
+            version: 1,
+            bindings: Vec::new(),
         },
-    )
+    }))
 }
 
 fn settings_payload(app: &AppHandle, settings: &HotkeySettingsFile) -> HotkeySettingsPayload {

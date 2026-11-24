@@ -11,8 +11,7 @@ export type WindowAction =
   | 'open-files'
   | 'open-todos'
   | 'open-capture'
-  | 'show-files-tab'
-  | 'show-capture-tab'
+  | 'close-capture'
   | 'start-screenshot'
   | 'close-panel';
 
@@ -165,7 +164,11 @@ export interface ResidentSettingsUpdate {
   autoStickAfterSnip?: boolean;
 }
 
-export type HotkeyAction = 'paste_pending_sticker';
+export type HotkeyAction =
+  | 'paste_pending_sticker'
+  | 'toggle_quick_capture'
+  | 'toggle_files_drawer'
+  | 'new_sticky_note';
 
 export type HotkeyRegistrationStatus = 'registered' | 'conflict' | 'disabled' | 'unset';
 

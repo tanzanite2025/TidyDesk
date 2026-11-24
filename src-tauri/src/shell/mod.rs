@@ -3,7 +3,10 @@ mod lifecycle;
 mod state;
 
 pub use bounds::{
-    apply_window_bounds, drawer_window_bounds, handle_window_bounds, todo_window_bounds,
+    apply_window_bounds, available_work_areas, capture_window_bounds,
+    clamp_physical_bounds_to_monitors, default_cascade_bounds_for_monitor, drawer_window_bounds,
+    ensure_window_in_available_monitors, handle_window_bounds, is_valid_runtime_window_bounds,
+    scaled_px, todo_window_bounds, ShellBounds, WorkAreaMonitor,
 };
 pub use lifecycle::{
     apply_drawer_state, close_active_module, ensure_drawer_window, ensure_handle_window,

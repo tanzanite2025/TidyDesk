@@ -471,3 +471,171 @@ test('password login, hot-reload CLI, device session revocation, and private wor
   });
   assert.equal(disabledPull.status, 403);
 });
+
+test('server isolates colliding card/quickNote entityIds and media blobs per workspace', async () => {
+  // 1. Push identical card & quickNote entityIds to default vs private:bob
+  const defaultPush = await api('/api/v1/sync/push', {
+    userId: 'alice',
+    token: 'tok_alice_123',
+    method: 'POST',
+    body: {
+      workspaceId: 'default',
+      entries: [
+        {
+          entityKind: 'card',
+          entityId: 'shared-collision-card',
+          operation: 'upsert',
+          payload: {
+            boardId: 'default-board',
+            columnId: 'todo',
+            title: '共享区卡片',
+            content: 'default content',
+            position: '000G',
+            baseRevision: 0,
+            updatedAt: '5000',
+            subtasks: [],
+            attachments: []
+          }
+        },
+        {
+          entityKind: 'quickNote',
+          entityId: 'shared-collision-note',
+          operation: 'upsert',
+          payload: {
+            title: '共享区快记',
+            content: 'default note',
+            pinned: false,
+            favorite: false,
+            createdAt: '5000',
+            updatedAt: '5000'
+          }
+        }
+      ]
+    }
+  });
+  assert.equal(defaultPush.status, 200);
+
+  const bobPrivatePush = await api('/api/v1/sync/push', {
+    userId: 'bob',
+    token: 'tok_bob_456',
+    method: 'POST',
+    body: {
+      workspaceId: 'private:bob',
+      entries: [
+        {
+          entityKind: 'card',
+          entityId: 'shared-collision-card',
+          operation: 'upsert',
+          payload: {
+            boardId: 'default-board',
+            columnId: 'doing',
+            title: 'Bob 私人卡片',
+            content: 'private bob content',
+            position: '000G',
+            baseRevision: 0,
+            updatedAt: '6000',
+            subtasks: [],
+            attachments: []
+          }
+        },
+        {
+          entityKind: 'quickNote',
+          entityId: 'shared-collision-note',
+          operation: 'upsert',
+          payload: {
+            title: 'Bob 私人快记',
+            content: 'private bob note',
+            pinned: true,
+            favorite: false,
+            createdAt: '6000',
+            updatedAt: '6000'
+          }
+        }
+      ]
+    }
+  });
+  assert.equal(bobPrivatePush.status, 200);
+
+  const pullDefault = await api('/api/v1/sync/pull?workspaceId=default', {
+    userId: 'alice',
+    token: 'tok_alice_123'
+  });
+  const defaultCard = pullDefault.data.cards.find(c => c.id === 'shared-collision-card');
+  const defaultNote = pullDefault.data.quickNotes.find(n => n.id === 'shared-collision-note');
+  assert.equal(defaultCard?.title, '共享区卡片');
+  assert.equal(defaultNote?.title, '共享区快记');
+
+  const pullPrivateBob = await api('/api/v1/sync/pull?workspaceId=private:bob', {
+    userId: 'bob',
+    token: 'tok_bob_456'
+  });
+  const privCard = pullPrivateBob.data.cards.find(c => c.id === 'shared-collision-card');
+  const privNote = pullPrivateBob.data.quickNotes.find(n => n.id === 'shared-collision-note');
+  assert.equal(privCard?.title, 'Bob 私人卡片');
+  assert.equal(privNote?.title, 'Bob 私人快记');
+
+  // 2. Private-workspace media blob cannot be read from default workspace
+  const secretBytes = Buffer.from('bob-private-secret-image-payload');
+  const secretSha = crypto.createHash('sha256').update(secretBytes).digest('hex');
+  const privPresign = await api('/api/v1/media/presign?workspaceId=private:bob', {
+    userId: 'bob',
+    token: 'tok_bob_456',
+    method: 'POST',
+    body: { sha256: secretSha, mimeType: 'image/png' }
+  });
+  assert.equal(privPresign.status, 200);
+  const putPriv = await api(`${privPresign.data.originalUploadPath}?workspaceId=private:bob`, {
+    userId: 'bob',
+    token: 'tok_bob_456',
+    method: 'PUT',
+    raw: secretBytes,
+    headers: { 'x-tidydesk-sha256': secretSha }
+  });
+  assert.equal(putPriv.status, 200);
+
+  const crossWsRead = await api(`${privPresign.data.originalUploadPath}?workspaceId=default`, {
+    userId: 'alice',
+    token: 'tok_alice_123'
+  });
+  assert.equal(crossWsRead.status, 403);
+
+  const ownerWsRead = await api(`${privPresign.data.originalUploadPath}?workspaceId=private:bob`, {
+    userId: 'bob',
+    token: 'tok_bob_456'
+  });
+  assert.equal(ownerWsRead.status, 200);
+  assert.equal(ownerWsRead.data.toString(), secretBytes.toString());
+});
+
+test('sync server serves mobile PWA manifest and SPA html when webDistDir is configured', async () => {
+  const webRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-web-dist-'));
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-web-data-'));
+  fs.writeFileSync(path.join(webRoot, 'index.html'), '<!doctype html><html><body>TidyDesk Mobile</body></html>');
+  fs.writeFileSync(
+    path.join(webRoot, 'manifest.webmanifest'),
+    JSON.stringify({ name: 'TidyDesk', start_url: '/?mode=mobile', display: 'standalone' })
+  );
+
+  const { server: webSrv } = createSyncServer({
+    dataDir: dataRoot,
+    webDistDir: webRoot
+  });
+  await new Promise(resolve => webSrv.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = webSrv.address().port;
+    const htmlRes = await fetch(`http://127.0.0.1:${port}/?mode=mobile`);
+    assert.equal(htmlRes.status, 200);
+    assert.match(htmlRes.headers.get('content-type') || '', /text\/html/);
+    assert.match(await htmlRes.text(), /TidyDesk Mobile/);
+
+    const manifestRes = await fetch(`http://127.0.0.1:${port}/manifest.webmanifest`);
+    assert.equal(manifestRes.status, 200);
+    assert.match(manifestRes.headers.get('content-type') || '', /application\/manifest\+json/);
+    const parsedManifest = await manifestRes.json();
+    assert.equal(parsedManifest.start_url, '/?mode=mobile');
+  } finally {
+    await new Promise(resolve => webSrv.close(resolve));
+    fs.rmSync(webRoot, { recursive: true, force: true });
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});

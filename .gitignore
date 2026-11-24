@@ -107,6 +107,8 @@ dist
 # Gatsby files
 .cache/
 public
+!/public/
+!/public/**
 
 # vuepress build output
 .vuepress/dist
@@ -162,6 +164,8 @@ public
 
 # Tauri build artifacts
 /release/
+/release-tauri/
+/release-server/
 /src-tauri/target/
 
 # Sync server runtime storage

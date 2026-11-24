@@ -245,20 +245,28 @@ pub async fn snip_complete_selection(
     }))
 }
 
+fn restore_window_after_snip_abort(app: &AppHandle, target: &SnipTarget) -> Result<(), String> {
+    if matches!(target, SnipTarget::TodoCard { .. }) {
+        crate::tool_windows::show_todo_window_after_snip(app)
+    } else {
+        crate::shell::recover_shell_windows(app)
+    }
+}
+
 #[tauri::command]
 pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
-    app.state::<SnipCaptureState>()
+    let was_active = app
+        .state::<SnipCaptureState>()
         .snip_session_active
-        .store(false, Ordering::Release);
+        .swap(false, Ordering::AcqRel);
+    if !was_active {
+        return Ok(json!({ "success": true }));
+    }
     let target = take_snip_target(&app);
     crate::tool_windows::close_snip_window(&app)?;
     clear_frozen_background(&app)?;
     finish_snip_capture(&app);
-    if matches!(target, SnipTarget::TodoCard { .. }) {
-        crate::tool_windows::show_todo_window_after_snip(&app)?;
-    } else {
-        crate::shell::recover_shell_windows(&app)?;
-    }
+    restore_window_after_snip_abort(&app, &target)?;
     Ok(json!({ "success": true }))
 }
 
@@ -274,11 +282,7 @@ pub fn handle_snip_window_aborted(app: &AppHandle) {
     let target = take_snip_target(app);
     let _ = clear_frozen_background(app);
     finish_snip_capture(app);
-    if matches!(target, SnipTarget::TodoCard { .. }) {
-        let _ = crate::tool_windows::show_todo_window_after_snip(app);
-    } else {
-        let _ = crate::shell::recover_shell_windows(app);
-    }
+    let _ = restore_window_after_snip_abort(app, &target);
 }
 
 pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> {

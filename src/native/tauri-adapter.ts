@@ -2,7 +2,9 @@ import type { NativeClient } from './types';
 import type {
   CreateQuickNoteInput,
   QuickNotesState,
-  UpdateQuickNoteInput
+  StickyNotesState,
+  UpdateQuickNoteInput,
+  UpdateStickyNoteOptionsInput
 } from '../types/quick-note';
 import type {
   AccountSessionSnapshot,
@@ -196,7 +198,8 @@ export function createTauriNativeClient(): NativeClient {
         invoke<FileIconResult[]>('files_read_icons', { payload: { files } }),
       importExternalFiles: payload => invoke<ImportExternalFilesResult>('files_import_external_files', { payload }),
       open: filePath => invoke('files_open', { payload: { filePath } }),
-      restoreToDesktop: payload => invoke<RestoreToDesktopResult>('files_restore_to_desktop', { payload })
+      restoreToDesktop: payload => invoke<RestoreToDesktopResult>('files_restore_to_desktop', { payload }),
+      onDrawerFilesChanged: callback => onTauriEvent('drawer-files-changed', () => callback())
     },
     drawers: {
       create: name => invoke('drawers_create', { name }),
@@ -253,13 +256,24 @@ export function createTauriNativeClient(): NativeClient {
       runOnce: () => invoke<SyncStatusSnapshot>('sync_run_once'),
       setRealtimeEnabled: (enabled: boolean) =>
         invoke<SyncStatusSnapshot>('sync_set_realtime_enabled', { enabled }),
-      onRealtimeApplied: callback => onTauriEvent('sync-realtime-applied', callback)
+      onRealtimeApplied: callback => onTauriEvent('sync-realtime-applied', callback),
+      onRealtimeStateChanged: callback =>
+        onTauriEvent('sync-realtime-state-changed', callback)
     },
     quickNotes: {
       readState: () => invoke<QuickNotesState>('quick_notes_read_state'),
       createNote: (payload: CreateQuickNoteInput) => invoke<QuickNotesState>('quick_notes_create_note', { payload }),
       updateNote: (payload: UpdateQuickNoteInput) => invoke<QuickNotesState>('quick_notes_update_note', { payload }),
-      deleteNote: (noteId: string) => invoke<QuickNotesState>('quick_notes_delete_note', { noteId })
+      deleteNote: (noteId: string) => invoke<QuickNotesState>('quick_notes_delete_note', { noteId }),
+      onUpdated: callback => onTauriEvent<QuickNotesState>('quick-notes-updated', callback)
+    },
+    stickyNotes: {
+      list: () => invoke<StickyNotesState>('sticky_notes_list'),
+      open: (noteId: string) => invoke<StickyNotesState>('sticky_notes_open', { noteId }),
+      unpin: (noteId: string) => invoke<StickyNotesState>('sticky_notes_unpin', { noteId }),
+      updateOptions: (payload: UpdateStickyNoteOptionsInput) =>
+        invoke<StickyNotesState>('sticky_notes_update_options', { payload }),
+      onUpdated: callback => onTauriEvent<StickyNotesState>('sticky-notes-updated', callback)
     },
     apps: {
       scanInstalled: scanInstalledAppsWithTargets,

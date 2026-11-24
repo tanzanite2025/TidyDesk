@@ -25,6 +25,7 @@ mod resident;
 mod shell;
 mod shortcuts;
 mod stickers;
+mod sticky_notes;
 mod sync;
 mod todos;
 mod tool_windows;
@@ -81,9 +82,13 @@ use stickers::{
     schedule_restore_stickers, sticker_close, sticker_copy, sticker_get, sticker_save_as,
     sticker_toggle_pin, StickerStoreState,
 };
+use sticky_notes::{
+    schedule_restore_sticky_notes, sticky_notes_list, sticky_notes_open, sticky_notes_unpin,
+    sticky_notes_update_options, StickyNotesStoreState, StickyRuntimeState,
+};
 use sync::{
     sync_clear_outbox, sync_get_status, sync_list_outbox, sync_run_once, sync_set_realtime_enabled,
-    SyncOutboxState, SyncRealtimeState,
+    SyncExecutionLockState, SyncOutboxState, SyncRealtimeState,
 };
 use todos::{
     todos_add_attachment_bytes, todos_create_card, todos_delete_attachment, todos_delete_card,
@@ -168,6 +173,10 @@ macro_rules! tidydesk_generate_handler {
             quick_notes_create_note,
             quick_notes_update_note,
             quick_notes_delete_note,
+            sticky_notes_list,
+            sticky_notes_open,
+            sticky_notes_unpin,
+            sticky_notes_update_options,
             resident_get_settings,
             resident_update_settings,
             resident_show_handle,
@@ -251,6 +260,10 @@ macro_rules! tidydesk_generate_handler {
             quick_notes_create_note,
             quick_notes_update_note,
             quick_notes_delete_note,
+            sticky_notes_list,
+            sticky_notes_open,
+            sticky_notes_unpin,
+            sticky_notes_update_options,
             resident_get_settings,
             resident_update_settings,
             resident_show_handle,
@@ -294,8 +307,11 @@ fn main() {
         .manage(TodoStoreState::default())
         .manage(AccountSessionState::default())
         .manage(SyncOutboxState::default())
+        .manage(SyncExecutionLockState::default())
         .manage(SyncRealtimeState::default())
         .manage(QuickNotesStoreState::default())
+        .manage(StickyNotesStoreState::default())
+        .manage(StickyRuntimeState::default())
         .manage(UpdaterSessionState::default())
         .manage(HotkeyRuntimeState::default())
         .setup(|app| {
@@ -320,6 +336,7 @@ fn main() {
                         let _ = crate::resident::open_resident_settings(app);
                     }
                     "quit" => {
+                        crate::sticky_notes::mark_app_exiting(app);
                         app.exit(0);
                     }
                     _ => {}
@@ -359,13 +376,26 @@ fn main() {
                 }
             }
             schedule_restore_stickers(handle.clone());
+            schedule_restore_sticky_notes(handle.clone());
             start_shortcut_background_services(handle.clone());
             Ok(())
         })
         .invoke_handler(tidydesk_generate_handler!())
-        .run(tauri::generate_context!());
-    if let Err(err) = result {
-        eprintln!("[TIDYDESK] failed to run TidyDesk: {err}");
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    match result {
+        Ok(app) => {
+            app.run(|app_handle, event| {
+                if matches!(
+                    event,
+                    tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+                ) {
+                    crate::sticky_notes::mark_app_exiting(app_handle);
+                }
+            });
+        }
+        Err(err) => {
+            eprintln!("[TIDYDESK] failed to run TidyDesk: {err}");
+            std::process::exit(1);
+        }
     }
 }

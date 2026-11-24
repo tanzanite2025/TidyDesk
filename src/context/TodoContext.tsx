@@ -100,8 +100,8 @@ const simulatedTodoState: TodoState = {
       id: 'sim-card-3',
       boardId: 'sim-board',
       columnId: 'done',
-      title: 'Rail 手柄',
-      content: '- [x] 三个竖向入口',
+      title: '桌面悬浮侧边栏',
+      content: '- [x] 待办 / 抽屉 / 快捷记录快捷入口',
       tags: [],
       archived: false,
       subtasks: [],
@@ -180,6 +180,9 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       }
     });
     const unsubAccount = client.accounts.onSessionChanged(() => {
+      setBoard(null);
+      setCards([]);
+      setCounts({ total: 0, open: 0, done: 0 });
       void refreshTodos();
     });
     return () => {

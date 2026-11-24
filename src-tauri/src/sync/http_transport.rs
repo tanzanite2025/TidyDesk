@@ -288,15 +288,31 @@ impl HttpSyncClient {
         }
     }
 
+    fn resolve_workspace_url(&self, path_or_url: &str) -> String {
+        let base = self.resolve_url(path_or_url);
+        let mut ser = form_urlencoded::Serializer::new(String::new());
+        ser.append_pair("workspaceId", &self.workspace_id);
+        let query = ser.finish();
+        if base.contains('?') {
+            format!("{base}&{query}")
+        } else {
+            format!("{base}?{query}")
+        }
+    }
+
     pub async fn presign_media(
         &self,
         sha256: &str,
         mime_type: &str,
     ) -> Result<PresignMediaResponse, String> {
-        let url = self.resolve_url("/api/v1/media/presign");
+        let url = self.resolve_workspace_url("/api/v1/media/presign");
         let resp = self
             .apply_auth(self.client.post(&url))
-            .json(&json!({ "sha256": sha256, "mimeType": mime_type }))
+            .json(&json!({
+                "sha256": sha256,
+                "mimeType": mime_type,
+                "workspaceId": self.workspace_id,
+            }))
             .send()
             .await
             .map_err(|err| format!("媒体秒传预检请求失败: {err}"))?;
@@ -316,7 +332,7 @@ impl HttpSyncClient {
         bytes: Vec<u8>,
         sha256: &str,
     ) -> Result<(), String> {
-        let url = self.resolve_url(path_or_url);
+        let url = self.resolve_workspace_url(path_or_url);
         let resp = self
             .apply_auth(self.client.put(&url))
             .header("x-tidydesk-sha256", sha256)
@@ -334,7 +350,7 @@ impl HttpSyncClient {
 
     pub async fn download_blob(&self, kind: &str, key: &str) -> Result<Vec<u8>, String> {
         let safe_key = key.trim().trim_start_matches('/');
-        let url = self.resolve_url(&format!("/api/v1/media/blob/{kind}/{safe_key}"));
+        let url = self.resolve_workspace_url(&format!("/api/v1/media/blob/{kind}/{safe_key}"));
         let resp = self
             .apply_auth(self.client.get(&url))
             .send()
@@ -421,6 +437,15 @@ mod tests {
         assert_eq!(
             client.resolve_url("https://cdn.example.com/blob/1.png"),
             "https://cdn.example.com/blob/1.png"
+        );
+        let priv_client = client.with_workspace("private:alice").unwrap();
+        assert_eq!(
+            priv_client.resolve_workspace_url("/api/v1/media/presign"),
+            "https://sync.example.com/api/v1/media/presign?workspaceId=private%3Aalice"
+        );
+        assert_eq!(
+            priv_client.resolve_workspace_url("/api/v1/media/blob/thumb/t.png?v=1"),
+            "https://sync.example.com/api/v1/media/blob/thumb/t.png?v=1&workspaceId=private%3Aalice"
         );
     }
 }

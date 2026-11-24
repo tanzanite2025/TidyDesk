@@ -16,8 +16,18 @@ export function titleFromContent(content: string): string {
     ?.slice(0, 80) || '未命名记录';
 }
 
+export function parseTimestampMs(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return Number.NaN;
+  if (/^\d{10,16}$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    return trimmed.length <= 10 ? numeric * 1000 : numeric;
+  }
+  return Date.parse(trimmed);
+}
+
 export function formatTimeLabel(value: string): string {
-  const timestamp = Date.parse(value);
+  const timestamp = parseTimestampMs(value);
   if (Number.isNaN(timestamp)) return '刚刚';
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
@@ -54,7 +64,7 @@ export function notePreview(content: string): string {
 }
 
 export function timestampNumber(value: string): number {
-  const timestamp = Date.parse(value);
+  const timestamp = parseTimestampMs(value);
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
@@ -112,4 +122,84 @@ export function buildSections(notes: QuickNote[], sortMode: SortMode): QuickNote
     recent.length > 0 ? { key: 'recent', label: '最近', notes: recent } : null,
     earlier.length > 0 ? { key: 'earlier', label: '更早', notes: earlier } : null
   ].filter((section): section is QuickNoteSection => Boolean(section));
+}
+
+export interface QuickNoteChecklistItem {
+  lineIndex: number;
+  checked: boolean;
+  text: string;
+}
+
+const CHECKLIST_LINE_RE = /^(\s*)-\s+\[([ xX])\]\s*(.*)$/;
+
+export function parseChecklistItems(content: string): QuickNoteChecklistItem[] {
+  const lines = content.split(/\r?\n/);
+  const items: QuickNoteChecklistItem[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const match = CHECKLIST_LINE_RE.exec(lines[i]);
+    if (!match) continue;
+    items.push({
+      lineIndex: i,
+      checked: match[2].toLowerCase() === 'x',
+      text: match[3] || ''
+    });
+  }
+  return items;
+}
+
+export function toggleChecklistLine(content: string, lineIndex: number): string {
+  const lines = content.split(/\r?\n/);
+  if (lineIndex < 0 || lineIndex >= lines.length) {
+    return content;
+  }
+  const match = CHECKLIST_LINE_RE.exec(lines[lineIndex]);
+  if (!match) {
+    return content;
+  }
+  const nextMark = match[2].toLowerCase() === 'x' ? ' ' : 'x';
+  lines[lineIndex] = `${match[1]}- [${nextMark}] ${match[3]}`;
+  return lines.join('\n');
+}
+
+export function appendChecklistLine(content: string, label = ''): string {
+  const itemLine = `- [ ] ${label}`;
+  if (!content.trim()) {
+    return itemLine;
+  }
+  const endsWithNewline = /\r?\n$/.test(content);
+  return endsWithNewline ? `${content}${itemLine}` : `${content}\n${itemLine}`;
+}
+
+export interface StickyLocalDraft {
+  noteId: string;
+  title: string;
+  content: string;
+  savedAt: number;
+}
+
+export function stickyDraftStorageKey(noteId: string, scope = 'local:default'): string {
+  return `tidydesk-sticky-draft:${scope}:${noteId}`;
+}
+
+export function parseStickyLocalDraft(raw: string | null, expectedNoteId: string): StickyLocalDraft | null {
+  if (!raw) return null;
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('[CRITICAL] Invalid local sticky draft object shape');
+  }
+  const candidate = parsed as Partial<StickyLocalDraft>;
+  if (
+    candidate.noteId !== expectedNoteId ||
+    typeof candidate.title !== 'string' ||
+    typeof candidate.content !== 'string' ||
+    typeof candidate.savedAt !== 'number'
+  ) {
+    throw new Error('[CRITICAL] Local sticky draft payload validation failed');
+  }
+  return {
+    noteId: candidate.noteId,
+    title: candidate.title,
+    content: candidate.content,
+    savedAt: candidate.savedAt
+  };
 }

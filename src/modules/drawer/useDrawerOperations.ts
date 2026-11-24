@@ -5,7 +5,6 @@ import { isTauriRuntime } from '../../native/tauri-adapter';
 import { getPathFromDroppedFile, importResultNotice } from './dragDropUtils';
 
 const windowMode = new URLSearchParams(window.location.search).get('mode');
-export type DrawerTab = 'files' | 'capture';
 
 export function useDrawerOperations() {
   const {
@@ -40,7 +39,6 @@ export function useDrawerOperations() {
   const [isCleaningUp, setIsCleaningUp] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [activeDrawerTab, setActiveDrawerTab] = useState<DrawerTab>(windowMode === 'capture' ? 'capture' : 'files');
   const isDrawerExpandedRef = useRef(isDrawerExpanded);
   const tauriDroppedPathsRef = useRef<string[] | null>(null);
   
@@ -93,18 +91,9 @@ export function useDrawerOperations() {
       }
     });
 
-    const unsubscribeModule = nativeClient.windows.onModuleState(payload => {
-      if (payload.activeModule === 'capture') {
-        setActiveDrawerTab('capture');
-      } else if (payload.activeModule === 'files') {
-        setActiveDrawerTab('files');
-      }
-    });
-    
     return () => {
       if (closeTimer) clearTimeout(closeTimer);
       unsubscribe?.();
-      unsubscribeModule?.();
     };
   }, []);
 
@@ -139,17 +128,6 @@ export function useDrawerOperations() {
       unlisten?.();
     };
   }, []);
-
-  function switchDrawerTab(tab: DrawerTab) {
-    if (tab === activeDrawerTab) return;
-
-    setActiveDrawerTab(tab);
-
-    if (nativeClient.isAvailable()) {
-      windowControl(tab === 'files' ? 'show-files-tab' : 'show-capture-tab');
-      return;
-    }
-  }
 
   const [hasAttemptedDefaultDrawer, setHasAttemptedDefaultDrawer] = useState(false);
 
@@ -320,11 +298,9 @@ export function useDrawerOperations() {
     isValidating,
     showSettings,
     setShowSettings,
-    activeDrawerTab,
     allDrawerFiles,
     invalidShortcutsCount,
     
-    switchDrawerTab,
     handleDropOnDrawer,
     handleCreateDrawer,
     submitDrawerRename,

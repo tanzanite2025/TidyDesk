@@ -111,6 +111,47 @@ fn handle_hotkey_action(app: &AppHandle, action: &HotkeyAction) {
                 crate::stickers::notify_sticker_message(app, "截图贴纸失败", &err);
             }
         }
+        HotkeyAction::ToggleQuickCapture => {
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) =
+                    crate::tool_windows::open_or_toggle_capture_window(&app_clone, true).await
+                {
+                    eprintln!("[TIDYDESK] Failed to toggle quick capture via hotkey: {err}");
+                }
+            });
+        }
+        HotkeyAction::ToggleFilesDrawer => {
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let shell = app_clone.state::<crate::shell::ShellState>();
+                let expanded = crate::shell::shell_snapshot(&shell)
+                    .map(|snap| snap.expanded)
+                    .unwrap_or(false);
+                if let Err(err) = crate::shell::apply_drawer_state(&app_clone, &shell, !expanded) {
+                    eprintln!("[TIDYDESK] Failed to toggle files drawer via hotkey: {err}");
+                }
+            });
+        }
+        HotkeyAction::NewStickyNote => {
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                match crate::quick_notes::create_blank_sticky_note(&app_clone) {
+                    Ok(note_id) => {
+                        if let Err(err) =
+                            crate::sticky_notes::open_sticky_note_sync(&app_clone, &note_id)
+                        {
+                            eprintln!(
+                                "[TIDYDESK] Failed to open new sticky note via hotkey: {err}"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!("[TIDYDESK] Failed to create sticky note via hotkey: {err}");
+                    }
+                }
+            });
+        }
     }
 }
 

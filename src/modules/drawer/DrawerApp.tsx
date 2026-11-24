@@ -8,7 +8,6 @@ import {
   X
 } from 'lucide-react';
 import { SettingsPanel } from '../../components/SettingsPanel';
-import { QuickNotesPanel } from '../notes/QuickNotesPanel';
 import { nativeClient } from '../../native/native-client';
 import { useDrawerOperations } from './useDrawerOperations';
 import { DrawerHeader } from './DrawerHeader';
@@ -47,11 +46,9 @@ export const DrawerApp: React.FC = () => {
     isValidating,
     showSettings,
     setShowSettings,
-    activeDrawerTab,
     allDrawerFiles,
     invalidShortcutsCount,
 
-    switchDrawerTab,
     handleDropOnDrawer,
     handleCreateDrawer,
     submitDrawerRename,
@@ -67,12 +64,12 @@ export const DrawerApp: React.FC = () => {
     return nativeClient.resident.onOpenSettings(() => setShowSettings(true));
   }, [setShowSettings]);
 
-  if (windowMode === 'handle' || (!isDrawerExpanded && windowMode !== 'drawer')) {
+  if (!isDrawerExpanded && windowMode !== 'drawer') {
     return (
       <button
         type="button"
         onClick={() => windowControl(isDrawerExpanded ? 'collapse-drawer' : 'expand-drawer')}
-        className="flex h-screen w-full select-none flex-col items-center justify-center gap-3 rounded-l-2xl bg-[#11131c]/90 text-slate-100 transition-all hover:bg-[#171a24]/90 overflow-hidden shadow-2xl"
+        className="flex h-screen w-full select-none flex-col items-center justify-center gap-3 rounded-l-2xl bg-[#11131c] text-slate-100 transition-all hover:bg-[#171a24] overflow-hidden shadow-2xl"
         style={{
           WebkitMaskImage: '-webkit-radial-gradient(white, white)',
           boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.5)'
@@ -95,11 +92,10 @@ export const DrawerApp: React.FC = () => {
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
       <div
-        className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[#11131c]/90 ${isClosing ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in'}`}
+        className={`flex min-w-0 flex-1 flex-col overflow-hidden bg-[#11131c] ${isClosing ? 'animate-drawer-panel-out' : 'animate-drawer-panel-in'}`}
         style={{ boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.5)' }}
       >
         <DrawerHeader
-          activeDrawerTab={activeDrawerTab}
           searchQuery={searchQuery}
           isLoading={isLoading}
           isValidating={isValidating}
@@ -107,11 +103,10 @@ export const DrawerApp: React.FC = () => {
           onValidateAll={handleValidateAll}
           onRefresh={refreshDesktop}
           onCollapse={() => windowControl('collapse-drawer')}
-          onSwitchTab={switchDrawerTab}
           onSearchChange={setSearchQuery}
         />
 
-        {activeDrawerTab === 'files' && error && (
+        {error && (
           <div className="mx-5 mb-3 flex items-start gap-2 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-[11px] text-rose-100">
             <span className="flex-1">{error}</span>
             <button type="button" onClick={clearError} className="text-rose-200">
@@ -120,7 +115,7 @@ export const DrawerApp: React.FC = () => {
           </div>
         )}
 
-        {activeDrawerTab === 'files' && notice && (
+        {notice && (
           <div className="mx-5 mb-3 flex items-start gap-2 rounded-lg border border-emerald-400/15 bg-emerald-400/10 p-3 text-[11px] leading-4 text-emerald-100">
             <Check size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{notice}</span>
@@ -130,18 +125,15 @@ export const DrawerApp: React.FC = () => {
           </div>
         )}
 
-        {activeDrawerTab === 'files' && (
-          <InvalidShortcutsBanner
-            invalidCount={invalidShortcutsCount}
-            isValidating={isValidating}
-            isCleaningUp={isCleaningUp}
-            onValidateAll={handleValidateAll}
-            onCleanupInvalidShortcuts={handleCleanupInvalidShortcuts}
-          />
-        )}
+        <InvalidShortcutsBanner
+          invalidCount={invalidShortcutsCount}
+          isValidating={isValidating}
+          isCleaningUp={isCleaningUp}
+          onValidateAll={handleValidateAll}
+          onCleanupInvalidShortcuts={handleCleanupInvalidShortcuts}
+        />
 
-        {activeDrawerTab === 'files' ? (
-          <div className="flex-1 overflow-y-auto px-5 pb-4">
+        <div className="flex-1 overflow-y-auto px-5 pb-4">
             <div className="mb-4 rounded-lg border border-white/[0.08] bg-white/[0.055] p-4">
               <div className="flex items-center gap-3">
                 <div className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-sky-400/15 text-sky-100">
@@ -216,9 +208,6 @@ export const DrawerApp: React.FC = () => {
               </button>
             </div>
           </div>
-        ) : (
-          <QuickNotesPanel />
-        )}
       </div>
     </div>
   );

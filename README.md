@@ -2,6 +2,14 @@
 
 TidyDesk 是一个面向 Windows 的桌面整理工具，使用 `Tauri 2 + React + TypeScript + Rust` 构建，并由 Rust 后端扫描本机已安装应用。它的目标不是强行搬走你的文件，而是提供抽屉入口、待办、便签和截图贴纸这些轻量工作流，让桌面更干净，同时尽量降低误操作风险。
 
+> **快速导航**：[当前能力](#当前能力) · [本地开发](#本地开发) · [打包发布](#打包发布) · [主要产物路径](#主要产物路径) · [数据存储](#数据存储) · [文档入口](#文档入口)
+>
+> **本地安装包位置 & 快速打包**：
+> - 构建安装包：`npm run tauri:bundle`（需配置签名私钥，未配置时可用 `npx tauri build` 生成本地未签名安装包）；构建后前往 `src-tauri/target/release/bundle/nsis/` 查找 `TidyDesk_<version>_x64-setup.exe`
+> - 免安装主程序：`src-tauri/target/release/tidydesk.exe`
+> - 完整发布物（含 `release-tauri/latest.json`）：`npm run tauri:build`
+> - 同步服务 + 手机 PWA 一体包：`npm run server:package`（生成 `release-server/tidydesk-sync-server-v<version>.zip`，解压后手机浏览器访问 `http://<电脑局域网IP>:8787/?mode=mobile` 可“添加到主屏幕”作为独立 App 使用）
+
 ## 当前能力
 
 - 桌面抽屉：把桌面文件收纳到抽屉中，默认优先创建快捷方式入口，避免直接破坏原始文件布局。
@@ -26,7 +34,7 @@ TidyDesk/
 ├─ src/                     React 前端
 │  ├─ components/           通用设置、热键弹窗等组件（settings/*）
 │  ├─ context/              Workspace / Todo 全局状态
-│  ├─ modules/              drawer / rail / handle / todos / notes / stickers / apps
+│  ├─ modules/              drawer / handle / capture / mobile / todos / notes / stickers / apps
 │  ├─ native/               前端到 Tauri IPC 的 adapter
 │  ├─ services/             前端服务（updater、workspace 等）
 │  └─ types/                共享 TypeScript 类型
@@ -242,7 +250,8 @@ npm run tauri:verify-version
 - `bundle.createUpdaterArtifacts` 已开启。
 - `npm run tauri:bundle` 会生成安装包和对应 `.sig` 文件。
 - `npm run tauri:build` 会额外生成 `release-tauri/latest.json`。
-- 推送 `v*` tag 会触发 `.github/workflows/release.yml`，自动构建并上传 `.exe`、`.exe.sig` 和 `latest.json` 到 GitHub Release。
+- `npm run server:package` 会打包同步服务端与前端手机 PWA 静态资源，生成 `release-server/tidydesk-sync-server-v<version>.zip`。
+- 推送 `v*` tag 会触发 `.github/workflows/release.yml`，自动构建并上传桌面端 `.exe`、`.exe.sig`、`latest.json` 与服务端/手机 Web 一体包 `tidydesk-sync-server-v*.zip` 到 GitHub Release。
 
 GitHub Release workflow 需要在仓库 Settings → Secrets and variables → Actions 中配置：
 
@@ -255,6 +264,7 @@ GitHub Release workflow 需要在仓库 Settings → Secrets and variables → A
 - NSIS 安装包：`src-tauri/target/release/bundle/nsis/*.exe`（若显式指定了 `CARGO_BUILD_TARGET` / `TAURI_TARGET_TRIPLE`，则位于 `src-tauri/target/<triple>/release/bundle/nsis/*.exe`）
 - 安装包签名：`src-tauri/target/release/bundle/nsis/*.exe.sig`
 - updater manifest：`release-tauri/latest.json`（可通过 `TIDYDESK_UPDATER_MANIFEST_DIR` 修改目录）
+- 同步服务 + 手机 PWA 一体包：`release-server/tidydesk-sync-server-v<version>.zip`（解压后执行 `start.bat` 或 `node src/index.mjs` 启动，手机浏览器打开 `http://<局域网IP>:8787/?mode=mobile` 即可添加到主屏幕）
 - 若仅需本地验证打包、未配置签名私钥，可直接运行 `npx tauri build` 生成未签名安装包。
 
 ## 数据存储

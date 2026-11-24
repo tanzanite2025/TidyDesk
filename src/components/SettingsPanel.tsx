@@ -86,7 +86,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
           onSaved={applyHotkeySettings}
         />
       )}
-      <div className="max-h-[90vh] w-[480px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#11131c]/95 shadow-2xl">
+      <div className="max-h-[90vh] w-[480px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#11131c] shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
           <div>
             <h2 className="text-[16px] font-bold text-slate-100">设置</h2>

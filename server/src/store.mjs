@@ -4,6 +4,37 @@ import { atomicWriteJson, getPrivateWorkspaceOwner, sanitizeWorkspaceId } from '
 import { mergeCardOnServer } from './merge.mjs';
 
 const SAFE_KEY_RE = /^[a-zA-Z0-9._-]{1,128}$/;
+const BLOB_SHA_RE = /^(?:thumb|orig)_([a-fA-F0-9]{64})\.[a-z0-9]+$/;
+
+function scopedEntityKey(workspaceId, entityId) {
+  return `${workspaceId}:${entityId}`;
+}
+
+function readScopedEntity(map, workspaceId, entityId) {
+  const key = scopedEntityKey(workspaceId, entityId);
+  if (Object.prototype.hasOwnProperty.call(map, key)) {
+    return map[key];
+  }
+  const legacy = map[entityId];
+  if (legacy && (legacy.workspaceId || 'default') === workspaceId) {
+    return legacy;
+  }
+  return null;
+}
+
+function writeScopedEntity(map, workspaceId, entityId, record) {
+  const key = scopedEntityKey(workspaceId, entityId);
+  map[key] = record;
+  const legacy = map[entityId];
+  if (legacy && (legacy.workspaceId || 'default') === workspaceId) {
+    delete map[entityId];
+  }
+}
+
+function extractShaFromBlobKey(key) {
+  const match = String(key || '').match(BLOB_SHA_RE);
+  return match ? match[1].toLowerCase() : null;
+}
 
 function createInitialDb() {
   return {
@@ -145,7 +176,32 @@ export function createSyncStore(dataDir) {
     return target;
   }
 
-  function presignMedia({ sha256, mimeType }) {
+  function grantMediaWorkspace(sha256, workspaceId = 'default', patch = {}) {
+    const lower = String(sha256 || '').toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(lower)) return false;
+    const prev = db.mediaBySha256[lower];
+    const currentWorkspaces = prev
+      ? Array.isArray(prev.workspaces)
+        ? prev.workspaces
+        : ['default']
+      : [];
+    const nextWorkspaces = currentWorkspaces.includes(workspaceId)
+      ? currentWorkspaces
+      : [...currentWorkspaces, workspaceId];
+    const changed =
+      !prev ||
+      nextWorkspaces.length !== currentWorkspaces.length ||
+      Object.keys(patch).some(k => prev[k] !== patch[k]);
+    db.mediaBySha256[lower] = {
+      ...(prev || {}),
+      ...patch,
+      workspaces: nextWorkspaces
+    };
+    return changed;
+  }
+
+  function presignMedia({ sha256, mimeType, workspaceId = 'default' }) {
+    reloadIfChanged();
     if (!sha256 || !/^[a-fA-F0-9]{64}$/.test(sha256)) {
       throw new Error('Invalid sha256 digest');
     }
@@ -165,6 +221,9 @@ export function createSyncStore(dataDir) {
         fs.existsSync(thumbPath) &&
         fs.existsSync(origPath)
     );
+    if (deduplicated && grantMediaWorkspace(lowerSha, workspaceId)) {
+      save();
+    }
 
     return {
       deduplicated,
@@ -175,7 +234,8 @@ export function createSyncStore(dataDir) {
     };
   }
 
-  function writeBlob({ kind, key, buffer, sha256 }) {
+  function writeBlob({ kind, key, buffer, sha256, workspaceId = 'default' }) {
+    reloadIfChanged();
     const target = safeBlobPath(kind, key);
     if (!target) {
       throw new Error('Invalid media blob key');
@@ -185,15 +245,28 @@ export function createSyncStore(dataDir) {
     fs.writeFileSync(tmpPath, buffer);
     fs.renameSync(tmpPath, target);
 
-    if (kind === 'original' && sha256 && /^[a-fA-F0-9]{64}$/.test(sha256)) {
-      const lower = sha256.toLowerCase();
-      db.mediaBySha256[lower] = {
-        originalKey: key,
-        sizeBytes: buffer.length,
-        uploadedAt: String(Date.now())
-      };
-      save();
+    const headerSha = sha256 && /^[a-fA-F0-9]{64}$/.test(sha256) ? sha256.toLowerCase() : null;
+    const keySha = extractShaFromBlobKey(key);
+    const effectiveSha = headerSha || keySha;
+    if (effectiveSha) {
+      const patch =
+        kind === 'original'
+          ? { originalKey: key, sizeBytes: buffer.length, uploadedAt: String(Date.now()) }
+          : { thumbKey: key };
+      if (grantMediaWorkspace(effectiveSha, workspaceId, patch)) {
+        save();
+      }
     }
+  }
+
+  function canReadBlob({ key, workspaceId = 'default' }) {
+    reloadIfChanged();
+    const sha = extractShaFromBlobKey(key);
+    if (!sha) return false;
+    const meta = db.mediaBySha256[sha];
+    if (!meta) return false;
+    const allowed = Array.isArray(meta.workspaces) ? meta.workspaces : ['default'];
+    return allowed.includes(workspaceId);
   }
 
   function readBlob({ kind, key }) {
@@ -227,7 +300,7 @@ export function createSyncStore(dataDir) {
       const payload = entry.payload || {};
 
       if (kind === 'card') {
-        const existing = db.cards[entityId] || null;
+        const existing = readScopedEntity(db.cards, workspaceId, entityId);
         if (op === 'delete') {
           const { card } = mergeCardOnServer(
             existing,
@@ -235,7 +308,7 @@ export function createSyncStore(dataDir) {
             actorId
           );
           card.workspaceId = workspaceId;
-          db.cards[entityId] = card;
+          writeScopedEntity(db.cards, workspaceId, entityId, card);
           appendEvent('card', entityId, 'delete', workspaceId);
           acked.push({ entityKind: 'card', entityId, revision: card.revision });
           mergedCards.push(card);
@@ -246,7 +319,7 @@ export function createSyncStore(dataDir) {
             actorId
           );
           card.workspaceId = workspaceId;
-          db.cards[entityId] = card;
+          writeScopedEntity(db.cards, workspaceId, entityId, card);
           appendEvent('card', entityId, 'upsert', workspaceId);
           acked.push({ entityKind: 'card', entityId, revision: card.revision });
           mergedCards.push(card);
@@ -257,20 +330,20 @@ export function createSyncStore(dataDir) {
         acked.push({ entityKind: 'attachment', entityId });
       } else if (kind === 'quickNote') {
         if (op === 'delete') {
-          db.quickNotes[entityId] = {
+          writeScopedEntity(db.quickNotes, workspaceId, entityId, {
             id: entityId,
             deletedAt: payload.deletedAt || String(Date.now()),
             updatedAt: String(Date.now()),
             workspaceId
-          };
+          });
           appendEvent('quickNote', entityId, 'delete', workspaceId);
         } else {
-          db.quickNotes[entityId] = {
+          writeScopedEntity(db.quickNotes, workspaceId, entityId, {
             ...payload,
             id: entityId,
             deletedAt: null,
             workspaceId
-          };
+          });
           appendEvent('quickNote', entityId, 'upsert', workspaceId);
         }
         acked.push({ entityKind: 'quickNote', entityId });
@@ -304,7 +377,7 @@ export function createSyncStore(dataDir) {
 
     for (const ev of latestSeqByEntity.values()) {
       if (ev.entityKind === 'card') {
-        const card = db.cards[ev.entityId];
+        const card = readScopedEntity(db.cards, workspaceId, ev.entityId);
         if (!card) continue;
         if (card.deletedAt) {
           removedCardIds.push(card.id);
@@ -312,7 +385,7 @@ export function createSyncStore(dataDir) {
           cards.push(card);
         }
       } else if (ev.entityKind === 'quickNote') {
-        const note = db.quickNotes[ev.entityId];
+        const note = readScopedEntity(db.quickNotes, workspaceId, ev.entityId);
         if (!note) continue;
         if (note.deletedAt) {
           removedQuickNoteIds.push(note.id);
@@ -337,6 +410,7 @@ export function createSyncStore(dataDir) {
     listWorkspacesForUser,
     presignMedia,
     writeBlob,
+    canReadBlob,
     readBlob,
     pushEntries,
     pullSince

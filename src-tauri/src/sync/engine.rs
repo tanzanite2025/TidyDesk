@@ -13,7 +13,10 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
+
+#[derive(Default)]
+pub struct SyncExecutionLockState(pub tauri::async_runtime::Mutex<()>);
 
 pub struct SyncExecutionReport {
     pub pushed_count: usize,
@@ -154,6 +157,9 @@ fn write_blob_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 /// Run one explicit push-then-pull incremental sync cycle for the active account.
 pub async fn execute_account_sync(app: &AppHandle) -> Result<SyncExecutionReport, String> {
+    let exec_lock = app.state::<SyncExecutionLockState>();
+    let _sync_guard = exec_lock.0.lock().await;
+
     let session = load_session(app)?;
     let user_id = session
         .active_user_id
@@ -265,6 +271,7 @@ pub fn try_lazy_fetch_todo_attachment(
     let user_id = session.active_user_id?;
     let endpoint = session.server_endpoint?;
     let token = load_account_token(app, &user_id).ok().flatten()?;
+    let workspace_id = session.workspace_id;
     let (blob_kind, remote_key, cache_path) = find_remote_attachment_blob(app, card_id, file_name)
         .ok()
         .flatten()?;
@@ -272,7 +279,8 @@ pub fn try_lazy_fetch_todo_attachment(
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn(async move {
         let res = async {
-            let client = HttpSyncClient::new(&endpoint, &user_id, &token)?;
+            let client =
+                HttpSyncClient::new(&endpoint, &user_id, &token)?.with_workspace(&workspace_id)?;
             client.download_blob(blob_kind, &remote_key).await
         }
         .await;

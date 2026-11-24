@@ -4,6 +4,7 @@
 
 @layer base {
   :root {
+    color-scheme: dark;
     --background: 224 71% 4%;
     --foreground: 213 31% 91%;
 
@@ -37,6 +38,7 @@
   }
 
   .light {
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 222.2 47.4% 11.2%;
 
@@ -149,21 +151,6 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
-}
-
-/* Glassmorphism utility for modern W11 vibe */
-.acrylic-glass {
-  background: hsla(224, 71%, 4%, 0.5);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px dashed hsl(var(--border) / 0.8);
-}
-
-.light .acrylic-glass {
-  background: hsla(0, 0%, 100%, 0.6);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px dashed hsl(var(--border) / 0.8);
 }
 
 /* Industrial Grid overlay background */

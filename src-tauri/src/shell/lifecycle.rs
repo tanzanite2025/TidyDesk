@@ -30,11 +30,7 @@ pub fn apply_drawer_state(
         hide_module_windows(app)?;
         ensure_drawer_window(app)?;
         let drawer_target = drawer_window_bounds(app)?;
-        let next_active_module = match previous.active_module.as_deref() {
-            Some("capture") => Some("capture".to_string()),
-            Some("files") => Some("files".to_string()),
-            _ => Some("files".to_string()),
-        };
+        let next_active_module = Some("files".to_string());
         apply_window_bounds(app, DRAWER_WINDOW_LABEL, drawer_target)?;
         apply_window_bounds(app, HANDLE_WINDOW_LABEL, handle_to)?;
         if let Some(window) = app.get_webview_window(DRAWER_WINDOW_LABEL) {
@@ -157,21 +153,18 @@ pub fn recover_shell_windows(app: &AppHandle) -> Result<(), String> {
     let shell = app.state::<ShellState>();
     next_animation_generation(&shell);
 
-    if let Some(window) = app.get_webview_window("capture") {
-        let _ = window.hide();
-    }
-
     let mut snapshot = shell_snapshot(&shell)?;
-    if snapshot.active_module.as_deref() == Some("todos")
-        && app.get_webview_window("todos").is_none()
-    {
-        update_shell_state(app, &shell, false, None)?;
-        snapshot = shell_snapshot(&shell)?;
-    }
-
-    if snapshot.active_module.as_deref() != Some("todos") {
-        if let Some(window) = app.get_webview_window("todos") {
-            let _ = window.hide();
+    for floating_label in ["todos", "capture"] {
+        if snapshot.active_module.as_deref() == Some(floating_label)
+            && app.get_webview_window(floating_label).is_none()
+        {
+            update_shell_state(app, &shell, false, None)?;
+            snapshot = shell_snapshot(&shell)?;
+        }
+        if snapshot.active_module.as_deref() != Some(floating_label) {
+            if let Some(window) = app.get_webview_window(floating_label) {
+                let _ = window.hide();
+            }
         }
     }
 
@@ -181,7 +174,10 @@ pub fn recover_shell_windows(app: &AppHandle) -> Result<(), String> {
         apply_window_bounds(app, DRAWER_WINDOW_LABEL, drawer_bounds)?;
         if let Some(window) = app.get_webview_window(DRAWER_WINDOW_LABEL) {
             window.show().map_err(|err| err.to_string())?;
-            if snapshot.active_module.as_deref() != Some("todos") {
+            if !matches!(
+                snapshot.active_module.as_deref(),
+                Some("todos") | Some("capture")
+            ) {
                 window.set_focus().map_err(|err| err.to_string())?;
             }
         }
@@ -197,17 +193,22 @@ pub fn recover_shell_windows(app: &AppHandle) -> Result<(), String> {
         apply_window_bounds(app, HANDLE_WINDOW_LABEL, handle_window_bounds(app, false)?)?;
         if let Some(window) = app.get_webview_window(HANDLE_WINDOW_LABEL) {
             window.show().map_err(|err| err.to_string())?;
-            if snapshot.active_module.as_deref() != Some("todos") {
+            if !matches!(
+                snapshot.active_module.as_deref(),
+                Some("todos") | Some("capture")
+            ) {
                 window.set_focus().map_err(|err| err.to_string())?;
             }
         }
         set_handle_always_on_top(app, true)?;
     }
 
-    if snapshot.active_module.as_deref() == Some("todos") {
-        if let Some(window) = app.get_webview_window("todos") {
-            window.show().map_err(|err| err.to_string())?;
-            window.set_focus().map_err(|err| err.to_string())?;
+    for floating_label in ["todos", "capture"] {
+        if snapshot.active_module.as_deref() == Some(floating_label) {
+            if let Some(window) = app.get_webview_window(floating_label) {
+                window.show().map_err(|err| err.to_string())?;
+                window.set_focus().map_err(|err| err.to_string())?;
+            }
         }
     }
 
@@ -225,7 +226,7 @@ pub fn webview_url_for_mode(mode: &str) -> Result<WebviewUrl, String> {
 }
 
 fn hide_module_windows(app: &AppHandle) -> Result<(), String> {
-    for label in ["capture"] {
+    for label in ["capture", "todos"] {
         if let Some(window) = app.get_webview_window(label) {
             window.hide().map_err(|err| err.to_string())?;
         }

@@ -41,7 +41,9 @@ import type { UpdateMetadata, UpdateSnapshot } from '../types/update';
 import type {
   CreateQuickNoteInput,
   QuickNotesState,
-  UpdateQuickNoteInput
+  StickyNotesState,
+  UpdateQuickNoteInput,
+  UpdateStickyNoteOptionsInput
 } from '../types/quick-note';
 import type {
   AccountSessionSnapshot,
@@ -71,6 +73,7 @@ export interface NativeFilesClient {
   importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
   open: (filePath: string) => Promise<unknown>;
   restoreToDesktop: (payload: RestoreToDesktopPayload) => Promise<RestoreToDesktopResult>;
+  onDrawerFilesChanged?: (callback: () => void) => (() => void) | undefined;
 }
 
 export interface NativeDrawersClient {
@@ -111,6 +114,15 @@ export interface NativeQuickNotesClient {
   createNote: (payload: CreateQuickNoteInput) => Promise<QuickNotesState>;
   updateNote: (payload: UpdateQuickNoteInput) => Promise<QuickNotesState>;
   deleteNote: (noteId: string) => Promise<QuickNotesState>;
+  onUpdated: (callback: (payload: QuickNotesState) => void) => (() => void) | undefined;
+}
+
+export interface NativeStickyNotesClient {
+  list: () => Promise<StickyNotesState>;
+  open: (noteId: string) => Promise<StickyNotesState>;
+  unpin: (noteId: string) => Promise<StickyNotesState>;
+  updateOptions: (payload: UpdateStickyNoteOptionsInput) => Promise<StickyNotesState>;
+  onUpdated: (callback: (payload: StickyNotesState) => void) => (() => void) | undefined;
 }
 
 export interface NativeAppsClient {
@@ -205,12 +217,20 @@ export interface SyncRealtimeAppliedPayload {
   cursor: string;
 }
 
+export interface SyncRealtimeStateChangedPayload {
+  realtimeActive: boolean;
+  reason?: string | null;
+}
+
 export interface NativeSyncClient {
   getStatus: () => Promise<SyncStatusSnapshot>;
   clearOutbox: () => Promise<SyncStatusSnapshot>;
   runOnce: () => Promise<SyncStatusSnapshot>;
   setRealtimeEnabled?: (enabled: boolean) => Promise<SyncStatusSnapshot>;
   onRealtimeApplied?: (callback: (payload: SyncRealtimeAppliedPayload) => void) => (() => void) | undefined;
+  onRealtimeStateChanged?: (
+    callback: (payload: SyncRealtimeStateChangedPayload) => void
+  ) => (() => void) | undefined;
 }
 
 export interface NativeCapabilities {
@@ -230,6 +250,7 @@ export interface NativeClient {
   accounts: NativeAccountsClient;
   sync: NativeSyncClient;
   quickNotes: NativeQuickNotesClient;
+  stickyNotes: NativeStickyNotesClient;
   apps: NativeAppsClient;
   windows: NativeWindowsClient;
   toolWindows: NativeToolWindowsClient;

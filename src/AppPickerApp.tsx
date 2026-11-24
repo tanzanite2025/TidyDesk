@@ -18,7 +18,6 @@ export const AppPickerApp: React.FC = () => {
     error,
     notice,
     cacheInfo,
-    isTauriAppPicker,
     handleRefresh,
     handleSelectApp,
     handleClose
@@ -39,11 +38,9 @@ export const AppPickerApp: React.FC = () => {
 
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
         <div style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <h2 className="text-lg font-semibold text-slate-100">{isTauriAppPicker ? 'App Picker' : '添加应用'}</h2>
+          <h2 className="text-lg font-semibold text-slate-100">添加应用</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {isTauriAppPicker
-              ? '扫描应用并添加到抽屉'
-              : `选择要添加到 "${targetFolder || '...'}" 的应用`}
+            点击列表中的应用，将其快捷方式添加到「{targetFolder || '收纳抽屉'}」
           </p>
         </div>
         <button
@@ -55,12 +52,6 @@ export const AppPickerApp: React.FC = () => {
           <X size={20} />
         </button>
       </div>
-
-      {isTauriAppPicker && (
-        <div className="border-b border-cyan-500/20 bg-cyan-500/10 px-6 py-3 text-xs text-cyan-100">
-          targetPath 由 Rust 解析，点击条目会复制快捷方式到 "{targetFolder || '收纳抽屉'}"。
-        </div>
-      )}
 
       <div className="px-6 py-4 border-b border-white/10 flex gap-3">
         <div className="relative flex-1">

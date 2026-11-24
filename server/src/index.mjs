@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAuthService, canWriteWorkspace } from './auth.mjs';
 import { sanitizeWorkspaceId } from './fs_utils.mjs';
 import { createSyncStore } from './store.mjs';
 import { createUserRegistry } from './users.mjs';
+
+const SERVER_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const MAX_BLOB_BYTES = 25 * 1024 * 1024;
@@ -16,10 +18,37 @@ const MIME_BY_EXT = {
   '.mjs': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
+
+function resolveDefaultWebDistDir() {
+  const candidates = [
+    process.env.TIDYDESK_WEB_DIST_DIR,
+    path.join(SERVER_PACKAGE_DIR, 'dist'),
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(SERVER_PACKAGE_DIR, '..', 'dist')
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (fs.existsSync(path.join(resolved, 'index.html'))) {
+      return resolved;
+    }
+  }
+  return path.resolve(process.cwd(), 'dist');
+}
+
+function resolveDefaultDataDir() {
+  if (process.env.TIDYDESK_DATA_DIR) {
+    return path.resolve(process.env.TIDYDESK_DATA_DIR);
+  }
+  if (fs.existsSync(path.join(process.cwd(), 'server', 'src'))) {
+    return path.resolve(process.cwd(), 'server', 'data');
+  }
+  return path.join(SERVER_PACKAGE_DIR, 'data');
+}
 
 function applyCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -93,8 +122,8 @@ function tryServeStaticWeb(webDistDir, pathname, res) {
 }
 
 export function createSyncServer({
-  dataDir = path.resolve(process.cwd(), 'server', 'data'),
-  webDistDir = process.env.TIDYDESK_WEB_DIST_DIR || path.resolve(process.cwd(), 'dist'),
+  dataDir = resolveDefaultDataDir(),
+  webDistDir = resolveDefaultWebDistDir(),
   tokensMap = null,
   allowAnyDevToken = process.env.NODE_ENV !== 'production'
 } = {}) {
@@ -296,7 +325,7 @@ export function createSyncServer({
           return;
         }
         const body = await readJsonBody(req);
-        const presigned = store.presignMedia(body);
+        const presigned = store.presignMedia({ ...body, workspaceId });
         sendJson(res, 200, presigned);
         return;
       }
@@ -311,7 +340,7 @@ export function createSyncServer({
           }
           const buf = await readBuffer(req, MAX_BLOB_BYTES);
           const sha256 = String(req.headers['x-tidydesk-sha256'] || '');
-          store.writeBlob({ kind, key, buffer: buf, sha256 });
+          store.writeBlob({ kind, key, buffer: buf, sha256, workspaceId });
           sendJson(res, 200, { ok: true, kind, key, sizeBytes: buf.length });
           return;
         }
@@ -319,6 +348,10 @@ export function createSyncServer({
           const buf = store.readBlob({ kind, key });
           if (!buf) {
             sendJson(res, 404, { error: 'Media blob not found' });
+            return;
+          }
+          if (!store.canReadBlob({ key, workspaceId })) {
+            sendJson(res, 403, { error: 'Media blob is not accessible in this workspace' });
             return;
           }
           const contentType = key.endsWith('.jpg')
@@ -402,7 +435,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     ? JSON.parse(process.env.TIDYDESK_SYNC_TOKENS)
     : null;
   const { server } = createSyncServer({
-    dataDir: process.env.TIDYDESK_DATA_DIR || path.resolve(process.cwd(), 'server', 'data'),
+    dataDir: resolveDefaultDataDir(),
     tokensMap
   });
   server.listen(port, host, () => {

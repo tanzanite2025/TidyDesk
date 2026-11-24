@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
   Crop,
@@ -73,6 +73,10 @@ export const TodoAttachmentsSection: React.FC<TodoAttachmentsSectionProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mobileCameraInputRef = useRef<HTMLInputElement | null>(null);
   const capabilities = getNativeCapabilities();
+
+  useEffect(() => {
+    setBrokenSrcs({});
+  }, [attachments]);
 
   const imageAttachments = attachments.filter(item => item.kind !== 'video');
   const videoAttachments = attachments.filter(item => item.kind === 'video');
@@ -284,7 +288,16 @@ export const TodoAttachmentsSection: React.FC<TodoAttachmentsSectionProps> = ({
                       <div className="relative aspect-[4/3] w-full overflow-hidden bg-black/50">
                         <button
                           type="button"
-                          onClick={() => setPreviewIndex(index)}
+                          onClick={() => {
+                            if (thumbSrc && brokenSrcs[thumbSrc]) {
+                              setBrokenSrcs(prev => {
+                                const next = { ...prev };
+                                delete next[thumbSrc];
+                                return next;
+                              });
+                            }
+                            setPreviewIndex(index);
+                          }}
                           className="block h-full w-full text-left"
                           title={`查看完整原图：${att.originalName} (${att.width}×${att.height})`}
                         >

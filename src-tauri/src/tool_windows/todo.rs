@@ -1,7 +1,7 @@
+use super::{bring_floating_window_to_front, sync_floating_module_closed};
 use crate::shell::{
-    apply_window_bounds, handle_window_bounds, hide_drawer_window_now, set_handle_always_on_top,
-    shell_snapshot, todo_window_bounds, update_active_module, update_shell_state,
-    webview_url_for_mode, ShellState,
+    ensure_window_in_available_monitors, hide_drawer_window_now, shell_snapshot,
+    todo_window_bounds, update_active_module, webview_url_for_mode, ShellState,
 };
 use serde_json::{json, Value};
 use tauri::{
@@ -13,20 +13,7 @@ const TODO_WINDOW_LABEL: &str = "todos";
 const TODO_MODULE_ID: &str = "todos";
 
 fn sync_todo_window_closed(app: &AppHandle) -> Result<(), String> {
-    let shell = app.state::<ShellState>();
-    let current = shell_snapshot(&shell)?;
-    let next_module = if current.active_module.as_deref() == Some(TODO_MODULE_ID) {
-        None
-    } else {
-        current.active_module
-    };
-
-    apply_window_bounds(app, "handle", handle_window_bounds(app, false)?)?;
-    if let Some(window) = app.get_webview_window("handle") {
-        window.show().map_err(|err| err.to_string())?;
-    }
-    set_handle_always_on_top(app, true)?;
-    update_shell_state(app, &shell, false, next_module)
+    sync_floating_module_closed(app, TODO_MODULE_ID)
 }
 
 fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
@@ -43,14 +30,7 @@ fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
 }
 
 fn bring_todo_window_to_front(window: &WebviewWindow) -> Result<(), String> {
-    if window.is_minimized().unwrap_or(false) {
-        window.unminimize().map_err(|err| err.to_string())?;
-    }
-    window.show().map_err(|err| err.to_string())?;
-    let _ = window.set_always_on_top(true);
-    let focus_res = window.set_focus();
-    let _ = window.set_always_on_top(false);
-    focus_res.map_err(|err| err.to_string())
+    bring_floating_window_to_front(window)
 }
 
 fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
@@ -59,14 +39,13 @@ fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
     }
 
     let bounds = todo_window_bounds(app)?;
-    let window =
-        WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("tauri-todos")?)
-            .title("TidyDesk Todos")
-            .min_inner_size(760.0, 560.0)
-            .resizable(true)
-            .visible(false)
-            .build()
-            .map_err(|err| err.to_string())?;
+    let window = WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("todos")?)
+        .title("TidyDesk Todos")
+        .min_inner_size(760.0, 560.0)
+        .resizable(true)
+        .visible(false)
+        .build()
+        .map_err(|err| err.to_string())?;
     window
         .set_size(PhysicalSize::new(bounds.width, bounds.height))
         .map_err(|err| err.to_string())?;
@@ -98,6 +77,13 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
         window.hide().map_err(|err| err.to_string())?;
     }
     ensure_todo_window(app)?;
+    ensure_window_in_available_monitors(
+        app,
+        TODO_WINDOW_LABEL,
+        760,
+        560,
+        todo_window_bounds(app)?,
+    )?;
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
         bring_todo_window_to_front(&window)?;
     }
@@ -121,6 +107,13 @@ pub fn hide_todo_window_for_snip(app: &AppHandle) -> Result<(), String> {
 pub fn show_todo_window_after_snip(app: &AppHandle) -> Result<(), String> {
     let shell = app.state::<ShellState>();
     ensure_todo_window(app)?;
+    ensure_window_in_available_monitors(
+        app,
+        TODO_WINDOW_LABEL,
+        760,
+        560,
+        todo_window_bounds(app)?,
+    )?;
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
         bring_todo_window_to_front(&window)?;
     }
