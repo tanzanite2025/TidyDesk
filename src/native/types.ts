@@ -140,6 +140,7 @@ export interface NativeAppsClient {
 export interface NativeWindowsClient {
   control: (action: WindowAction) => void;
   getShellState?: () => Promise<DrawerStatePayload>;
+  notifyDrawerReady?: () => void;
   getPathForFile: (file: File) => string;
   onDrawerState: (callback: (payload: DrawerStatePayload) => void) => (() => void) | undefined;
   onModuleState: (callback: (payload: ModuleStatePayload) => void) => (() => void) | undefined;

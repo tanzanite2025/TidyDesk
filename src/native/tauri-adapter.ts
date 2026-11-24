@@ -309,6 +309,9 @@ export function createTauriNativeClient(): NativeClient {
         });
       },
       getShellState: () => invoke<DrawerStatePayload>('windows_get_shell_state'),
+      notifyDrawerReady: () => {
+        invoke('windows_drawer_ready').catch(() => undefined);
+      },
       getPathForFile: () => unavailable('windows.getPathForFile'),
       onDrawerState: callback => onTauriEvent<DrawerStatePayload>('drawer-state', callback),
       onModuleState: callback => onTauriEvent<ModuleStatePayload>('module-state', callback)

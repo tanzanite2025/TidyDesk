@@ -31,7 +31,8 @@ export function useDrawerOperations() {
   const [draggingOverDrawerId, setDraggingOverDrawerId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDrawerExpanded, setIsDrawerExpanded] = useState(false);
+  const [isDrawerExpanded, setIsDrawerExpanded] = useState(windowMode === 'drawer');
+  const [slideInSeq, setSlideInSeq] = useState(0);
   const [renamingDrawerId, setRenamingDrawerId] = useState<string | null>(null);
   const [draftDrawerName, setDraftDrawerName] = useState('');
   const [isClosing, setIsClosing] = useState(false);
@@ -40,6 +41,7 @@ export function useDrawerOperations() {
   const [isValidating, setIsValidating] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const isDrawerExpandedRef = useRef(isDrawerExpanded);
+  const isShellExpandedRef = useRef(windowMode === 'drawer');
   const tauriDroppedPathsRef = useRef<string[] | null>(null);
   
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -78,21 +80,29 @@ export function useDrawerOperations() {
     let disposed = false;
 
     const applyExpandedState = (expanded: boolean) => {
-      if (!expanded && isDrawerExpandedRef.current) {
+      if (!expanded && (isDrawerExpandedRef.current || isShellExpandedRef.current)) {
+        isShellExpandedRef.current = false;
         setIsClosing(true);
         if (closeTimer) clearTimeout(closeTimer);
         closeTimer = setTimeout(() => {
-          setIsDrawerExpanded(false);
+          if (windowMode !== 'drawer') {
+            setIsDrawerExpanded(false);
+          }
           setIsClosing(false);
           closeTimer = undefined;
-        }, 205);
-      } else {
+        }, 280);
+      } else if (expanded) {
         if (closeTimer) {
           clearTimeout(closeTimer);
           closeTimer = undefined;
         }
-        setIsDrawerExpanded(expanded);
+        const shouldReplaySlide = !isShellExpandedRef.current;
+        isShellExpandedRef.current = true;
+        setIsDrawerExpanded(true);
         setIsClosing(false);
+        if (shouldReplaySlide) {
+          setSlideInSeq(seq => seq + 1);
+        }
       }
     };
 
@@ -102,15 +112,8 @@ export function useDrawerOperations() {
       }
     });
 
-    if (windowMode === 'drawer' && nativeClient.windows.getShellState) {
-      nativeClient.windows
-        .getShellState()
-        .then(snapshot => {
-          if (!disposed && snapshot.expanded && !isDrawerExpandedRef.current) {
-            applyExpandedState(true);
-          }
-        })
-        .catch(() => undefined);
+    if (windowMode === 'drawer') {
+      nativeClient.windows.notifyDrawerReady?.();
     }
 
     return () => {
@@ -310,6 +313,7 @@ export function useDrawerOperations() {
     error,
     setError,
     isDrawerExpanded,
+    slideInSeq,
     setIsDrawerExpanded,
     renamingDrawerId,
     setRenamingDrawerId,

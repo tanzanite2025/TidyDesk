@@ -8,6 +8,14 @@ use url::Url;
 
 const DRAWER_SLIDE_DURATION_MS: u64 = 200;
 const DRAWER_SLIDE_FRAME_MS: u64 = 12;
+const DRAWER_READY_WAIT_TIMEOUT_MS: u64 = 450;
+const DRAWER_READY_POLL_MS: u64 = 10;
+
+pub fn notify_drawer_ready(app: &AppHandle) {
+    app.state::<ShellState>()
+        .drawer_ready
+        .store(true, Ordering::Release);
+}
 
 pub fn ease_out_cubic(progress: f64) -> f64 {
     let clamped = progress.clamp(0.0, 1.0);
@@ -71,13 +79,22 @@ pub fn apply_drawer_state(
         }
         set_handle_always_on_top(app, false)?;
         update_shell_state(app, shell, true, next_active_module)?;
-        animate_handle_slide(
-            app.clone(),
-            animation_generation,
-            handle_start_x,
-            handle_target,
-            false,
-        );
+        if shell.drawer_ready.load(Ordering::Acquire) {
+            animate_handle_slide(
+                app.clone(),
+                animation_generation,
+                handle_start_x,
+                handle_target,
+                false,
+            );
+        } else {
+            wait_ready_then_slide_handle(
+                app.clone(),
+                animation_generation,
+                handle_start_x,
+                handle_target,
+            );
+        }
     } else {
         apply_window_bounds(
             app,
@@ -175,6 +192,9 @@ pub fn ensure_drawer_window(app: &AppHandle) -> Result<(), String> {
             .map_err(|err| err.to_string())?;
     }
 
+    app.state::<ShellState>()
+        .drawer_ready
+        .store(false, Ordering::Release);
     let bounds = drawer_window_bounds(app)?;
     let window =
         WebviewWindowBuilder::new(app, DRAWER_WINDOW_LABEL, webview_url_for_mode("drawer")?)
@@ -288,6 +308,37 @@ fn is_current_generation(app: &AppHandle, generation: u64) -> bool {
         .animation_generation
         .load(Ordering::Relaxed)
         == generation
+}
+
+fn wait_ready_then_slide_handle(
+    app: AppHandle,
+    animation_generation: u64,
+    start_x: i32,
+    target: ShellBounds,
+) {
+    let max_wait = Duration::from_millis(DRAWER_READY_WAIT_TIMEOUT_MS);
+    let poll_step = Duration::from_millis(DRAWER_READY_POLL_MS);
+
+    std::thread::spawn(move || {
+        let started_at = Instant::now();
+        while !app
+            .state::<ShellState>()
+            .drawer_ready
+            .load(Ordering::Acquire)
+        {
+            if !is_current_generation(&app, animation_generation) {
+                return;
+            }
+            if started_at.elapsed() >= max_wait {
+                break;
+            }
+            std::thread::sleep(poll_step);
+        }
+        if !is_current_generation(&app, animation_generation) {
+            return;
+        }
+        animate_handle_slide(app, animation_generation, start_x, target, false);
+    });
 }
 
 fn animate_handle_slide(

@@ -307,6 +307,7 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
     windows: {
       control: () => undefined,
       getShellState: async () => ({ expanded: false, activeModule: null }),
+      notifyDrawerReady: () => undefined,
       getPathForFile: () => '',
       onDrawerState: () => undefined,
       onModuleState: () => undefined

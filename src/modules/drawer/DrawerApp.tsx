@@ -38,6 +38,7 @@ export const DrawerApp: React.FC = () => {
     error,
     setError,
     isDrawerExpanded,
+    slideInSeq,
     renamingDrawerId,
     setRenamingDrawerId,
     draftDrawerName,
@@ -118,9 +119,9 @@ export const DrawerApp: React.FC = () => {
 
   const drawerAnimationClass = isClosing
     ? 'animate-drawer-panel-out'
-    : isDrawerExpanded
-      ? 'animate-drawer-panel-in'
-      : 'translate-x-full pointer-events-none';
+    : slideInSeq % 2 === 1
+      ? 'animate-drawer-panel-in-alt'
+      : 'animate-drawer-panel-in';
 
   return (
     <div className="relative flex h-screen w-full select-none overflow-hidden bg-transparent text-slate-100">

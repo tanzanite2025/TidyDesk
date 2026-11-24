@@ -22,6 +22,12 @@ pub fn windows_get_shell_state(shell: tauri::State<'_, ShellState>) -> Result<Va
 }
 
 #[tauri::command]
+pub fn windows_drawer_ready(app: AppHandle) -> Result<(), String> {
+    crate::shell::notify_drawer_ready(&app);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn windows_control(
     app: AppHandle,
     shell: tauri::State<'_, ShellState>,
