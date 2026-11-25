@@ -40,7 +40,7 @@ jobs:
         run: npm run check
 
       - name: Run sync server & release script tests
-        run: node --test server/test/sync.test.mjs scripts/test-release-scripts.mjs
+        run: node --test server/test/sync.test.mjs server/test/phase2_pg_minio.test.mjs scripts/test-release-scripts.mjs
 
       - name: Check Rust e2e feature & Clippy lints
         run: |

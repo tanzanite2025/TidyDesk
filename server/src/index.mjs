@@ -156,9 +156,19 @@ export function createSyncServer({
   webDistDir = resolveDefaultWebDistDir(),
   tokensMap = null,
   allowAnyDevToken = process.env.NODE_ENV !== 'production',
-  storeDriver = undefined
+  storeDriver = undefined,
+  pgUrl = undefined,
+  pgClient = null,
+  minioConfig = undefined,
+  blobStore = null
 } = {}) {
-  const storage = createServerStorage(dataDir, { driver: storeDriver });
+  const storage = createServerStorage(dataDir, {
+    driver: storeDriver,
+    pgUrl,
+    pgClient,
+    minioConfig,
+    blobStore
+  });
   const { store, userRegistry } = storage;
   const auth = createAuthService({ tokensMap, allowAnyDevToken, userRegistry });
   const sseSubscribers = new Map();
@@ -219,6 +229,7 @@ export function createSyncServer({
           service: 'tidydesk-sync-server',
           version: 1,
           storeDriver: storage.driver,
+          blobMode: storage.blobMode,
           appVersion: resolveServerAppVersion()
         });
         return;
@@ -232,7 +243,7 @@ export function createSyncServer({
 
       if (method === 'POST' && pathname === '/api/v1/auth/login') {
         const body = await readJsonBody(req);
-        const resAuth = userRegistry.verifyPassword(body.userId, body.password);
+        const resAuth = await userRegistry.verifyPassword(body.userId, body.password);
         if (!resAuth.ok) {
           sendJson(res, resAuth.status || 401, { error: resAuth.error });
           return;
@@ -241,7 +252,7 @@ export function createSyncServer({
           typeof body.deviceLabel === 'string' && body.deviceLabel.trim()
             ? body.deviceLabel.trim()
             : 'device';
-        const issued = userRegistry.issueToken({
+        const issued = await userRegistry.issueToken({
           userId: resAuth.user.userId,
           label: rawLabel
         });
@@ -258,13 +269,13 @@ export function createSyncServer({
 
       if (method === 'POST' && pathname === '/api/v1/auth/verify') {
         const body = await readJsonBody(req);
-        const authRes = auth.authenticateRequest(req, body.userId);
+        const authRes = await auth.authenticateRequest(req, body.userId);
         if (!authRes.ok) {
           sendJson(res, authRes.status, { error: authRes.error });
           return;
         }
         const safeWsId = sanitizeWorkspaceId(body.workspaceId, 'default');
-        const role = store.ensureWorkspaceAccess(authRes.userId, safeWsId);
+        const role = await store.ensureWorkspaceAccess(authRes.userId, safeWsId);
         sendJson(res, 200, {
           ok: true,
           userId: authRes.userId,
@@ -275,26 +286,26 @@ export function createSyncServer({
         return;
       }
 
-      const authRes = auth.authenticateRequest(req);
+      const authRes = await auth.authenticateRequest(req);
       if (!authRes.ok) {
         sendJson(res, authRes.status, { error: authRes.error });
         return;
       }
 
       if (method === 'POST' && pathname === '/api/v1/auth/logout') {
-        const revoked = userRegistry.revokeTokenByValue(authRes.userId, authRes.token);
+        const revoked = await userRegistry.revokeTokenByValue(authRes.userId, authRes.token);
         sendJson(res, 200, revoked);
         return;
       }
 
       if (method === 'POST' && pathname === '/api/v1/auth/password') {
         const body = await readJsonBody(req);
-        const pwdCheck = userRegistry.verifyPassword(authRes.userId, body.oldPassword);
+        const pwdCheck = await userRegistry.verifyPassword(authRes.userId, body.oldPassword);
         if (!pwdCheck.ok) {
           sendJson(res, pwdCheck.status || 401, { error: pwdCheck.error || '原密码校验失败' });
           return;
         }
-        userRegistry.setPassword({
+        await userRegistry.setPassword({
           userId: authRes.userId,
           newPassword: body.newPassword,
           revokeAll: Boolean(body.revokeAll)
@@ -305,7 +316,7 @@ export function createSyncServer({
 
       if (method === 'GET' && pathname === '/api/v1/auth/sessions') {
         sendJson(res, 200, {
-          sessions: userRegistry.listSessionsForUser(authRes.userId, authRes.token)
+          sessions: await userRegistry.listSessionsForUser(authRes.userId, authRes.token)
         });
         return;
       }
@@ -317,7 +328,7 @@ export function createSyncServer({
           sendJson(res, 400, { error: '缺少待吊销的 tokenId' });
           return;
         }
-        const revoked = userRegistry.revokeTokenById({
+        const revoked = await userRegistry.revokeTokenById({
           userId: authRes.userId,
           tokenId,
           isAdmin: false
@@ -328,13 +339,13 @@ export function createSyncServer({
 
       if (method === 'GET' && pathname === '/api/v1/workspaces') {
         sendJson(res, 200, {
-          workspaces: store.listWorkspacesForUser(authRes.userId)
+          workspaces: await store.listWorkspacesForUser(authRes.userId)
         });
         return;
       }
 
       const workspaceId = sanitizeWorkspaceId(url.searchParams.get('workspaceId'), 'default');
-      const role = store.ensureWorkspaceAccess(authRes.userId, workspaceId);
+      const role = await store.ensureWorkspaceAccess(authRes.userId, workspaceId);
 
       if (method === 'GET' && pathname === '/api/v1/sync/events') {
         applyCorsHeaders(res);
@@ -343,7 +354,7 @@ export function createSyncServer({
           'Cache-Control': 'no-cache, no-transform',
           Connection: 'keep-alive'
         });
-        const snapshot = store.pullSince({ workspaceId, cursor: null });
+        const snapshot = await store.pullSince({ workspaceId, cursor: null });
         res.write(
           `event: ready\ndata: ${JSON.stringify({
             workspaceId,
@@ -362,7 +373,7 @@ export function createSyncServer({
           return;
         }
         const body = await readJsonBody(req);
-        const presigned = store.presignMedia({ ...body, workspaceId });
+        const presigned = await store.presignMedia({ ...body, workspaceId });
         sendJson(res, 200, presigned);
         return;
       }
@@ -377,17 +388,17 @@ export function createSyncServer({
           }
           const buf = await readBuffer(req, MAX_BLOB_BYTES);
           const sha256 = String(req.headers['x-tidydesk-sha256'] || '');
-          store.writeBlob({ kind, key, buffer: buf, sha256, workspaceId });
+          await store.writeBlob({ kind, key, buffer: buf, sha256, workspaceId });
           sendJson(res, 200, { ok: true, kind, key, sizeBytes: buf.length });
           return;
         }
         if (method === 'GET') {
-          const buf = store.readBlob({ kind, key });
+          const buf = await store.readBlob({ kind, key });
           if (!buf) {
             sendJson(res, 404, { error: 'Media blob not found' });
             return;
           }
-          if (!store.canReadBlob({ key, workspaceId })) {
+          if (!(await store.canReadBlob({ key, workspaceId }))) {
             sendJson(res, 403, { error: 'Media blob is not accessible in this workspace' });
             return;
           }
@@ -410,13 +421,13 @@ export function createSyncServer({
       if (method === 'POST' && pathname === '/api/v1/sync/push') {
         const body = await readJsonBody(req);
         const targetWorkspaceId = sanitizeWorkspaceId(body.workspaceId, workspaceId);
-        const targetRole = store.ensureWorkspaceAccess(authRes.userId, targetWorkspaceId);
+        const targetRole = await store.ensureWorkspaceAccess(authRes.userId, targetWorkspaceId);
         if (!canWriteWorkspace(targetRole)) {
           sendJson(res, 403, { error: 'Workspace viewer cannot push changes' });
           return;
         }
         const entries = Array.isArray(body.entries) ? body.entries : [];
-        const result = store.pushEntries({
+        const result = await store.pushEntries({
           workspaceId: targetWorkspaceId,
           actorId: authRes.userId,
           entries
@@ -435,7 +446,7 @@ export function createSyncServer({
 
       if (method === 'GET' && pathname === '/api/v1/sync/pull') {
         const cursor = url.searchParams.get('cursor');
-        const pulled = store.pullSince({ workspaceId, cursor });
+        const pulled = await store.pullSince({ workspaceId, cursor });
         sendJson(res, 200, pulled);
         return;
       }
@@ -459,10 +470,12 @@ export function createSyncServer({
       set.clear();
     }
     sseSubscribers.clear();
-    storage.close();
+    Promise.resolve(storage.close()).catch(err => {
+      console.error('[TIDYDESK-SYNC] Failed closing storage:', err);
+    });
   });
 
-  return { server, store, users: userRegistry, driver: storage.driver };
+  return { server, store, users: userRegistry, driver: storage.driver, blobMode: storage.blobMode };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

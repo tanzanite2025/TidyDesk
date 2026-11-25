@@ -1,6 +1,6 @@
 # TidyDesk Sync Server (MVP)
 
-零外部 npm 依赖、基于 Node.js 22 原生运行的 TidyDesk 协同服务端（Phase 1 起默认内置 `node:sqlite` WAL 事务数据库 `tidydesk-sync.db`，支持通过 `TIDYDESK_STORE_DRIVER=json` 秒级回退至 JSON 存储，并会在首次升级时自动将既有 `sync-db.json` / `users-auth.json` 事务导入并备份为 `.pre-sqlite.bak`）；同时附带生产环境 PostgreSQL + MinIO Schema (`sql/schema.sql`) 与 `docker-compose.yml`。
+零外部 npm 依赖、基于 Node.js 22 原生运行的 TidyDesk 协同服务端（Phase 1 默认内置 `node:sqlite` WAL 事务数据库 `tidydesk-sync.db`，支持通过 `TIDYDESK_STORE_DRIVER=json` 秒级回退；Phase 2 已实现零依赖 PostgreSQL v3 驱动与 MinIO SigV4 对象存储适配器，可通过 `TIDYDESK_STORE_DRIVER=postgres` + `TIDYDESK_PG_URL` + `TIDYDESK_MINIO_ENDPOINT` 启用，并配套 `node src/migrate.mjs` 数据迁移与逐条对账工具），配套 `sql/schema.sql` 与 `docker-compose.yml`。
 
 ## 本地一键启动
 

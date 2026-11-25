@@ -5,41 +5,12 @@ import { mergeCardOnServer } from './merge.mjs';
 import { openSyncSqliteDatabase, withImmediateTransaction, withReadTransaction } from './sqlite_db.mjs';
 import {
   archiveLegacyJsonFile,
+  extractLegacyScopedRecords,
   extractShaFromBlobKey,
   readBlobFromDisk,
   safeBlobPath,
   writeBlobFileAtomic
 } from './storage_shared.mjs';
-
-function extractLegacyWorkspaceRecords(map, legacyObj) {
-  const out = [];
-  if (!legacyObj || typeof legacyObj !== 'object') return out;
-  for (const [rawKey, record] of Object.entries(legacyObj)) {
-    if (!record || typeof record !== 'object') continue;
-    const colonIdx = rawKey.indexOf(':');
-    let workspaceId = record.workspaceId || 'default';
-    let entityId = record.id || rawKey;
-    if (colonIdx > 0) {
-      const prefix = rawKey.slice(0, colonIdx);
-      const rest = rawKey.slice(colonIdx + 1);
-      if (rawKey.startsWith('private:')) {
-        const secondColon = rawKey.indexOf(':', 'private:'.length);
-        if (secondColon > 0) {
-          workspaceId = rawKey.slice(0, secondColon);
-          entityId = rawKey.slice(secondColon + 1);
-        }
-      } else if (prefix === workspaceId || !record.workspaceId) {
-        workspaceId = prefix;
-        entityId = rest;
-      }
-    }
-    const dedupKey = `${workspaceId}:${entityId}`;
-    if (!map.has(dedupKey)) {
-      map.set(dedupKey, { workspaceId, entityId, record });
-    }
-  }
-  return out;
-}
 
 function migrateLegacySyncJsonIfNeeded(dataDir, db) {
   const alreadyMigrated = db
@@ -80,12 +51,11 @@ function migrateLegacySyncJsonIfNeeded(dataDir, db) {
         }
       }
 
-      const cardEntries = new Map();
-      extractLegacyWorkspaceRecords(cardEntries, parsed?.cards);
+      const cardEntries = extractLegacyScopedRecords(parsed?.cards);
       const insertCard = db.prepare(
         'INSERT OR REPLACE INTO cards (workspace_id, id, updated_at, deleted_at, payload_json) VALUES (?, ?, ?, ?, ?)'
       );
-      for (const { workspaceId, entityId, record } of cardEntries.values()) {
+      for (const { workspaceId, entityId, record } of cardEntries) {
         const normalized = { ...record, id: entityId, workspaceId };
         insertCard.run(
           workspaceId,
@@ -96,12 +66,11 @@ function migrateLegacySyncJsonIfNeeded(dataDir, db) {
         );
       }
 
-      const noteEntries = new Map();
-      extractLegacyWorkspaceRecords(noteEntries, parsed?.quickNotes);
+      const noteEntries = extractLegacyScopedRecords(parsed?.quickNotes);
       const insertNote = db.prepare(
         'INSERT OR REPLACE INTO quick_notes (workspace_id, id, updated_at, deleted_at, payload_json) VALUES (?, ?, ?, ?, ?)'
       );
-      for (const { workspaceId, entityId, record } of noteEntries.values()) {
+      for (const { workspaceId, entityId, record } of noteEntries) {
         const normalized = { ...record, id: entityId, workspaceId };
         insertNote.run(
           workspaceId,

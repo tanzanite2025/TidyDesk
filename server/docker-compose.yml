@@ -9,6 +9,13 @@ services:
       HOST: "0.0.0.0"
       PORT: "8787"
       TIDYDESK_DATA_DIR: "/data/sync"
+      # 存储引擎：sqlite（默认单机推荐）/ json（兼容回退）/ postgres（生产集群，需同时开启 --profile prod-db）
+      # TIDYDESK_STORE_DRIVER: "postgres"
+      # TIDYDESK_PG_URL: "postgres://tidydesk:change-me-in-production@postgres:5432/tidydesk"
+      # TIDYDESK_MINIO_ENDPOINT: "http://minio:9000"
+      # TIDYDESK_MINIO_BUCKET: "tidydesk-blobs"
+      # TIDYDESK_MINIO_ACCESS_KEY: "tidydesk"
+      # TIDYDESK_MINIO_SECRET_KEY: "change-me-in-production"
       # 生产环境请配置严格 Token 映射，示例：{"alice":"replace-strong-token"}
       # TIDYDESK_SYNC_TOKENS: '{"alice":"secret-token"}'
     volumes:

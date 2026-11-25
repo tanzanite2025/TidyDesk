@@ -13,7 +13,7 @@ export function createAuthService({
 } = {}) {
   const registeredTokens = new Map(Object.entries(tokensMap || {}));
 
-  function authenticateRequest(req, bodyUserId = null) {
+  async function authenticateRequest(req, bodyUserId = null) {
     const authHeader = String(req.headers.authorization || '').trim();
     const match = authHeader.match(/^Bearer\s+(.+)$/i);
     if (!match || !match[1].trim()) {
@@ -26,7 +26,7 @@ export function createAuthService({
       return { ok: false, status: 401, error: 'Invalid or missing X-TidyDesk-User header' };
     }
 
-    if (userRegistry?.isUserDisabled(userId)) {
+    if (userRegistry && (await userRegistry.isUserDisabled(userId))) {
       return { ok: false, status: 403, error: '该账号已被管理员禁用' };
     }
 
@@ -35,7 +35,7 @@ export function createAuthService({
       const a = Buffer.from(expected);
       const b = Buffer.from(token);
       if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-        const publicUser = userRegistry?.getUserPublic(userId);
+        const publicUser = userRegistry ? await userRegistry.getUserPublic(userId) : null;
         return {
           ok: true,
           userId,
@@ -47,7 +47,7 @@ export function createAuthService({
     }
 
     if (userRegistry) {
-      const regRes = userRegistry.verifyBearerToken(userId, token);
+      const regRes = await userRegistry.verifyBearerToken(userId, token);
       if (regRes.ok) {
         return {
           ok: true,
@@ -58,7 +58,7 @@ export function createAuthService({
           authSource: 'registry'
         };
       }
-      if (registeredTokens.size > 0 || userRegistry.hasRegisteredUsers()) {
+      if (registeredTokens.size > 0 || (await userRegistry.hasRegisteredUsers())) {
         return {
           ok: false,
           status: regRes.status || 401,

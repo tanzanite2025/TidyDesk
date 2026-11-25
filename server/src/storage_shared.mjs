@@ -5,13 +5,51 @@ import path from 'node:path';
 export const SAFE_KEY_RE = /^[a-zA-Z0-9._-]{1,128}$/;
 export const BLOB_SHA_RE = /^(?:thumb|orig)_([a-fA-F0-9]{64})\.[a-z0-9]+$/;
 
+export function validateBlobKey(kind, key) {
+  if ((kind !== 'thumb' && kind !== 'original') || !SAFE_KEY_RE.test(key) || key.startsWith('.')) {
+    throw new Error('Invalid media blob key');
+  }
+}
+
+export function extractLegacyScopedRecords(legacyObj) {
+  const map = new Map();
+  if (!legacyObj || typeof legacyObj !== 'object') return [];
+  for (const [rawKey, record] of Object.entries(legacyObj)) {
+    if (!record || typeof record !== 'object') continue;
+    const colonIdx = rawKey.indexOf(':');
+    let workspaceId = record.workspaceId || 'default';
+    let entityId = record.id || rawKey;
+    if (colonIdx > 0) {
+      const prefix = rawKey.slice(0, colonIdx);
+      const rest = rawKey.slice(colonIdx + 1);
+      if (rawKey.startsWith('private:')) {
+        const secondColon = rawKey.indexOf(':', 'private:'.length);
+        if (secondColon > 0) {
+          workspaceId = rawKey.slice(0, secondColon);
+          entityId = rawKey.slice(secondColon + 1);
+        }
+      } else if (prefix === workspaceId || !record.workspaceId) {
+        workspaceId = prefix;
+        entityId = rest;
+      }
+    }
+    const dedupKey = `${workspaceId}:${entityId}`;
+    if (!map.has(dedupKey)) {
+      map.set(dedupKey, { workspaceId, entityId, record });
+    }
+  }
+  return Array.from(map.values());
+}
+
 export function extractShaFromBlobKey(key) {
   const match = String(key || '').match(BLOB_SHA_RE);
   return match ? match[1].toLowerCase() : null;
 }
 
 export function safeBlobPath(blobsDir, kind, key) {
-  if ((kind !== 'thumb' && kind !== 'original') || !SAFE_KEY_RE.test(key) || key.startsWith('.')) {
+  try {
+    validateBlobKey(kind, key);
+  } catch {
     return null;
   }
   const target = path.resolve(blobsDir, kind, key);
