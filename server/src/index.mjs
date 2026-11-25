@@ -4,8 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createAuthService, canWriteWorkspace } from './auth.mjs';
 import { sanitizeWorkspaceId } from './fs_utils.mjs';
-import { createSyncStore } from './store.mjs';
-import { createUserRegistry } from './users.mjs';
+import { createServerStorage } from './storage_factory.mjs';
 
 const SERVER_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -156,11 +155,12 @@ export function createSyncServer({
   dataDir = resolveDefaultDataDir(),
   webDistDir = resolveDefaultWebDistDir(),
   tokensMap = null,
-  allowAnyDevToken = process.env.NODE_ENV !== 'production'
+  allowAnyDevToken = process.env.NODE_ENV !== 'production',
+  storeDriver = undefined
 } = {}) {
-  const userRegistry = createUserRegistry(dataDir);
+  const storage = createServerStorage(dataDir, { driver: storeDriver });
+  const { store, userRegistry } = storage;
   const auth = createAuthService({ tokensMap, allowAnyDevToken, userRegistry });
-  const store = createSyncStore(dataDir);
   const sseSubscribers = new Map();
 
   function addSubscriber(workspaceId, res) {
@@ -218,6 +218,7 @@ export function createSyncServer({
           ok: true,
           service: 'tidydesk-sync-server',
           version: 1,
+          storeDriver: storage.driver,
           appVersion: resolveServerAppVersion()
         });
         return;
@@ -458,9 +459,10 @@ export function createSyncServer({
       set.clear();
     }
     sseSubscribers.clear();
+    storage.close();
   });
 
-  return { server, store, users: userRegistry };
+  return { server, store, users: userRegistry, driver: storage.driver };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

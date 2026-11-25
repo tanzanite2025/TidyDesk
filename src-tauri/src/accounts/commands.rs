@@ -172,7 +172,7 @@ fn build_active_http_client(app: &AppHandle) -> Result<HttpSyncClient, String> {
     HttpSyncClient::new(endpoint, user_id, &token)?.with_workspace(&session.workspace_id)
 }
 
-fn emit_account_workspace_refreshed(
+pub(crate) fn emit_account_workspace_refreshed(
     app: &AppHandle,
     snapshot: &AccountSessionSnapshot,
 ) -> Result<(), String> {

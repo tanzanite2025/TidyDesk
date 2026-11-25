@@ -4,6 +4,8 @@ import type {
   AppPickerTargetResult,
   CacheInfoResult,
   CaptureOpenedPayload,
+  DataRestoreSummary,
+  DataSnapshotSummary,
   DesktopFilesResult,
   DeleteItemPayload,
   DrawerStatePayload,
@@ -28,6 +30,7 @@ import type {
   RestoreToDesktopPayload,
   RestoreToDesktopResult,
   ShortcutValidationStats,
+  SnapshotVerificationReport,
   SnipBackgroundImageResult,
   SnipRect,
   StickerData,
@@ -201,6 +204,13 @@ export interface NativeEventsClient {
   send: (channel: TidyDeskSendChannel) => void;
 }
 
+export interface NativeBackupClient {
+  listSnapshots: () => Promise<DataSnapshotSummary[]>;
+  createSnapshot: (targetDir?: string) => Promise<DataSnapshotSummary>;
+  verifySnapshot: (snapshotDir: string) => Promise<SnapshotVerificationReport>;
+  restoreSnapshot: (snapshotDir: string) => Promise<DataRestoreSummary>;
+}
+
 export interface NativeAccountsClient {
   getSession: () => Promise<AccountSessionSnapshot>;
   switchSession: (payload: SwitchAccountSessionInput) => Promise<AccountSessionSnapshot>;
@@ -264,5 +274,6 @@ export interface NativeClient {
   stickers: NativeStickersClient;
   updates: NativeUpdatesClient;
   events: NativeEventsClient;
+  backup: NativeBackupClient;
   activeModuleType?: RailModule;
 }

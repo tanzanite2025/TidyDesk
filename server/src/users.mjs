@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson, httpError, sanitizeUserId } from './fs_utils.mjs';
+import { hashPassword, sha256Hex, timingSafeHexEqual } from './storage_shared.mjs';
 
 function createInitialAuthDb() {
   return {
@@ -9,21 +10,6 @@ function createInitialAuthDb() {
     users: {},
     tokens: {}
   };
-}
-
-function sha256Hex(raw) {
-  return crypto.createHash('sha256').update(String(raw)).digest('hex');
-}
-
-function hashPassword(password, saltHex) {
-  return crypto.scryptSync(password, saltHex, 64).toString('hex');
-}
-
-function timingSafeHexEqual(aHex, bHex) {
-  if (!aHex || !bHex || aHex.length !== bHex.length) return false;
-  const a = Buffer.from(aHex, 'hex');
-  const b = Buffer.from(bHex, 'hex');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /**
@@ -322,6 +308,7 @@ export function createUserRegistry(dataDir) {
   }
 
   return {
+    driver: 'json',
     authPath,
     hasRegisteredUsers,
     isUserDisabled,
@@ -335,6 +322,7 @@ export function createUserRegistry(dataDir) {
     revokeTokenById,
     revokeTokenByValue,
     listSessionsForUser,
-    listUsersAndSessions
+    listUsersAndSessions,
+    close() {}
   };
 }

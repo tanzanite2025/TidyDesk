@@ -12,6 +12,7 @@ mod accounts;
 mod apps;
 mod apps_classifier;
 mod asset_protocol;
+mod backup;
 mod capture;
 mod commands;
 mod files;
@@ -47,6 +48,9 @@ use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
     apps_scan_installed, close_app_picker, open_app_picker, AppPickerTargetState,
     TrustedShortcutState,
+};
+use backup::{
+    backup_create_snapshot, backup_list_snapshots, backup_restore_snapshot, backup_verify_snapshot,
 };
 use capture::{snip_cancel, snip_complete_selection, snip_get_background_image, SnipCaptureState};
 use commands::clipboard::clipboard_read_text;
@@ -192,7 +196,11 @@ macro_rules! tidydesk_generate_handler {
             open_todo_window,
             close_todo_window,
             open_app_picker,
-            close_app_picker
+            close_app_picker,
+            backup_list_snapshots,
+            backup_create_snapshot,
+            backup_verify_snapshot,
+            backup_restore_snapshot
         ]
     };
 }
@@ -282,7 +290,11 @@ macro_rules! tidydesk_generate_handler {
             open_todo_window,
             close_todo_window,
             open_app_picker,
-            close_app_picker
+            close_app_picker,
+            backup_list_snapshots,
+            backup_create_snapshot,
+            backup_verify_snapshot,
+            backup_restore_snapshot
         ]
     };
 }

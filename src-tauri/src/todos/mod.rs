@@ -6,10 +6,8 @@ pub mod model;
 pub mod ranking;
 pub mod store;
 
-pub(crate) use attachments::card_attachments_dir;
-#[cfg(test)]
-pub(crate) use attachments::compute_sha256_hex;
 pub use attachments::todo_attachments_root;
+pub(crate) use attachments::{card_attachments_dir, compute_sha256_hex};
 pub use commands::{
     attach_png_to_todo_card, todos_add_attachment_bytes, todos_create_card,
     todos_delete_attachment, todos_delete_card, todos_get_card_detail, todos_get_counts,

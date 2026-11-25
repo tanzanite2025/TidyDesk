@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import path from 'node:path';
-import { createSyncStore } from './store.mjs';
-import { createUserRegistry } from './users.mjs';
+import { createServerStorage } from './storage_factory.mjs';
 
 function parseArgs(argv) {
   const positional = [];
@@ -38,7 +37,8 @@ function printUsage() {
   node server/src/cli.mjs list
 
 环境变量:
-  TIDYDESK_DATA_DIR   数据目录，默认 ./server/data
+  TIDYDESK_DATA_DIR       数据目录，默认 ./server/data
+  TIDYDESK_STORE_DRIVER   存储引擎: sqlite（默认）或 json（回退）
 `);
 }
 
@@ -51,9 +51,13 @@ function main() {
   }
 
   const dataDir = process.env.TIDYDESK_DATA_DIR || path.resolve(process.cwd(), 'server', 'data');
-  const users = createUserRegistry(dataDir);
+  const storage = createServerStorage(dataDir, {
+    driver: typeof flags.driver === 'string' ? flags.driver : undefined
+  });
+  const { userRegistry: users, store } = storage;
 
-  switch (cmd) {
+  try {
+    switch (cmd) {
     case 'useradd': {
       const userId = rest[0];
       const password = flags.password;
@@ -129,8 +133,8 @@ function main() {
       if (!validRoles.includes(role)) {
         throw new Error(`无效角色: ${role}`);
       }
-      const store = createSyncStore(dataDir);
-      store.setWorkspaceRole(workspaceId, userId, role);
+      const storeRole = store;
+      storeRole.setWorkspaceRole(workspaceId, userId, role);
       console.log(`✅ 已设置工作区 ${workspaceId} 成员 ${userId} 角色为 ${role}`);
       break;
     }
@@ -153,8 +157,11 @@ function main() {
       }
       break;
     }
-    default:
-      throw new Error(`未知命令: ${cmd}`);
+      default:
+        throw new Error(`未知命令: ${cmd}`);
+    }
+  } finally {
+    storage.close();
   }
 }
 

@@ -8,6 +8,7 @@ import { AppInfoCard } from './settings/AppInfoCard';
 import { StickerSettingsCard } from './settings/StickerSettingsCard';
 import { ResidentSettingsCard } from './settings/ResidentSettingsCard';
 import { AccountSyncCard } from './settings/AccountSyncCard';
+import { DataBackupCard } from './settings/DataBackupCard';
 import { UpdateSectionCard } from './settings/UpdateSectionCard';
 
 interface SettingsPanelProps {
@@ -119,6 +120,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             onUpdateResident={payload => void updateResidentSettings(payload)}
           />
           <AccountSyncCard />
+          <DataBackupCard />
           <UpdateSectionCard
             residentSettings={residentSettings}
             isSavingResident={isSavingResident}

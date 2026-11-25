@@ -654,3 +654,277 @@ test('sync server serves mobile PWA manifest and SPA html when webDistDir is con
     fs.rmSync(dataRoot, { recursive: true, force: true });
   }
 });
+
+test('sync store baseline preserves monotonic cursors, tombstones, and data across server restarts', async () => {
+  const persistDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-persist-baseline-'));
+  const srvA = createSyncServer({
+    dataDir: persistDir,
+    tokensMap: { alice: 'tok_alice_persist' },
+    allowAnyDevToken: false
+  });
+  await new Promise(resolve => srvA.server.listen(0, '127.0.0.1', resolve));
+  const urlA = `http://127.0.0.1:${srvA.server.address().port}`;
+  let afterUpsertCursor = '0';
+  let afterDeleteCursor = '0';
+
+  try {
+    const pushUpsert = await fetch(`${urlA}/api/v1/sync/push`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer tok_alice_persist',
+        'X-TidyDesk-User': 'alice',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        workspaceId: 'default',
+        entries: [
+          {
+            entityKind: 'card',
+            entityId: 'card-persist-1',
+            operation: 'upsert',
+            payload: { title: '持久卡片', boardId: 'default-board', columnId: 'todo', position: 'a0' }
+          },
+          {
+            entityKind: 'quickNote',
+            entityId: 'note-persist-1',
+            operation: 'upsert',
+            payload: { title: '持久速记', content: '保留 across restart', pinned: false, favorite: true }
+          }
+        ]
+      })
+    });
+    assert.equal(pushUpsert.status, 200);
+    const upsertBody = await pushUpsert.json();
+    afterUpsertCursor = upsertBody.nextCursor;
+    assert.ok(Number(afterUpsertCursor) >= 2);
+
+    const pushDelete = await fetch(`${urlA}/api/v1/sync/push`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer tok_alice_persist',
+        'X-TidyDesk-User': 'alice',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        workspaceId: 'default',
+        entries: [
+          {
+            entityKind: 'quickNote',
+            entityId: 'note-persist-1',
+            operation: 'delete',
+            payload: { id: 'note-persist-1' }
+          }
+        ]
+      })
+    });
+    assert.equal(pushDelete.status, 200);
+    const deleteBody = await pushDelete.json();
+    afterDeleteCursor = deleteBody.nextCursor;
+    assert.ok(Number(afterDeleteCursor) > Number(afterUpsertCursor));
+  } finally {
+    await new Promise(resolve => srvA.server.close(resolve));
+  }
+
+  // Restart a brand-new server instance against the same dataDir and verify identical state/cursors
+  const srvB = createSyncServer({
+    dataDir: persistDir,
+    tokensMap: { alice: 'tok_alice_persist' },
+    allowAnyDevToken: false
+  });
+  await new Promise(resolve => srvB.server.listen(0, '127.0.0.1', resolve));
+  const urlB = `http://127.0.0.1:${srvB.server.address().port}`;
+  try {
+    const fullPull = await fetch(`${urlB}/api/v1/sync/pull?workspaceId=default&cursor=0`, {
+      headers: { Authorization: 'Bearer tok_alice_persist', 'X-TidyDesk-User': 'alice' }
+    });
+    assert.equal(fullPull.status, 200);
+    const fullBody = await fullPull.json();
+    assert.equal(fullBody.nextCursor, afterDeleteCursor);
+    assert.equal(fullBody.cards.filter(c => c.id === 'card-persist-1').length, 1);
+    assert.ok(fullBody.removedQuickNoteIds.includes('note-persist-1'));
+
+    const incPull = await fetch(
+      `${urlB}/api/v1/sync/pull?workspaceId=default&cursor=${afterUpsertCursor}`,
+      { headers: { Authorization: 'Bearer tok_alice_persist', 'X-TidyDesk-User': 'alice' } }
+    );
+    assert.equal(incPull.status, 200);
+    const incBody = await incPull.json();
+    assert.equal(incBody.nextCursor, afterDeleteCursor);
+    assert.deepEqual(incBody.removedQuickNoteIds, ['note-persist-1']);
+  } finally {
+    await new Promise(resolve => srvB.server.close(resolve));
+    fs.rmSync(persistDir, { recursive: true, force: true });
+  }
+});
+
+test('sqlite cold-migrates legacy json sync/auth data atomically and preserves tokens, cursors, and .bak files', async () => {
+  const migDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-mig-'));
+  const cliPath = path.resolve(process.cwd(), 'server', 'src', 'cli.mjs');
+
+  execFileSync(
+    process.execPath,
+    [cliPath, 'useradd', 'maya', '--password', 'maya-pass-999', '--name', 'Maya', '--driver', 'json'],
+    { env: { ...process.env, TIDYDESK_DATA_DIR: migDir }, encoding: 'utf8' }
+  );
+
+  const jsonSrv = createSyncServer({
+    dataDir: migDir,
+    storeDriver: 'json',
+    allowAnyDevToken: false
+  });
+  await new Promise(resolve => jsonSrv.server.listen(0, '127.0.0.1', resolve));
+  const jsonUrl = `http://127.0.0.1:${jsonSrv.server.address().port}`;
+  let issuedToken = '';
+  let legacyCursor = '0';
+
+  try {
+    const healthJsonRes = await fetch(`${jsonUrl}/health`);
+    assert.equal((await healthJsonRes.json()).storeDriver, 'json');
+
+    const loginRes = await fetch(`${jsonUrl}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: 'maya', password: 'maya-pass-999', deviceLabel: 'LegacyPhone' })
+    });
+    assert.equal(loginRes.status, 200);
+    issuedToken = (await loginRes.json()).token;
+
+    const pushRes = await fetch(`${jsonUrl}/api/v1/sync/push`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${issuedToken}`,
+        'X-TidyDesk-User': 'maya',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        workspaceId: 'private:maya',
+        entries: [
+          {
+            entityKind: 'card',
+            entityId: 'mig-card-1',
+            operation: 'upsert',
+            payload: { title: '迁移前待办', boardId: 'default-board', columnId: 'todo', position: 'a0' }
+          },
+          {
+            entityKind: 'quickNote',
+            entityId: 'mig-note-1',
+            operation: 'upsert',
+            payload: { title: '迁移前快记', content: 'legacy note body', pinned: true, favorite: false }
+          }
+        ]
+      })
+    });
+    assert.equal(pushRes.status, 200);
+    legacyCursor = (await pushRes.json()).nextCursor;
+  } finally {
+    await new Promise(resolve => jsonSrv.server.close(resolve));
+  }
+
+  assert.ok(fs.existsSync(path.join(migDir, 'sync-db.json')));
+  assert.ok(fs.existsSync(path.join(migDir, 'users-auth.json')));
+
+  // Inject an orphan legacy token for a deleted user to verify cold-migration guards FK safely
+  const legacyAuthPath = path.join(migDir, 'users-auth.json');
+  const legacyAuth = JSON.parse(fs.readFileSync(legacyAuthPath, 'utf8'));
+  legacyAuth.tokens.tok_orphan_dead = {
+    tokenId: 'tok_orphan_dead',
+    userId: 'deleted_ghost_user',
+    tokenHash: 'a'.repeat(64),
+    label: 'OldDevice',
+    createdAt: '1000',
+    lastUsedAt: '1000',
+    revokedAt: null
+  };
+  fs.writeFileSync(legacyAuthPath, JSON.stringify(legacyAuth, null, 2));
+
+  // Boot explicit SQLite server against legacy JSON dataDir -> cold-migrates & creates .pre-sqlite.bak
+  const sqliteSrv = createSyncServer({
+    dataDir: migDir,
+    storeDriver: 'sqlite',
+    allowAnyDevToken: false
+  });
+  await new Promise(resolve => sqliteSrv.server.listen(0, '127.0.0.1', resolve));
+  const sqliteUrl = `http://127.0.0.1:${sqliteSrv.server.address().port}`;
+
+  try {
+    const healthSql = await (await fetch(`${sqliteUrl}/health`)).json();
+    assert.equal(healthSql.storeDriver, 'sqlite');
+    assert.ok(fs.existsSync(path.join(migDir, 'tidydesk-sync.db')));
+    assert.ok(fs.existsSync(path.join(migDir, 'sync-db.json.pre-sqlite.bak')));
+    assert.ok(fs.existsSync(path.join(migDir, 'users-auth.json.pre-sqlite.bak')));
+
+    // Existing issued token remains valid in SQLite without re-login
+    const pullRes = await fetch(`${sqliteUrl}/api/v1/sync/pull?workspaceId=private%3Amaya&cursor=0`, {
+      headers: { Authorization: `Bearer ${issuedToken}`, 'X-TidyDesk-User': 'maya' }
+    });
+    assert.equal(pullRes.status, 200);
+    const pulled = await pullRes.json();
+    assert.equal(pulled.nextCursor, legacyCursor);
+    assert.equal(pulled.cards[0]?.id, 'mig-card-1');
+    assert.equal(pulled.cards[0]?.title, '迁移前待办');
+    assert.equal(pulled.quickNotes[0]?.id, 'mig-note-1');
+
+    // Password verification works too & new writes advance cursor monotonically beyond legacyCursor
+    const pushNext = await fetch(`${sqliteUrl}/api/v1/sync/push`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${issuedToken}`,
+        'X-TidyDesk-User': 'maya',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        workspaceId: 'private:maya',
+        entries: [
+          {
+            entityKind: 'quickNote',
+            entityId: 'mig-note-2',
+            operation: 'upsert',
+            payload: { title: 'SQLite 新增', content: 'after migration' }
+          }
+        ]
+      })
+    });
+    assert.equal(pushNext.status, 200);
+    const nextCursor = (await pushNext.json()).nextCursor;
+    assert.ok(Number(nextCursor) > Number(legacyCursor));
+  } finally {
+    await new Promise(resolve => sqliteSrv.server.close(resolve));
+    fs.rmSync(migDir, { recursive: true, force: true });
+  }
+});
+
+test('unsupported store driver fails loudly and json rollback mode passes contract checks', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-driver-check-'));
+  assert.throws(
+    () => createSyncServer({ dataDir: dir, storeDriver: 'oracle-db' }),
+    /不支持的存储驱动/
+  );
+
+  const jsonRollback = createSyncServer({
+    dataDir: dir,
+    storeDriver: 'json',
+    tokensMap: { alice: 'tok_rollback' },
+    allowAnyDevToken: false
+  });
+  await new Promise(resolve => jsonRollback.server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${jsonRollback.server.address().port}`;
+  try {
+    const health = await (await fetch(`${url}/health`)).json();
+    assert.equal(health.storeDriver, 'json');
+    const push = await fetch(`${url}/api/v1/sync/push`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer tok_rollback',
+        'X-TidyDesk-User': 'alice',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        entries: [{ entityKind: 'card', entityId: 'rb-1', operation: 'upsert', payload: { title: '回退正常' } }]
+      })
+    });
+    assert.equal(push.status, 200);
+  } finally {
+    await new Promise(resolve => jsonRollback.server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

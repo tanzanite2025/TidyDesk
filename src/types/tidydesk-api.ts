@@ -272,3 +272,29 @@ export interface ModuleStatePayload {
   expanded: boolean;
   activeModule: RailModule;
 }
+
+export interface DataSnapshotSummary {
+  snapshotDir: string;
+  folderName: string;
+  createdAtMs: string;
+  appVersion: string;
+  scopeId: string;
+  fileCount: number;
+  totalBytes: number;
+  corruptError?: string | null;
+}
+
+export interface SnapshotVerificationReport {
+  snapshotDir: string;
+  scopeId: string;
+  verifiedFiles: number;
+  totalBytes: number;
+  valid: boolean;
+}
+
+export interface DataRestoreSummary {
+  snapshotDir: string;
+  restoredFiles: number;
+  preRestoreSnapshotDir: string | null;
+  scopeId: string;
+}

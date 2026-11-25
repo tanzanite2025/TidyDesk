@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteJson, getPrivateWorkspaceOwner, sanitizeWorkspaceId } from './fs_utils.mjs';
 import { mergeCardOnServer } from './merge.mjs';
-
-const SAFE_KEY_RE = /^[a-zA-Z0-9._-]{1,128}$/;
-const BLOB_SHA_RE = /^(?:thumb|orig)_([a-fA-F0-9]{64})\.[a-z0-9]+$/;
+import {
+  extractShaFromBlobKey,
+  readBlobFromDisk,
+  safeBlobPath,
+  writeBlobFileAtomic
+} from './storage_shared.mjs';
 
 function scopedEntityKey(workspaceId, entityId) {
   return `${workspaceId}:${entityId}`;
@@ -29,11 +32,6 @@ function writeScopedEntity(map, workspaceId, entityId, record) {
   if (legacy && (legacy.workspaceId || 'default') === workspaceId) {
     delete map[entityId];
   }
-}
-
-function extractShaFromBlobKey(key) {
-  const match = String(key || '').match(BLOB_SHA_RE);
-  return match ? match[1].toLowerCase() : null;
 }
 
 function createInitialDb() {
@@ -166,16 +164,6 @@ export function createSyncStore(dataDir) {
     return Array.from(results.values());
   }
 
-  function safeBlobPath(kind, key) {
-    if ((kind !== 'thumb' && kind !== 'original') || !SAFE_KEY_RE.test(key) || key.startsWith('.')) {
-      return null;
-    }
-    const target = path.resolve(blobsDir, kind, key);
-    const parent = path.resolve(blobsDir, kind);
-    if (!target.startsWith(parent + path.sep)) return null;
-    return target;
-  }
-
   function grantMediaWorkspace(sha256, workspaceId = 'default', patch = {}) {
     const lower = String(sha256 || '').toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(lower)) return false;
@@ -211,8 +199,8 @@ export function createSyncStore(dataDir) {
     const thumbKey = `thumb_${lowerSha}.png`;
     const originalKey = `orig_${lowerSha}.${ext}`;
 
-    const thumbPath = safeBlobPath('thumb', thumbKey);
-    const origPath = safeBlobPath('original', originalKey);
+    const thumbPath = safeBlobPath(blobsDir, 'thumb', thumbKey);
+    const origPath = safeBlobPath(blobsDir, 'original', originalKey);
     const existing = db.mediaBySha256[lowerSha];
     const deduplicated = Boolean(
       existing &&
@@ -236,17 +224,8 @@ export function createSyncStore(dataDir) {
 
   function writeBlob({ kind, key, buffer, sha256, workspaceId = 'default' }) {
     reloadIfChanged();
-    const target = safeBlobPath(kind, key);
-    if (!target) {
-      throw new Error('Invalid media blob key');
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const tmpPath = `${target}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(tmpPath, buffer);
-    fs.renameSync(tmpPath, target);
-
+    const keySha = writeBlobFileAtomic(blobsDir, kind, key, buffer);
     const headerSha = sha256 && /^[a-fA-F0-9]{64}$/.test(sha256) ? sha256.toLowerCase() : null;
-    const keySha = extractShaFromBlobKey(key);
     const effectiveSha = headerSha || keySha;
     if (effectiveSha) {
       const patch =
@@ -270,9 +249,7 @@ export function createSyncStore(dataDir) {
   }
 
   function readBlob({ kind, key }) {
-    const target = safeBlobPath(kind, key);
-    if (!target || !fs.existsSync(target)) return null;
-    return fs.readFileSync(target);
+    return readBlobFromDisk(blobsDir, kind, key);
   }
 
   function appendEvent(entityKind, entityId, operation, workspaceId) {
@@ -405,6 +382,7 @@ export function createSyncStore(dataDir) {
   }
 
   return {
+    driver: 'json',
     ensureWorkspaceAccess,
     setWorkspaceRole,
     listWorkspacesForUser,
@@ -413,6 +391,7 @@ export function createSyncStore(dataDir) {
     canReadBlob,
     readBlob,
     pushEntries,
-    pullSince
+    pullSince,
+    close() {}
   };
 }

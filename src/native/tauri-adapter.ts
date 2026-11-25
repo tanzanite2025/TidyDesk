@@ -23,6 +23,8 @@ import type {
 } from '../types/todo';
 import type {
   CaptureOpenedPayload,
+  DataRestoreSummary,
+  DataSnapshotSummary,
   DesktopFilesResult,
   DrawerStatePayload,
   FileIconRequest,
@@ -51,7 +53,10 @@ import type {
   RestoreToDesktopResult
 } from '../types/tidydesk-api';
 import type { UpdateMetadata, UpdateSnapshot } from '../types/update';
-import type { ShortcutValidationStats } from '../types/tidydesk-api';
+import type {
+  ShortcutValidationStats,
+  SnapshotVerificationReport
+} from '../types/tidydesk-api';
 
 type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -380,6 +385,17 @@ export function createTauriNativeClient(): NativeClient {
           console.error('[TIDYDESK] Failed events_send:', err);
         });
       }
+    },
+    backup: {
+      listSnapshots: () => invoke<DataSnapshotSummary[]>('backup_list_snapshots'),
+      createSnapshot: (targetDir?: string) =>
+        invoke<DataSnapshotSummary>('backup_create_snapshot', {
+          targetDir: targetDir ?? null
+        }),
+      verifySnapshot: (snapshotDir: string) =>
+        invoke<SnapshotVerificationReport>('backup_verify_snapshot', { snapshotDir }),
+      restoreSnapshot: (snapshotDir: string) =>
+        invoke<DataRestoreSummary>('backup_restore_snapshot', { snapshotDir })
     }
   };
 }

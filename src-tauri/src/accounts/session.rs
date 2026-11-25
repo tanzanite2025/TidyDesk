@@ -340,6 +340,28 @@ pub fn update_sync_cursor_and_timestamp(
     Ok(snapshot)
 }
 
+pub(crate) fn reload_active_profile_into_session(
+    app: &AppHandle,
+) -> Result<Option<AccountSessionSnapshot>, String> {
+    let mut session = load_session(app)?;
+    let Some(user_id) = session.active_user_id.clone() else {
+        return Ok(None);
+    };
+    let profile = load_account_sync_profile(app, &user_id)?;
+    if sanitize_workspace_id(Some(&profile.workspace_id))
+        .ok()
+        .as_deref()
+        == Some(session.workspace_id.as_str())
+    {
+        session.last_sync_cursor = profile.last_sync_cursor;
+        session.last_sync_at = profile.last_sync_at;
+        session.display_name = profile.display_name;
+    }
+    let snapshot = snapshot_from_session(&session);
+    set_cached_session(app, session)?;
+    Ok(Some(snapshot))
+}
+
 pub(super) fn copy_dir_recursive_merge(src: &Path, dst: &Path) -> Result<(), String> {
     if !src.exists() {
         return Ok(());

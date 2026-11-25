@@ -79,7 +79,7 @@ fn default_quick_notes_version() -> u8 {
     QUICK_NOTES_VERSION
 }
 
-fn with_quick_notes_store_lock<T>(
+pub(crate) fn with_quick_notes_store_lock<T>(
     app: &AppHandle,
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
@@ -440,4 +440,67 @@ pub(crate) fn apply_pulled_quick_notes(
     }
     emit_quick_notes_updated(app, &next_state);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_notes_contract_preserves_normalization_and_sort_precedence() {
+        let missing_id = normalize_quick_note(RawQuickNote {
+            id: Some("   ".to_string()),
+            title: Some("skip".to_string()),
+            content: None,
+            pinned: None,
+            favorite: None,
+            created_at: None,
+            updated_at: None,
+        });
+        assert!(missing_id.is_none());
+
+        let derived_title = normalize_quick_note(RawQuickNote {
+            id: Some("n1".to_string()),
+            title: Some("   ".to_string()),
+            content: Some("\n   第一行核心速记   \n第二行正文".to_string()),
+            pinned: None,
+            favorite: Some(true),
+            created_at: Some("100".to_string()),
+            updated_at: Some("200".to_string()),
+        })
+        .unwrap();
+        assert_eq!(derived_title.title, "第一行核心速记");
+        assert!(!derived_title.pinned);
+        assert!(derived_title.favorite);
+
+        let fallback_title = normalize_quick_note(RawQuickNote {
+            id: Some("n2".to_string()),
+            title: None,
+            content: Some("   ".to_string()),
+            pinned: Some(true),
+            favorite: Some(false),
+            created_at: Some("50".to_string()),
+            updated_at: Some("50".to_string()),
+        })
+        .unwrap();
+        assert_eq!(fallback_title.title, QUICK_NOTE_FALLBACK_TITLE);
+
+        let newer_plain = normalize_quick_note(RawQuickNote {
+            id: Some("n3".to_string()),
+            title: Some("普通最新".to_string()),
+            content: Some("body".to_string()),
+            pinned: Some(false),
+            favorite: Some(false),
+            created_at: Some("999".to_string()),
+            updated_at: Some("999".to_string()),
+        })
+        .unwrap();
+
+        let mut list = vec![newer_plain, derived_title, fallback_title];
+        sort_quick_notes(&mut list);
+        // Precedence: pinned > favorite > updated_at descending
+        assert_eq!(list[0].id, "n2");
+        assert_eq!(list[1].id, "n1");
+        assert_eq!(list[2].id, "n3");
+    }
 }

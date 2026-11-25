@@ -259,6 +259,7 @@ type DesktopOnlyNamespaces = Pick<
   | 'stickers'
   | 'updates'
   | 'events'
+  | 'backup'
 >;
 
 export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
@@ -358,6 +359,12 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
     },
     events: {
       send: () => undefined
+    },
+    backup: {
+      listSnapshots: async () => [],
+      createSnapshot: () => unsupportedDesktop('backup'),
+      verifySnapshot: () => unsupportedDesktop('backup'),
+      restoreSnapshot: () => unsupportedDesktop('backup')
     }
   };
 }

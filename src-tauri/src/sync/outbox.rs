@@ -11,6 +11,18 @@ const MAX_OUTBOX_ENTRIES: usize = 2000;
 #[derive(Debug, Default)]
 pub struct SyncOutboxState(Mutex<()>);
 
+pub(crate) fn with_outbox_lock<T>(
+    app: &AppHandle,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let state = app.state::<SyncOutboxState>();
+    let _guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock sync outbox state".to_string())?;
+    operation()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum OutboxEntityKind {
