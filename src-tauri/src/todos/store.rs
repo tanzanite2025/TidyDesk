@@ -1,14 +1,17 @@
 use super::attachments::{card_attachments_dir, enrich_attachment_view, todo_attachments_root};
 use super::model::{
-    create_default_todo_index, is_card_deleted, is_subtask_deleted, normalize_todo_index,
-    summarize_card_text, todo_board_id,
+    create_default_todo_index, is_card_deleted, is_subtask_deleted, normalize_stored_priority,
+    normalize_todo_index, summarize_card_text, todo_board_id,
 };
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
+
+const TODOS_MIGRATION_META_KEY: &str = "migrated_todos";
 
 #[derive(Debug, Default)]
 pub struct TodoStoreState {
@@ -38,64 +41,15 @@ fn todo_root(app: &AppHandle) -> Result<PathBuf, String> {
     crate::accounts::account_todos_root(app)
 }
 
-fn todo_cards_root(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(todo_root(app)?.join("cards"))
+pub(crate) fn todo_backup_root(app: &AppHandle) -> Result<PathBuf, String> {
+    todo_root(app)
 }
 
-pub fn todo_index_path_in_root(root: &std::path::Path) -> PathBuf {
+pub fn todo_index_path_in_root(root: &Path) -> PathBuf {
     root.join("boards.json")
 }
 
-fn todo_index_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(todo_index_path_in_root(&todo_root(app)?))
-}
-
-fn ensure_todo_storage_unlocked(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(todo_cards_root(app)?)
-        .map_err(|err| format!("failed to create todo storage: {err}"))?;
-    let index_path = todo_index_path(app)?;
-    if !index_path.exists() {
-        write_todo_index_unlocked(app, &create_default_todo_index())?;
-    }
-    Ok(())
-}
-
-pub fn read_todo_index_unlocked(app: &AppHandle) -> Result<Value, String> {
-    ensure_todo_storage_unlocked(app)?;
-    let index_path = todo_index_path(app)?;
-    let raw = match fs::read_to_string(&index_path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let index = create_default_todo_index();
-            write_todo_index_unlocked(app, &index)?;
-            return Ok(index);
-        }
-        Err(err) => return Err(format!("failed to read todo index: {err}")),
-    };
-    let (parsed, recovered) = match serde_json::from_str::<Value>(&raw) {
-        Ok(value) => (value, false),
-        Err(_) => {
-            crate::persistence::backup_corrupt_file(&index_path, "todo index")?;
-            (create_default_todo_index(), true)
-        }
-    };
-    let normalized = normalize_todo_index(parsed.clone());
-    if recovered || normalized != parsed {
-        write_todo_index_unlocked(app, &normalized)?;
-    }
-    Ok(normalized)
-}
-
-pub fn write_todo_index_unlocked(app: &AppHandle, index: &Value) -> Result<(), String> {
-    fs::create_dir_all(todo_root(app)?)
-        .map_err(|err| format!("failed to create todo root: {err}"))?;
-    let normalized = normalize_todo_index(index.clone());
-    let content = serde_json::to_string_pretty(&normalized)
-        .map_err(|err| format!("failed to serialize todo index: {err}"))?;
-    crate::persistence::atomic_write_text_fast(&todo_index_path(app)?, &content, "todo index")
-}
-
-pub(super) fn todo_card_path(app: &AppHandle, card_id: &str) -> Result<PathBuf, String> {
+fn legacy_card_md_path(cards_dir: &Path, card_id: &str) -> Result<PathBuf, String> {
     let safe_name: String = card_id
         .chars()
         .map(|ch| {
@@ -106,37 +60,526 @@ pub(super) fn todo_card_path(app: &AppHandle, card_id: &str) -> Result<PathBuf, 
             }
         })
         .collect();
-    let root = todo_cards_root(app)?;
-    let path = root.join(format!("{safe_name}.md"));
-    if !crate::is_path_inside(&path, &root) {
+    let path = cards_dir.join(format!("{safe_name}.md"));
+    if !crate::is_path_inside(&path, cards_dir) {
         return Err("Unsafe todo card path".to_string());
     }
     Ok(path)
+}
+
+fn upsert_board_row_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    board: &Value,
+    active_board_id: &str,
+) -> Result<(), String> {
+    let board_id = board["id"]
+        .as_str()
+        .ok_or_else(|| "[CRITICAL] Todo board missing id".to_string())?;
+    let is_active = if board_id == active_board_id {
+        1i64
+    } else {
+        0i64
+    };
+    let updated_at = board["updatedAt"].as_str().unwrap_or("");
+    let payload_json =
+        serde_json::to_string(board).map_err(|err| format!("序列化待办看板失败: {err}"))?;
+    tx.execute(
+        "INSERT INTO todo_boards (id, active, payload_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO UPDATE SET
+           active = excluded.active,
+           payload_json = excluded.payload_json,
+           updated_at = excluded.updated_at",
+        params![board_id, is_active, payload_json, updated_at],
+    )
+    .map_err(|err| format!("写入待办看板失败: {err}"))?;
+    Ok(())
+}
+
+fn upsert_card_row_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    card: &Value,
+    active_board_id: &str,
+) -> Result<(), String> {
+    let card_id = card["id"]
+        .as_str()
+        .ok_or_else(|| "[CRITICAL] Todo card missing id".to_string())?;
+    let board_id = card["boardId"].as_str().unwrap_or(active_board_id);
+    let column_id = card["columnId"].as_str().unwrap_or("todo");
+    let position = card["position"].as_str().unwrap_or("");
+    let updated_at = card["updatedAt"].as_str().unwrap_or("");
+    let deleted_at = card["deletedAt"].as_str();
+    let metadata_json =
+        serde_json::to_string(card).map_err(|err| format!("序列化待办卡片元数据失败: {err}"))?;
+    tx.execute(
+        "INSERT INTO todo_cards
+           (id, board_id, column_id, position, updated_at, deleted_at, metadata_json, content_md)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '')
+         ON CONFLICT(id) DO UPDATE SET
+           board_id = excluded.board_id,
+           column_id = excluded.column_id,
+           position = excluded.position,
+           updated_at = excluded.updated_at,
+           deleted_at = excluded.deleted_at,
+           metadata_json = excluded.metadata_json",
+        params![
+            card_id,
+            board_id,
+            column_id,
+            position,
+            updated_at,
+            deleted_at,
+            metadata_json
+        ],
+    )
+    .map_err(|err| format!("写入待办卡片元数据失败 ({card_id}): {err}"))?;
+    Ok(())
+}
+
+fn sync_active_board_in_tx(tx: &rusqlite::Transaction<'_>, index: &Value) -> Result<(), String> {
+    let active_board_id = index["activeBoardId"].as_str().unwrap_or("default-board");
+    if let Some(board) = index["boards"].as_array().and_then(|boards| boards.first()) {
+        upsert_board_row_in_tx(tx, board, active_board_id)?;
+    }
+    Ok(())
+}
+
+fn insert_todo_card_in_conn(
+    conn: &mut Connection,
+    index: &Value,
+    card: &Value,
+    content: &str,
+) -> Result<(), String> {
+    let active_board_id = index["activeBoardId"].as_str().unwrap_or("default-board");
+    let card_id = card["id"]
+        .as_str()
+        .ok_or_else(|| "[CRITICAL] Todo card missing id".to_string())?;
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启新增待办 SQLite 事务失败: {err}"))?;
+    sync_active_board_in_tx(&tx, index)?;
+    upsert_card_row_in_tx(&tx, card, active_board_id)?;
+    tx.execute(
+        "UPDATE todo_cards SET content_md = ?2 WHERE id = ?1",
+        params![card_id, content],
+    )
+    .map_err(|err| format!("写入新增待办正文失败 ({card_id}): {err}"))?;
+    tx.commit()
+        .map_err(|err| format!("提交新增待办事务失败: {err}"))
+}
+
+fn update_todo_card_in_conn(
+    conn: &mut Connection,
+    index: &Value,
+    card: &Value,
+    content_update: Option<&str>,
+) -> Result<(), String> {
+    let active_board_id = index["activeBoardId"].as_str().unwrap_or("default-board");
+    let card_id = card["id"]
+        .as_str()
+        .ok_or_else(|| "[CRITICAL] Todo card missing id".to_string())?;
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启更新待办 SQLite 事务失败: {err}"))?;
+    sync_active_board_in_tx(&tx, index)?;
+    upsert_card_row_in_tx(&tx, card, active_board_id)?;
+    if let Some(content) = content_update {
+        tx.execute(
+            "UPDATE todo_cards SET content_md = ?2 WHERE id = ?1",
+            params![card_id, content],
+        )
+        .map_err(|err| format!("更新待办卡片正文失败 ({card_id}): {err}"))?;
+    }
+    tx.commit()
+        .map_err(|err| format!("提交更新待办事务失败: {err}"))
+}
+
+fn delete_todo_card_in_conn(
+    conn: &mut Connection,
+    index: &Value,
+    card_id: &str,
+    tombstone_card: Option<&Value>,
+) -> Result<(), String> {
+    let active_board_id = index["activeBoardId"].as_str().unwrap_or("default-board");
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启删除待办 SQLite 事务失败: {err}"))?;
+    sync_active_board_in_tx(&tx, index)?;
+    if let Some(tombstone) = tombstone_card {
+        upsert_card_row_in_tx(&tx, tombstone, active_board_id)?;
+        tx.execute(
+            "UPDATE todo_cards SET content_md = '' WHERE id = ?1",
+            params![card_id],
+        )
+        .map_err(|err| format!("清空已删除待办正文失败 ({card_id}): {err}"))?;
+    } else {
+        tx.execute("DELETE FROM todo_cards WHERE id = ?1", params![card_id])
+            .map_err(|err| format!("删除待办卡片行失败 ({card_id}): {err}"))?;
+    }
+    tx.commit()
+        .map_err(|err| format!("提交删除待办事务失败: {err}"))
+}
+
+fn write_todo_index_and_contents_in_conn_with_meta(
+    conn: &mut Connection,
+    index: &Value,
+    content_updates: &[(&str, &str)],
+    meta_flag: Option<(&str, &str)>,
+) -> Result<Value, String> {
+    let normalized = normalize_todo_index(index.clone());
+    let active_board_id = normalized["activeBoardId"]
+        .as_str()
+        .unwrap_or("default-board")
+        .to_string();
+
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启待办 SQLite 事务失败: {err}"))?;
+
+    tx.execute("DELETE FROM todo_boards", [])
+        .map_err(|err| format!("清理旧看板数据失败: {err}"))?;
+
+    if let Some(boards) = normalized["boards"].as_array() {
+        for board in boards {
+            upsert_board_row_in_tx(&tx, board, &active_board_id)?;
+        }
+    }
+
+    let cards = normalized["cards"].as_array().cloned().unwrap_or_default();
+    let target_ids: HashSet<&str> = cards
+        .iter()
+        .filter_map(|card| card["id"].as_str())
+        .collect();
+
+    let existing_ids: Vec<String> = {
+        let mut stmt = tx
+            .prepare("SELECT id FROM todo_cards")
+            .map_err(|err| format!("查询已有待办卡片 ID 失败: {err}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|err| format!("读取已有待办卡片 ID 失败: {err}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|err| format!("解析待办卡片 ID 失败: {err}"))?);
+        }
+        out
+    };
+
+    for existing_id in existing_ids {
+        if !target_ids.contains(existing_id.as_str()) {
+            tx.execute("DELETE FROM todo_cards WHERE id = ?1", params![existing_id])
+                .map_err(|err| format!("删除过期待办卡片行失败: {err}"))?;
+        }
+    }
+
+    for card in &cards {
+        upsert_card_row_in_tx(&tx, card, &active_board_id)?;
+    }
+
+    if !content_updates.is_empty() {
+        let mut content_stmt = tx
+            .prepare("UPDATE todo_cards SET content_md = ?2 WHERE id = ?1")
+            .map_err(|err| format!("预编译待办正文更新失败: {err}"))?;
+        for (card_id, content) in content_updates {
+            content_stmt
+                .execute(params![card_id, content])
+                .map_err(|err| format!("更新待办卡片正文失败 ({card_id}): {err}"))?;
+        }
+    }
+
+    if let Some((key, value)) = meta_flag {
+        tx.execute(
+            "INSERT INTO db_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|err| format!("更新待办迁移标记失败: {err}"))?;
+    }
+
+    tx.commit()
+        .map_err(|err| format!("提交待办 SQLite 事务失败: {err}"))?;
+
+    Ok(normalized)
+}
+
+fn read_todo_index_from_conn(conn: &mut Connection) -> Result<Value, String> {
+    let mut boards = Vec::new();
+    let mut active_board_id: Option<String> = None;
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, active, payload_json FROM todo_boards ORDER BY active DESC, rowid ASC",
+            )
+            .map_err(|err| format!("查询待办看板失败: {err}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|err| format!("读取待办看板失败: {err}"))?;
+        for row in rows {
+            let (board_id, active, payload_json) =
+                row.map_err(|err| format!("解析待办看板行失败: {err}"))?;
+            let board_val: Value = serde_json::from_str(&payload_json)
+                .map_err(|err| format!("[CRITICAL] 待办看板 JSON 损坏 ({board_id}): {err}"))?;
+            if active != 0 && active_board_id.is_none() {
+                active_board_id = Some(board_id);
+            }
+            boards.push(board_val);
+        }
+    }
+
+    let mut cards = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, metadata_json FROM todo_cards ORDER BY position ASC, id ASC")
+            .map_err(|err| format!("查询待办卡片失败: {err}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|err| format!("读取待办卡片失败: {err}"))?;
+        for row in rows {
+            let (card_id, metadata_json) =
+                row.map_err(|err| format!("解析待办卡片行失败: {err}"))?;
+            let card_val: Value = serde_json::from_str(&metadata_json)
+                .map_err(|err| format!("[CRITICAL] 待办卡片 JSON 损坏 ({card_id}): {err}"))?;
+            cards.push(card_val);
+        }
+    }
+
+    if boards.is_empty() && cards.is_empty() {
+        let default_index = create_default_todo_index();
+        return write_todo_index_and_contents_in_conn_with_meta(conn, &default_index, &[], None);
+    }
+
+    let resolved_active = active_board_id
+        .or_else(|| {
+            boards
+                .first()
+                .and_then(|board| board["id"].as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| "default-board".to_string());
+
+    let raw_index = json!({
+        "version": 2,
+        "activeBoardId": resolved_active,
+        "boards": boards,
+        "cards": cards,
+    });
+    let normalized = normalize_todo_index(raw_index.clone());
+    if normalized != raw_index {
+        return write_todo_index_and_contents_in_conn_with_meta(conn, &normalized, &[], None);
+    }
+    Ok(normalized)
+}
+
+fn read_all_card_contents_from_conn(conn: &Connection) -> Result<HashMap<String, String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, content_md FROM todo_cards")
+        .map_err(|err| format!("查询待办卡片正文失败: {err}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|err| format!("读取待办卡片正文失败: {err}"))?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (card_id, content) = row.map_err(|err| format!("解析待办卡片正文失败: {err}"))?;
+        out.insert(card_id, content);
+    }
+    Ok(out)
+}
+
+fn migrate_todos_json_if_needed_at(conn: &mut Connection, todos_root: &Path) -> Result<(), String> {
+    if crate::local_db::get_meta_flag(conn, TODOS_MIGRATION_META_KEY)?.is_some() {
+        return Ok(());
+    }
+
+    let existing_boards: i64 = conn
+        .query_row("SELECT COUNT(1) FROM todo_boards", [], |row| row.get(0))
+        .map_err(|err| format!("检查待办看板状态失败: {err}"))?;
+    let existing_cards: i64 = conn
+        .query_row("SELECT COUNT(1) FROM todo_cards", [], |row| row.get(0))
+        .map_err(|err| format!("检查待办卡片状态失败: {err}"))?;
+    if existing_boards > 0 || existing_cards > 0 {
+        crate::local_db::set_meta_flag(conn, TODOS_MIGRATION_META_KEY, "1")?;
+        return Ok(());
+    }
+
+    let index_path = todo_index_path_in_root(todos_root);
+    let cards_dir = todos_root.join("cards");
+    if index_path.is_file() {
+        let raw = fs::read_to_string(&index_path)
+            .map_err(|err| format!("读取旧 boards.json 失败 {}: {err}", index_path.display()))?;
+        let parsed = match serde_json::from_str::<Value>(&raw) {
+            Ok(value) => value,
+            Err(_) => {
+                crate::persistence::backup_corrupt_file(&index_path, "todo index")?;
+                create_default_todo_index()
+            }
+        };
+        let normalized = normalize_todo_index(parsed);
+        let mut owned_contents: Vec<(String, String)> = Vec::new();
+        if let Some(cards) = normalized["cards"].as_array() {
+            for card in cards {
+                if is_card_deleted(card) {
+                    continue;
+                }
+                let Some(card_id) = card["id"].as_str().filter(|v| !v.is_empty()) else {
+                    continue;
+                };
+                let md_path = legacy_card_md_path(&cards_dir, card_id)?;
+                let content = match fs::read_to_string(&md_path) {
+                    Ok(text) => text,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(err) => {
+                        return Err(format!(
+                            "读取旧待办卡片正文失败 {}: {err}",
+                            md_path.display()
+                        ));
+                    }
+                };
+                owned_contents.push((card_id.to_string(), content));
+            }
+        }
+        let content_refs: Vec<(&str, &str)> = owned_contents
+            .iter()
+            .map(|(id, text)| (id.as_str(), text.as_str()))
+            .collect();
+        write_todo_index_and_contents_in_conn_with_meta(
+            conn,
+            &normalized,
+            &content_refs,
+            Some((TODOS_MIGRATION_META_KEY, "1")),
+        )?;
+        crate::local_db::archive_legacy_file_once(&index_path)?;
+        crate::local_db::archive_legacy_dir_once(&cards_dir)?;
+    } else {
+        let default_index = create_default_todo_index();
+        write_todo_index_and_contents_in_conn_with_meta(
+            conn,
+            &default_index,
+            &[],
+            Some((TODOS_MIGRATION_META_KEY, "1")),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn open_todos_db_and_migrate(app: &AppHandle) -> Result<Connection, String> {
+    fs::create_dir_all(todo_attachments_root(app)?)
+        .map_err(|err| format!("failed to create todo storage: {err}"))?;
+    let mut conn = crate::local_db::open_workspace_db(app)?;
+    migrate_todos_json_if_needed_at(&mut conn, &todo_root(app)?)?;
+    Ok(conn)
+}
+
+pub fn read_todo_index_unlocked(app: &AppHandle) -> Result<Value, String> {
+    let mut conn = open_todos_db_and_migrate(app)?;
+    read_todo_index_from_conn(&mut conn)
+}
+
+pub(crate) fn insert_todo_card_in_db(
+    app: &AppHandle,
+    index: &Value,
+    card: &Value,
+    content: &str,
+) -> Result<(), String> {
+    let mut conn = open_todos_db_and_migrate(app)?;
+    insert_todo_card_in_conn(&mut conn, index, card, content)
+}
+
+pub(crate) fn update_todo_card_in_db(
+    app: &AppHandle,
+    index: &Value,
+    card: &Value,
+    content_update: Option<&str>,
+) -> Result<(), String> {
+    let mut conn = open_todos_db_and_migrate(app)?;
+    update_todo_card_in_conn(&mut conn, index, card, content_update)
+}
+
+pub(crate) fn delete_todo_card_in_db(
+    app: &AppHandle,
+    index: &Value,
+    card_id: &str,
+    tombstone_card: Option<&Value>,
+) -> Result<(), String> {
+    let mut conn = open_todos_db_and_migrate(app)?;
+    delete_todo_card_in_conn(&mut conn, index, card_id, tombstone_card)
+}
+
+pub(crate) fn save_todo_index_with_contents_unlocked(
+    app: &AppHandle,
+    index: &Value,
+    content_updates: &[(&str, &str)],
+) -> Result<(), String> {
+    let mut conn = open_todos_db_and_migrate(app)?;
+    write_todo_index_and_contents_in_conn_with_meta(&mut conn, index, content_updates, None)?;
+    Ok(())
 }
 
 pub(crate) fn read_todo_card_content_unlocked(
     app: &AppHandle,
     card_id: &str,
 ) -> Result<String, String> {
-    match fs::read_to_string(todo_card_path(app, card_id)?) {
-        Ok(content) => Ok(content),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(err) => Err(format!("failed to read todo card content: {err}")),
-    }
+    let conn = open_todos_db_and_migrate(app)?;
+    let content = conn
+        .query_row(
+            "SELECT content_md FROM todo_cards WHERE id = ?1",
+            params![card_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|err| format!("读取待办卡片正文失败 ({card_id}): {err}"))?;
+    Ok(content.unwrap_or_default())
 }
 
-pub(crate) fn write_todo_card_content_unlocked(
-    app: &AppHandle,
-    card_id: &str,
-    content: &str,
-) -> Result<(), String> {
-    fs::create_dir_all(todo_cards_root(app)?)
-        .map_err(|err| format!("failed to create todo cards root: {err}"))?;
-    crate::persistence::atomic_write_text_fast(
-        &todo_card_path(app, card_id)?,
-        content,
-        "todo card content",
+pub(crate) fn clear_todos_tables_in_db(db_path: &Path) -> Result<(), String> {
+    if !db_path.is_file() {
+        return Ok(());
+    }
+    let mut conn = crate::local_db::open_workspace_db_at(db_path)?;
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启工作区清理事务失败: {err}"))?;
+    tx.execute("DELETE FROM todo_boards", [])
+        .map_err(|err| format!("清理工作区看板表失败: {err}"))?;
+    tx.execute("DELETE FROM todo_cards", [])
+        .map_err(|err| format!("清理工作区卡片表失败: {err}"))?;
+    tx.execute(
+        "DELETE FROM db_meta WHERE key = ?1",
+        params![TODOS_MIGRATION_META_KEY],
     )
+    .map_err(|err| format!("清理工作区待办迁移标记失败: {err}"))?;
+    tx.commit()
+        .map_err(|err| format!("提交工作区清理事务失败: {err}"))
+}
+
+pub(crate) struct ImportedTodosSnapshot {
+    pub index: Value,
+    pub contents: HashMap<String, String>,
+}
+
+pub(crate) fn load_local_todos_snapshot_for_import(
+    app: &AppHandle,
+) -> Result<Option<ImportedTodosSnapshot>, String> {
+    let local_db_path = crate::local_db::local_workspace_db_path(app)?;
+    let legacy_root = crate::accounts::session::legacy_local_todos_root(app)?;
+    let legacy_index_path = todo_index_path_in_root(&legacy_root);
+    if !local_db_path.is_file() && !legacy_index_path.is_file() {
+        return Ok(None);
+    }
+    let mut conn = crate::local_db::open_workspace_db_at(&local_db_path)?;
+    migrate_todos_json_if_needed_at(&mut conn, &legacy_root)?;
+    let index = read_todo_index_from_conn(&mut conn)?;
+    let contents = read_all_card_contents_from_conn(&conn)?;
+    Ok(Some(ImportedTodosSnapshot { index, contents }))
 }
 
 const CARD_PREVIEW_ATTACHMENT_LIMIT: usize = 2;
@@ -235,6 +678,7 @@ fn build_card_projection_base(card: &Value, content: &str) -> (Value, Vec<Value>
         "boardId": card["boardId"],
         "columnId": card["columnId"],
         "title": card["title"],
+        "priority": normalize_stored_priority(card["priority"].as_str()),
         "summaryText": summary_text,
         "tags": card["tags"],
         "archived": card["archived"],
@@ -269,12 +713,20 @@ pub(super) fn enrich_card_detail_view(card: &Value, content: String) -> Value {
     detail
 }
 
+fn read_all_todo_card_contents_unlocked(
+    app: &AppHandle,
+) -> Result<HashMap<String, String>, String> {
+    let conn = open_todos_db_and_migrate(app)?;
+    read_all_card_contents_from_conn(&conn)
+}
+
 pub fn todo_state_from_index_unlocked(
     app: &AppHandle,
     store: &TodoStoreState,
     index: &Value,
     counts: Value,
 ) -> Result<Value, String> {
+    let db_contents = read_all_todo_card_contents_unlocked(app)?;
     let mut cache = store
         .content_cache
         .lock()
@@ -288,7 +740,7 @@ pub fn todo_state_from_index_unlocked(
                 .filter(|card| !is_card_deleted(card))
                 .map(|card| {
                     let card_id = card["id"].as_str().unwrap_or_default().to_string();
-                    let content = read_todo_card_content_unlocked(app, &card_id)?;
+                    let content = db_contents.get(&card_id).cloned().unwrap_or_default();
                     let view = enrich_card_summary_view(card, &content);
                     cache.insert(card_id, content);
                     Ok(view)
@@ -310,6 +762,7 @@ pub(super) fn todo_state_from_cache_or_disk(
     index: &Value,
     counts: Value,
 ) -> Result<Value, String> {
+    let mut lazy_db_contents: Option<HashMap<String, String>> = None;
     let mut cache = store
         .content_cache
         .lock()
@@ -325,7 +778,14 @@ pub(super) fn todo_state_from_cache_or_disk(
                     let content = if let Some(cached) = cache.get(&card_id) {
                         cached.clone()
                     } else {
-                        let loaded = read_todo_card_content_unlocked(app, &card_id)?;
+                        if lazy_db_contents.is_none() {
+                            lazy_db_contents = Some(read_all_todo_card_contents_unlocked(app)?);
+                        }
+                        let loaded = lazy_db_contents
+                            .as_ref()
+                            .and_then(|map| map.get(&card_id))
+                            .cloned()
+                            .unwrap_or_default();
                         cache.insert(card_id, loaded.clone());
                         loaded
                     };
@@ -372,9 +832,6 @@ fn mark_attachment_slice_synced(
 }
 
 fn cleanup_card_local_assets(app: &AppHandle, store: &TodoStoreState, card_id: &str) {
-    if let Ok(path) = todo_card_path(app, card_id) {
-        let _ = fs::remove_file(path);
-    }
     if let Ok(dir) = card_attachments_dir(app, card_id) {
         let _ = fs::remove_dir_all(dir);
     }
@@ -399,6 +856,9 @@ pub(crate) fn apply_synced_todo_changes(
         let board_id = todo_board_id(&index);
         let now_str = crate::timestamp_string();
         let now_ms = now_str.parse::<u128>().unwrap_or(0);
+        let existing_contents = read_all_todo_card_contents_unlocked(app)?;
+        let mut pending_content_updates: Vec<(String, String)> = Vec::new();
+        let mut cache_inserts: Vec<(String, String)> = Vec::new();
 
         if let Some(cards) = index["cards"].as_array_mut() {
             if !uploaded_blobs.is_empty() {
@@ -423,7 +883,7 @@ pub(crate) fn apply_synced_todo_changes(
                 let existing_pos = cards.iter().position(|c| c["id"].as_str() == Some(card_id));
                 let local_card = existing_pos.map(|pos| cards[pos].clone());
                 let local_content = if existing_pos.is_some() {
-                    read_todo_card_content_unlocked(app, card_id)?
+                    existing_contents.get(card_id).cloned().unwrap_or_default()
                 } else {
                     String::new()
                 };
@@ -448,11 +908,10 @@ pub(crate) fn apply_synced_todo_changes(
 
                 if is_card_deleted(&next_card) {
                     cleanup_card_local_assets(app, store, card_id);
+                    pending_content_updates.push((card_id.to_string(), String::new()));
                 } else {
-                    write_todo_card_content_unlocked(app, card_id, &next_content)?;
-                    if let Ok(mut cache) = store.content_cache.lock() {
-                        cache.insert(card_id.to_string(), next_content);
-                    }
+                    pending_content_updates.push((card_id.to_string(), next_content.clone()));
+                    cache_inserts.push((card_id.to_string(), next_content));
                 }
 
                 if let Some(pos) = existing_pos {
@@ -475,6 +934,7 @@ pub(crate) fn apply_synced_todo_changes(
                         card["coverAttachmentId"] = Value::Null;
                     }
                     cleanup_card_local_assets(app, store, removed_id);
+                    pending_content_updates.push((removed_id.clone(), String::new()));
                 }
             }
         }
@@ -485,7 +945,18 @@ pub(crate) fn apply_synced_todo_changes(
                 now_ms - TOMBSTONE_RETENTION_MS,
             );
         }
-        write_todo_index_unlocked(app, &index)?;
+        let content_refs: Vec<(&str, &str)> = pending_content_updates
+            .iter()
+            .map(|(id, body)| (id.as_str(), body.as_str()))
+            .collect();
+        save_todo_index_with_contents_unlocked(app, &index, &content_refs)?;
+        if !cache_inserts.is_empty() {
+            if let Ok(mut cache) = store.content_cache.lock() {
+                for (card_id, body) in cache_inserts {
+                    cache.insert(card_id, body);
+                }
+            }
+        }
 
         let mut missing_thumbs = Vec::new();
         let normalized = read_todo_index_unlocked(app)?;
@@ -629,6 +1100,7 @@ mod tests {
             "boardId": "default-board",
             "columnId": "todo",
             "title": "巡检",
+            "priority": "high",
             "tags": [],
             "archived": false,
             "subtasks": [
@@ -648,6 +1120,7 @@ mod tests {
         assert!(summary.get("subtasks").is_none());
         assert!(summary.get("attachments").is_none());
         assert_eq!(summary["summaryText"], json!("标题"));
+        assert_eq!(summary["priority"], json!("high"));
         assert_eq!(summary["subtaskTotal"], json!(2));
         assert_eq!(summary["subtaskCompleted"], json!(1));
         assert_eq!(summary["attachmentCount"], json!(3));
@@ -705,5 +1178,198 @@ mod tests {
             .as_str()
             .unwrap_or("")
             .contains("c-sub/thumb_sa1.png"));
+    }
+
+    #[test]
+    fn todos_sqlite_migrates_legacy_boards_and_cards_preserving_attachments() {
+        let root = std::env::temp_dir().join(format!(
+            "tidydesk-todos-sqlite-test-{}-{}",
+            std::process::id(),
+            crate::timestamp_string()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let todos_root = root.join("todos");
+        let cards_dir = todos_root.join("cards");
+        let att_dir = todos_root.join("attachments").join("card-1");
+        fs::create_dir_all(&cards_dir).unwrap();
+        fs::create_dir_all(&att_dir).unwrap();
+        fs::write(att_dir.join("photo.png"), b"png-bytes").unwrap();
+        fs::write(cards_dir.join("card-1.md"), "# 巡检正文\n第二行").unwrap();
+        fs::write(
+            todo_index_path_in_root(&todos_root),
+            serde_json::to_string_pretty(&json!({
+                "version": 2,
+                "activeBoardId": "default-board",
+                "boards": [{
+                    "id": "default-board",
+                    "title": "我的看板",
+                    "columns": [
+                        { "id": "todo", "title": "待做" },
+                        { "id": "done", "title": "已完成" }
+                    ],
+                    "cardOrder": { "todo": ["card-1"], "done": [] },
+                    "updatedAt": "100"
+                }],
+                "cards": [{
+                    "id": "card-1",
+                    "boardId": "default-board",
+                    "columnId": "todo",
+                    "title": "老卡片",
+                    "tags": ["ops"],
+                    "archived": false,
+                    "subtasks": [],
+                    "attachments": [],
+                    "position": "a0",
+                    "revision": 2,
+                    "updatedBy": "local",
+                    "deletedAt": null,
+                    "createdAt": "100",
+                    "updatedAt": "100"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let db_path = root.join("tidydesk-local.db");
+        let mut conn = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+        migrate_todos_json_if_needed_at(&mut conn, &todos_root).unwrap();
+
+        // Legacy index and cards folder archived; attachment binaries untouched
+        assert!(!todo_index_path_in_root(&todos_root).exists());
+        assert!(todos_root.join("boards.json.pre-sqlite.bak").is_file());
+        assert!(!cards_dir.exists());
+        assert!(todos_root.join("cards.pre-sqlite.bak").is_dir());
+        assert_eq!(fs::read(att_dir.join("photo.png")).unwrap(), b"png-bytes");
+
+        // Idempotent second run
+        migrate_todos_json_if_needed_at(&mut conn, &todos_root).unwrap();
+
+        let loaded = read_todo_index_from_conn(&mut conn).unwrap();
+        assert_eq!(loaded["cards"].as_array().map(Vec::len), Some(1));
+        assert_eq!(loaded["cards"][0]["title"], json!("老卡片"));
+        let contents = read_all_card_contents_from_conn(&conn).unwrap();
+        assert_eq!(
+            contents.get("card-1").map(String::as_str),
+            Some("# 巡检正文\n第二行")
+        );
+
+        // Metadata-only index rewrite preserves existing content_md
+        let mut updated_index = loaded;
+        updated_index["cards"][0]["title"] = json!("已重命名");
+        write_todo_index_and_contents_in_conn_with_meta(&mut conn, &updated_index, &[], None)
+            .unwrap();
+        let contents_after_meta_update = read_all_card_contents_from_conn(&conn).unwrap();
+        assert_eq!(
+            contents_after_meta_update.get("card-1").map(String::as_str),
+            Some("# 巡检正文\n第二行")
+        );
+
+        // Removing card from index cleans todo_cards row
+        updated_index["cards"] = json!([]);
+        updated_index["boards"][0]["cardOrder"]["todo"] = json!([]);
+        write_todo_index_and_contents_in_conn_with_meta(&mut conn, &updated_index, &[], None)
+            .unwrap();
+        assert!(read_all_card_contents_from_conn(&conn).unwrap().is_empty());
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn todos_sqlite_incremental_card_crud_preserves_other_cards() {
+        let root = std::env::temp_dir().join(format!(
+            "tidydesk-todos-inc-test-{}-{}",
+            std::process::id(),
+            crate::timestamp_string()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let db_path = root.join("tidydesk-local.db");
+        let mut conn = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+
+        let mut index = create_default_todo_index();
+        let card1 = json!({
+            "id": "card-a",
+            "boardId": "default-board",
+            "columnId": "todo",
+            "title": "卡片 A",
+            "priority": "urgent",
+            "tags": [],
+            "archived": false,
+            "subtasks": [],
+            "attachments": [],
+            "position": "a0",
+            "revision": 1,
+            "updatedBy": "local",
+            "deletedAt": Value::Null,
+            "createdAt": "100",
+            "updatedAt": "100"
+        });
+        let card2 = json!({
+            "id": "card-b",
+            "boardId": "default-board",
+            "columnId": "doing",
+            "title": "卡片 B",
+            "priority": "normal",
+            "tags": [],
+            "archived": false,
+            "subtasks": [],
+            "attachments": [],
+            "position": "a0",
+            "revision": 1,
+            "updatedBy": "local",
+            "deletedAt": Value::Null,
+            "createdAt": "100",
+            "updatedAt": "100"
+        });
+
+        index["cards"].as_array_mut().unwrap().push(card1.clone());
+        index["boards"][0]["cardOrder"]["todo"] = json!(["card-a"]);
+        insert_todo_card_in_conn(&mut conn, &index, &card1, "正文 A").unwrap();
+
+        index["cards"].as_array_mut().unwrap().push(card2.clone());
+        index["boards"][0]["cardOrder"]["doing"] = json!(["card-b"]);
+        insert_todo_card_in_conn(&mut conn, &index, &card2, "正文 B").unwrap();
+
+        // Update only card1 metadata without passing content; card2 and card1 body remain intact
+        let mut card1_updated = card1;
+        card1_updated["title"] = json!("卡片 A 已更新");
+        index["cards"][0] = card1_updated.clone();
+        update_todo_card_in_conn(&mut conn, &index, &card1_updated, None).unwrap();
+
+        let contents = read_all_card_contents_from_conn(&conn).unwrap();
+        assert_eq!(contents.get("card-a").map(String::as_str), Some("正文 A"));
+        assert_eq!(contents.get("card-b").map(String::as_str), Some("正文 B"));
+
+        // Soft-delete card1 clears card1 content while preserving card2
+        let mut tombstone = card1_updated;
+        tombstone["deletedAt"] = json!("200");
+        delete_todo_card_in_db_test_helper(&mut conn, &index, "card-a", Some(&tombstone));
+        let contents_after_soft = read_all_card_contents_from_conn(&conn).unwrap();
+        assert_eq!(
+            contents_after_soft.get("card-a").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            contents_after_soft.get("card-b").map(String::as_str),
+            Some("正文 B")
+        );
+
+        // Hard-delete card2 removes card2 row cleanly
+        delete_todo_card_in_conn(&mut conn, &index, "card-b", None).unwrap();
+        let contents_after_hard = read_all_card_contents_from_conn(&conn).unwrap();
+        assert!(!contents_after_hard.contains_key("card-b"));
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn delete_todo_card_in_db_test_helper(
+        conn: &mut Connection,
+        index: &Value,
+        card_id: &str,
+        tombstone: Option<&Value>,
+    ) {
+        delete_todo_card_in_conn(conn, index, card_id, tombstone).unwrap();
     }
 }

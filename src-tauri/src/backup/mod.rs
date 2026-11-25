@@ -619,79 +619,31 @@ fn backups_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to resolve app data directory: {err}"))
 }
 
-fn active_scope_id(app: &AppHandle) -> Result<String, String> {
-    let session = crate::accounts::session::load_session(app)?;
-    Ok(match session.active_user_id {
-        Some(uid) => format!("{uid}:{}", session.workspace_id),
-        None => "local".to_string(),
-    })
-}
-
 fn active_backup_specs(
     app: &AppHandle,
 ) -> Result<(String, Vec<BackupSourceSpec>, Vec<RestoreTargetSpec>), String> {
-    let scope_id = active_scope_id(app)?;
-    let todos_root = crate::accounts::account_todos_root(app)?;
-    let notes_root = crate::accounts::account_quick_notes_root(app)?;
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("failed to resolve app data directory: {err}"))?;
+    let collection = crate::workspace_runtime::collect_workspace_backup_pairs(app)?;
 
-    let mut pairs: Vec<(String, PathBuf, bool)> = vec![
-        ("todos".to_string(), todos_root, true),
-        (
-            "quick-notes.json".to_string(),
-            notes_root.join("quick-notes.json"),
-            false,
-        ),
-        (
-            "sticky-notes.json".to_string(),
-            notes_root.join("sticky-notes.json"),
-            false,
-        ),
-        (
-            "hotkeys.json".to_string(),
-            app_data_dir.join("hotkeys.json"),
-            false,
-        ),
-    ];
-
-    let session = crate::accounts::session::load_session(app)?;
-    if let Some(uid) = session.active_user_id.as_deref() {
-        if let Some(sync_root) = crate::accounts::account_sync_root(app)? {
-            pairs.push((
-                "sync-outbox.json".to_string(),
-                sync_root.join("sync-outbox.json"),
-                false,
-            ));
-        }
-        let account_dir = crate::accounts::session::account_workspace_dir(app, uid)?;
-        pairs.push((
-            "sync-profile.json".to_string(),
-            account_dir.join("sync-profile.json"),
-            false,
-        ));
-    }
-
-    let sources = pairs
+    let sources = collection
+        .entries
         .iter()
-        .map(|(prefix, path, is_dir)| BackupSourceSpec {
-            archive_prefix: prefix.clone(),
-            source_path: path.clone(),
-            is_dir: *is_dir,
+        .map(|entry| BackupSourceSpec {
+            archive_prefix: entry.archive_prefix.clone(),
+            source_path: entry.path.clone(),
+            is_dir: entry.is_dir,
         })
         .collect();
-    let targets = pairs
+    let targets = collection
+        .entries
         .into_iter()
-        .map(|(prefix, path, is_dir)| RestoreTargetSpec {
-            archive_prefix: prefix,
-            target_path: path,
-            is_dir,
+        .map(|entry| RestoreTargetSpec {
+            archive_prefix: entry.archive_prefix,
+            target_path: entry.path,
+            is_dir: entry.is_dir,
         })
         .collect();
 
-    Ok((scope_id, sources, targets))
+    Ok((collection.scope_id, sources, targets))
 }
 
 fn with_all_store_locks<T>(
@@ -701,7 +653,15 @@ fn with_all_store_locks<T>(
 ) -> Result<T, String> {
     with_todo_store_lock(app, |todo_store| {
         let res = with_quick_notes_store_lock(app, || {
-            with_sticky_notes_store_lock(app, || with_outbox_lock(app, operation))
+            with_sticky_notes_store_lock(app, || {
+                with_outbox_lock(app, || {
+                    if !clear_cache {
+                        let db_path = crate::local_db::workspace_db_path(app)?;
+                        crate::local_db::checkpoint_workspace_db_if_exists(&db_path)?;
+                    }
+                    operation()
+                })
+            })
         });
         if clear_cache && res.is_ok() {
             clear_todo_content_cache(todo_store);
@@ -779,28 +739,22 @@ pub async fn backup_restore_snapshot(
         let pre_restore_dir = backups_root_dir(&task_app)?
             .join(next_snapshot_folder_name(PRE_RESTORE_PREFIX, &now_ms));
         let summary = with_all_store_locks(&task_app, true, || {
+            let db_path = crate::local_db::workspace_db_path(&task_app)?;
+            crate::local_db::remove_sqlite_sidecar_files(&db_path)?;
             let (scope_id, _, targets) = active_backup_specs(&task_app)?;
-            restore_data_snapshot_dir(
+            let restored = restore_data_snapshot_dir(
                 Path::new(&trimmed),
                 &targets,
                 Some(&pre_restore_dir),
                 &scope_id,
                 &app_version,
                 &now_ms,
-            )
+            )?;
+            crate::local_db::remove_sqlite_sidecar_files(&db_path)?;
+            Ok(restored)
         })?;
 
-        if let Some(refreshed_session) =
-            crate::accounts::session::reload_active_profile_into_session(&task_app)?
-        {
-            crate::accounts::commands::emit_account_workspace_refreshed(
-                &task_app,
-                &refreshed_session,
-            )?;
-        }
-        crate::todos::commands::refresh_and_emit_active_todo_state(&task_app)?;
-        crate::quick_notes::refresh_and_emit_active_quick_notes_state(&task_app)?;
-        crate::sticky_notes::reload_sticky_notes_for_active_account(&task_app);
+        crate::workspace_runtime::refresh_all_workspace_modules(&task_app, None)?;
         Ok(summary)
     })
     .await
@@ -1081,6 +1035,88 @@ mod tests {
             .filter_map(Result::ok)
             .any(|e| e.file_name().to_string_lossy().contains(".restore-"));
         assert!(!temp_leftovers);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn restore_snapshot_checkpoints_wal_and_cleans_sidecars() {
+        let root = temp_workspace_dir("sqlite-wal-restore");
+        let db_path = root.join("live").join("tidydesk-local.db");
+
+        {
+            let conn = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+            conn.execute(
+                "INSERT INTO quick_notes (id, title, content, pinned, favorite, created_at, updated_at)
+                 VALUES ('n1', 'v1', 'body-v1', 0, 0, '100', '100')",
+                [],
+            )
+            .unwrap();
+        }
+        crate::local_db::checkpoint_workspace_db_if_exists(&db_path).unwrap();
+
+        let snap_dir = root.join("backups").join("snapshot-100");
+        create_data_snapshot_from_sources(
+            &[BackupSourceSpec {
+                archive_prefix: "tidydesk-local.db".to_string(),
+                source_path: db_path.clone(),
+                is_dir: false,
+            }],
+            &snap_dir,
+            "local",
+            "0.0.4",
+            "100",
+        )
+        .unwrap();
+
+        // Mutate live DB after snapshot so WAL/SHM sidecars accumulate post-snapshot state
+        let wal_conn = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+        wal_conn
+            .execute(
+                "INSERT INTO quick_notes (id, title, content, pinned, favorite, created_at, updated_at)
+                 VALUES ('n2', 'post-snap', 'dirty', 0, 0, '200', '200')",
+                [],
+            )
+            .unwrap();
+        drop(wal_conn);
+
+        // Simulate active WAL/SHM sidecar remnants that must not replay onto restored DB
+        let wal_sidecar = PathBuf::from(format!("{}-wal", db_path.display()));
+        let shm_sidecar = PathBuf::from(format!("{}-shm", db_path.display()));
+        fs::write(&wal_sidecar, b"stale-wal").unwrap();
+        fs::write(&shm_sidecar, b"stale-shm").unwrap();
+
+        crate::local_db::remove_sqlite_sidecar_files(&db_path).unwrap();
+        let summary = restore_data_snapshot_dir(
+            &snap_dir,
+            &[RestoreTargetSpec {
+                archive_prefix: "tidydesk-local.db".to_string(),
+                target_path: db_path.clone(),
+                is_dir: false,
+            }],
+            None,
+            "local",
+            "0.0.4",
+            "300",
+        )
+        .unwrap();
+        crate::local_db::remove_sqlite_sidecar_files(&db_path).unwrap();
+
+        assert_eq!(summary.restored_files, 1);
+        assert!(!wal_sidecar.exists());
+        assert!(!shm_sidecar.exists());
+
+        let reopened = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+        let ids: Vec<String> = {
+            let mut stmt = reopened
+                .prepare("SELECT id FROM quick_notes ORDER BY id ASC")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(ids, vec!["n1".to_string()]);
 
         let _ = fs::remove_dir_all(&root);
     }

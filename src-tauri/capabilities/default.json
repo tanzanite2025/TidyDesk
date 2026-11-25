@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities enabling core Tauri events and window/webview APIs across all TidyDesk windows.",
+  "windows": ["*"],
+  "permissions": [
+    "core:default"
+  ]
+}

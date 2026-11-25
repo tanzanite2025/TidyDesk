@@ -193,7 +193,7 @@ pub fn load_session(app: &AppHandle) -> Result<StoredAccountSession, String> {
     Ok(loaded)
 }
 
-pub(super) fn set_cached_session(
+pub(crate) fn set_cached_session(
     app: &AppHandle,
     next: StoredAccountSession,
 ) -> Result<(), String> {
@@ -314,6 +314,16 @@ pub fn account_sync_root(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let session = load_session(app)?;
     match session.active_user_id {
         Some(uid) => Ok(Some(workspace_data_dir(app, &uid, &session.workspace_id)?)),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn sync_profile_backup_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    let session = load_session(app)?;
+    match session.active_user_id.as_deref() {
+        Some(uid) => Ok(Some(
+            account_workspace_dir(app, uid)?.join("sync-profile.json"),
+        )),
         None => Ok(None),
     }
 }

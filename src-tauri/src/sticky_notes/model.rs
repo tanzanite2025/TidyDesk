@@ -85,12 +85,6 @@ pub(super) struct StoredStickyNotesFile {
     pub stickies: Vec<RawStickyNoteRecord>,
 }
 
-#[derive(Debug, Serialize)]
-pub(super) struct WritableStickyNotesFile<'a> {
-    pub version: u8,
-    pub stickies: &'a [StickyNoteRecord],
-}
-
 fn default_sticky_notes_version() -> u8 {
     STICKY_NOTES_VERSION
 }

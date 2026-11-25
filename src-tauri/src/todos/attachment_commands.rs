@@ -9,8 +9,8 @@ use super::model::{
     SetTodoCardCoverPayload, UpdateTodoAttachmentMetaPayload,
 };
 use super::store::{
-    read_todo_index_unlocked, todo_state_from_cache_or_disk, with_todo_store_lock,
-    write_todo_index_unlocked,
+    read_todo_index_unlocked, todo_state_from_cache_or_disk, update_todo_card_in_db,
+    with_todo_store_lock,
 };
 use crate::accounts::{current_actor_id, is_account_sync_active};
 use crate::sync::{enqueue_outbox_batch, OutboxBatchItem, OutboxEntityKind, OutboxOperation};
@@ -110,7 +110,7 @@ fn attach_image_bytes_to_target_sync(
         let card_snapshot = card.clone();
         index["boards"][0]["updatedAt"] = json!(now);
 
-        if let Err(err) = write_todo_index_unlocked(app, &index) {
+        if let Err(err) = update_todo_card_in_db(app, &index, &card_snapshot, None) {
             let _ = remove_attachment_files(app, card_id, &attachment);
             return Err(err);
         }
@@ -248,7 +248,7 @@ pub async fn todos_delete_attachment(
 
             let card_snapshot = index["cards"][card_index].clone();
             index["boards"][0]["updatedAt"] = json!(now);
-            write_todo_index_unlocked(&app, &index)?;
+            update_todo_card_in_db(&app, &index, &card_snapshot, None)?;
             remove_attachment_files(&app, &payload.card_id, &removed_attachment)?;
             let att_item = make_attachment_outbox_item(
                 &payload.card_id,
@@ -311,7 +311,7 @@ pub async fn todos_set_card_cover(
             };
             let card_snapshot = index["cards"][card_index].clone();
             index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
-            write_todo_index_unlocked(&app, &index)?;
+            update_todo_card_in_db(&app, &index, &card_snapshot, None)?;
             enqueue_card_with_attachment_event(
                 &app,
                 store,
@@ -378,7 +378,7 @@ pub async fn todos_update_attachment_meta(
             };
             let card_snapshot = index["cards"][card_index].clone();
             index["boards"][0]["updatedAt"] = json!(now);
-            write_todo_index_unlocked(&app, &index)?;
+            update_todo_card_in_db(&app, &index, &card_snapshot, None)?;
             let att_item = make_attachment_outbox_item(
                 &payload.card_id,
                 clean_subtask_id(payload.subtask_id.as_deref()),

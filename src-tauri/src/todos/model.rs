@@ -76,12 +76,30 @@ pub struct TodoSubtaskInput {
     pub updated_at: Option<String>,
 }
 
+pub(super) fn parse_todo_priority_input(raw: &str) -> Result<&'static str, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "low" => Ok("low"),
+        "normal" => Ok("normal"),
+        "high" => Ok("high"),
+        "urgent" => Ok("urgent"),
+        other => Err(format!("不支持的待办紧急度等级: {other}")),
+    }
+}
+
+pub(super) fn normalize_stored_priority(raw: Option<&str>) -> &'static str {
+    match raw.and_then(|v| parse_todo_priority_input(v).ok()) {
+        Some(value) => value,
+        None => "normal",
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateTodoCardPayload {
     pub title: Option<String>,
     pub content: Option<String>,
     pub column_id: Option<String>,
+    pub priority: Option<String>,
     pub subtasks: Option<Vec<TodoSubtaskInput>>,
 }
 
@@ -92,6 +110,7 @@ pub struct UpdateTodoCardPayload {
     pub title: Option<String>,
     pub content: Option<String>,
     pub column_id: Option<String>,
+    pub priority: Option<String>,
     pub tags: Option<Vec<String>>,
     pub archived: Option<bool>,
     pub subtasks: Option<Vec<TodoSubtaskInput>>,
@@ -251,11 +270,15 @@ pub(super) fn normalize_todo_index(index: Value) -> Value {
                 .map(|value| json!(value))
                 .unwrap_or(Value::Null);
 
+            let priority =
+                normalize_stored_priority(card_obj.get("priority").and_then(Value::as_str));
+
             let mut next_card = card_obj.clone();
             next_card.insert("id".to_string(), json!(id));
             next_card.insert("boardId".to_string(), json!(board_id));
             next_card.insert("columnId".to_string(), json!(column_id));
             next_card.insert("title".to_string(), json!(title));
+            next_card.insert("priority".to_string(), json!(priority));
             next_card.insert("tags".to_string(), Value::Array(tags));
             next_card.insert("archived".to_string(), json!(archived));
             next_card.insert("subtasks".to_string(), Value::Array(subtasks));
@@ -1049,5 +1072,36 @@ mod tests {
         assert_eq!(with_tombstone[1]["id"], json!("sub-2"));
         assert_eq!(with_tombstone[1]["deletedAt"], json!("3000"));
         assert_eq!(with_tombstone[1]["attachments"], json!([]));
+    }
+
+    #[test]
+    fn priority_normalization_and_validation_work_cleanly() {
+        assert_eq!(parse_todo_priority_input("low").unwrap(), "low");
+        assert_eq!(parse_todo_priority_input(" NORMAL ").unwrap(), "normal");
+        assert_eq!(parse_todo_priority_input("High").unwrap(), "high");
+        assert_eq!(parse_todo_priority_input("urgent").unwrap(), "urgent");
+        assert!(parse_todo_priority_input("critical-invalid").is_err());
+
+        let index = json!({
+            "version": 1,
+            "activeBoardId": "default-board",
+            "boards": [{
+                "id": "default-board",
+                "title": "待办",
+                "columns": [
+                    { "id": "todo", "title": "待处理" },
+                    { "id": "doing", "title": "进行中" },
+                    { "id": "done", "title": "已完成" }
+                ],
+                "cardOrder": { "todo": ["c1", "c2"], "doing": [], "done": [] }
+            }],
+            "cards": [
+                { "id": "c1", "columnId": "todo", "title": "紧急项", "priority": "urgent" },
+                { "id": "c2", "columnId": "todo", "title": "旧卡片未设优先级" }
+            ]
+        });
+        let normalized = normalize_todo_index(index);
+        assert_eq!(normalized["cards"][0]["priority"], json!("urgent"));
+        assert_eq!(normalized["cards"][1]["priority"], json!("normal"));
     }
 }

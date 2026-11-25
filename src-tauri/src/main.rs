@@ -19,6 +19,7 @@ mod files;
 mod files_rules;
 mod hotkeys;
 mod icons;
+mod local_db;
 mod paths;
 mod persistence;
 mod quick_notes;
@@ -31,6 +32,7 @@ mod sync;
 mod todos;
 mod tool_windows;
 mod updates;
+mod workspace_runtime;
 
 pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link, ShortcutResolver};
 pub use crate::paths::{

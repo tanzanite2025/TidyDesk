@@ -1,11 +1,11 @@
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-const QUICK_NOTES_VERSION: u8 = 2;
 const QUICK_NOTES_FILE_NAME: &str = "quick-notes.json";
 const QUICK_NOTE_FALLBACK_TITLE: &str = "Untitled Note";
 
@@ -63,20 +63,8 @@ struct RawQuickNote {
 
 #[derive(Debug, Deserialize)]
 struct StoredQuickNotesFile {
-    #[serde(rename = "version", default = "default_quick_notes_version")]
-    _version: u8,
     #[serde(default)]
     notes: Vec<RawQuickNote>,
-}
-
-#[derive(Debug, Serialize)]
-struct WritableQuickNotesFile {
-    version: u8,
-    notes: Vec<QuickNote>,
-}
-
-fn default_quick_notes_version() -> u8 {
-    QUICK_NOTES_VERSION
 }
 
 pub(crate) fn with_quick_notes_store_lock<T>(
@@ -128,13 +116,12 @@ fn sort_quick_notes(notes: &mut [QuickNote]) {
     });
 }
 
-fn quick_notes_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn quick_notes_legacy_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(crate::accounts::account_quick_notes_root(app)?.join(QUICK_NOTES_FILE_NAME))
 }
 
-fn ensure_quick_notes_storage_unlocked(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(crate::accounts::account_quick_notes_root(app)?)
-        .map_err(|err| format!("failed to create quick notes storage root: {err}"))
+pub(crate) fn quick_notes_backup_path(app: &AppHandle) -> Result<PathBuf, String> {
+    quick_notes_legacy_path(app)
 }
 
 fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
@@ -168,56 +155,150 @@ fn normalize_quick_note(note: RawQuickNote) -> Option<QuickNote> {
     })
 }
 
-fn read_quick_notes_unlocked(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
-    ensure_quick_notes_storage_unlocked(app)?;
-    let path = quick_notes_path(app)?;
-    let raw = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            write_quick_notes_unlocked(app, &[])?;
-            return Ok(Vec::new());
-        }
-        Err(err) => return Err(format!("failed to read quick notes: {err}")),
-    };
-    let (stored, recovered) = match serde_json::from_str::<StoredQuickNotesFile>(&raw) {
-        Ok(value) => (value, false),
-        Err(_) => {
-            crate::persistence::backup_corrupt_file(&path, "quick notes")?;
-            (
-                StoredQuickNotesFile {
-                    _version: QUICK_NOTES_VERSION,
-                    notes: Vec::new(),
-                },
-                true,
-            )
-        }
-    };
-    let version_changed = stored._version != QUICK_NOTES_VERSION;
-    let mut notes = stored
-        .notes
-        .into_iter()
-        .filter_map(normalize_quick_note)
-        .collect::<Vec<_>>();
-    sort_quick_notes(&mut notes);
-    let expected_json = serde_json::to_value(WritableQuickNotesFile {
-        version: QUICK_NOTES_VERSION,
-        notes: notes.clone(),
-    })
-    .ok();
-    let raw_json = serde_json::from_str::<serde_json::Value>(&raw).ok();
-    if recovered || version_changed || expected_json != raw_json {
-        write_quick_notes_unlocked(app, &notes)?;
+pub(crate) fn migrate_quick_notes_json_if_needed(
+    conn: &mut Connection,
+    legacy_path: &Path,
+) -> Result<(), String> {
+    if crate::local_db::get_meta_flag(conn, "migrated_quick_notes")?.is_some() {
+        return Ok(());
     }
+    if !legacy_path.is_file() {
+        crate::local_db::set_meta_flag(conn, "migrated_quick_notes", "none")?;
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(legacy_path)
+        .map_err(|err| format!("failed to read legacy quick notes: {err}"))?;
+    let notes = match serde_json::from_str::<StoredQuickNotesFile>(&raw) {
+        Ok(parsed) => parsed
+            .notes
+            .into_iter()
+            .filter_map(normalize_quick_note)
+            .collect::<Vec<_>>(),
+        Err(_) => {
+            crate::persistence::backup_corrupt_file(legacy_path, "quick notes")?;
+            Vec::new()
+        }
+    };
+
+    {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启 quick_notes 迁移事务失败: {err}"))?;
+        let existing: i64 = tx
+            .query_row("SELECT COUNT(*) FROM quick_notes", [], |r| r.get(0))
+            .map_err(|err| format!("统计 quick_notes 行数失败: {err}"))?;
+        if existing == 0 {
+            for note in &notes {
+                tx.execute(
+                    "INSERT OR REPLACE INTO quick_notes
+                     (id, title, content, pinned, favorite, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![
+                        note.id,
+                        note.title,
+                        note.content,
+                        if note.pinned { 1 } else { 0 },
+                        if note.favorite { 1 } else { 0 },
+                        note.created_at,
+                        note.updated_at
+                    ],
+                )
+                .map_err(|err| format!("迁移写入 quick_notes 失败: {err}"))?;
+            }
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('migrated_quick_notes', ?1)",
+            [crate::timestamp_string()],
+        )
+        .map_err(|err| format!("写入 migrated_quick_notes 标记失败: {err}"))?;
+        tx.commit()
+            .map_err(|err| format!("提交 quick_notes 迁移事务失败: {err}"))?;
+    }
+
+    crate::local_db::archive_legacy_file_once(legacy_path)?;
+    Ok(())
+}
+
+fn open_migrated_quick_notes_conn(
+    db_path: &Path,
+    legacy_path: &Path,
+) -> Result<Connection, String> {
+    let mut conn = crate::local_db::open_workspace_db_at(db_path)?;
+    migrate_quick_notes_json_if_needed(&mut conn, legacy_path)?;
+    Ok(conn)
+}
+
+fn read_quick_notes_from_conn(conn: &Connection) -> Result<Vec<QuickNote>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, content, pinned, favorite, created_at, updated_at FROM quick_notes",
+        )
+        .map_err(|err| format!("查询 quick_notes 失败: {err}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(RawQuickNote {
+                id: Some(row.get::<_, String>(0)?),
+                title: Some(row.get::<_, String>(1)?),
+                content: Some(row.get::<_, String>(2)?),
+                pinned: Some(row.get::<_, i64>(3)? != 0),
+                favorite: Some(row.get::<_, i64>(4)? != 0),
+                created_at: Some(row.get::<_, String>(5)?),
+                updated_at: Some(row.get::<_, String>(6)?),
+            })
+        })
+        .map_err(|err| format!("读取 quick_notes 行失败: {err}"))?;
+
+    let mut notes = Vec::new();
+    for item in rows {
+        let raw = item.map_err(|err| format!("解析 quick_notes 行失败: {err}"))?;
+        if let Some(normalized) = normalize_quick_note(raw) {
+            notes.push(normalized);
+        }
+    }
+    sort_quick_notes(&mut notes);
     Ok(notes)
 }
 
+fn write_quick_notes_in_conn(conn: &mut Connection, notes: &[QuickNote]) -> Result<(), String> {
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启 quick_notes 写入事务失败: {err}"))?;
+    tx.execute("DELETE FROM quick_notes", [])
+        .map_err(|err| format!("清理 quick_notes 表失败: {err}"))?;
+    for note in notes {
+        tx.execute(
+            "INSERT INTO quick_notes (id, title, content, pinned, favorite, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                note.id,
+                note.title,
+                note.content,
+                if note.pinned { 1 } else { 0 },
+                if note.favorite { 1 } else { 0 },
+                note.created_at,
+                note.updated_at
+            ],
+        )
+        .map_err(|err| format!("写入 quick_notes 行失败: {err}"))?;
+    }
+    tx.commit()
+        .map_err(|err| format!("提交 quick_notes 事务失败: {err}"))?;
+    Ok(())
+}
+
+fn read_quick_notes_unlocked(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
+    let db_path = crate::local_db::workspace_db_path(app)?;
+    let legacy_path = quick_notes_legacy_path(app)?;
+    let conn = open_migrated_quick_notes_conn(&db_path, &legacy_path)?;
+    read_quick_notes_from_conn(&conn)
+}
+
 fn write_quick_notes_unlocked(app: &AppHandle, notes: &[QuickNote]) -> Result<(), String> {
-    ensure_quick_notes_storage_unlocked(app)?;
-    let payload = WritableQuickNotesFile {
-        version: QUICK_NOTES_VERSION,
-        notes: notes.to_vec(),
-    };
-    crate::persistence::atomic_write_json_fast(&quick_notes_path(app)?, &payload, "quick notes")
+    let db_path = crate::local_db::workspace_db_path(app)?;
+    let legacy_path = quick_notes_legacy_path(app)?;
+    let mut conn = open_migrated_quick_notes_conn(&db_path, &legacy_path)?;
+    write_quick_notes_in_conn(&mut conn, notes)
 }
 
 fn quick_notes_state(app: &AppHandle) -> Result<QuickNotesState, String> {
@@ -502,5 +583,48 @@ mod tests {
         assert_eq!(list[0].id, "n2");
         assert_eq!(list[1].id, "n1");
         assert_eq!(list[2].id, "n3");
+    }
+
+    #[test]
+    fn quick_notes_sqlite_migrates_legacy_json_and_preserves_backup() {
+        let root =
+            std::env::temp_dir().join(format!("tidydesk-quicknotes-sql-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let legacy_path = root.join("quick-notes.json");
+        fs::write(
+            &legacy_path,
+            r#"{"version":2,"notes":[{"id":"qn1","title":"旧速记","content":"body","pinned":true,"favorite":false,"createdAt":"10","updatedAt":"20"}]}"#,
+        )
+        .unwrap();
+
+        let db_path = root.join("tidydesk-local.db");
+        let mut conn = open_migrated_quick_notes_conn(&db_path, &legacy_path).unwrap();
+        assert!(!legacy_path.exists());
+        assert!(root.join("quick-notes.json.pre-sqlite.bak").is_file());
+
+        let mut loaded = read_quick_notes_from_conn(&conn).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "旧速记");
+        assert!(loaded[0].pinned);
+
+        loaded.push(QuickNote {
+            id: "qn2".to_string(),
+            title: "新SQLite速记".to_string(),
+            content: "new".to_string(),
+            pinned: false,
+            favorite: true,
+            created_at: "30".to_string(),
+            updated_at: "40".to_string(),
+        });
+        write_quick_notes_in_conn(&mut conn, &loaded).unwrap();
+        let reloaded = read_quick_notes_from_conn(&conn).unwrap();
+        assert_eq!(reloaded.len(), 2);
+        assert_eq!(reloaded[0].id, "qn1");
+        assert_eq!(reloaded[1].id, "qn2");
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -68,11 +68,29 @@ export interface TodoBoard {
   updatedAt: string;
 }
 
+export const TODO_PRIORITY_VALUES = ['low', 'normal', 'high', 'urgent'] as const;
+
+export type TodoPriority = (typeof TODO_PRIORITY_VALUES)[number];
+
+export function normalizeTodoPriority(raw?: string | null): TodoPriority {
+  const normalized = (raw || '').trim().toLowerCase();
+  if (
+    normalized === 'low' ||
+    normalized === 'normal' ||
+    normalized === 'high' ||
+    normalized === 'urgent'
+  ) {
+    return normalized;
+  }
+  return 'normal';
+}
+
 export interface TodoCard {
   id: string;
   boardId: string;
   columnId: string;
   title: string;
+  priority?: TodoPriority;
   summaryText?: string;
   content?: string;
   tags: string[];
@@ -177,6 +195,7 @@ export interface CreateTodoCardInput {
   title?: string;
   content?: string;
   columnId?: string;
+  priority?: TodoPriority;
   subtasks?: TodoSubtaskInput[];
 }
 
@@ -185,6 +204,7 @@ export interface UpdateTodoCardInput {
   title?: string;
   content?: string;
   columnId?: string;
+  priority?: TodoPriority;
   tags?: string[];
   archived?: boolean;
   subtasks?: TodoSubtaskInput[];

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CheckSquare, Film, Image as ImageIcon, Play, Star } from 'lucide-react';
 import type { TodoAttachment, TodoCard } from '../../types/todo';
 import { attachmentImageStyle, isAttachmentContainMode } from './mediaUtils';
+import { getTodoPriorityMeta } from './priority';
 
 function fallbackSummary(content: string): string {
   return (
@@ -48,6 +49,7 @@ export const TodoCardTile: React.FC<TodoCardTileProps> = ({
   const subtaskPercent = subtaskTotal > 0 ? Math.round((subtaskCompleted / subtaskTotal) * 100) : 0;
   const hasVideoPreview = previewItems.some(item => item.kind === 'video');
   const summary = card.summaryText?.trim() || fallbackSummary(card.content || '') || '没有描述';
+  const priorityMeta = getTodoPriorityMeta(card.priority);
 
   return (
     <button
@@ -55,16 +57,30 @@ export const TodoCardTile: React.FC<TodoCardTileProps> = ({
       draggable
       onDragStart={onDragStart}
       onClick={onSelect}
-      className={`w-full overflow-hidden rounded-xl border text-left transition-all ${
-        isSelected
-          ? 'border-sky-300/40 bg-sky-400/15 ring-1 ring-sky-400/25'
-          : 'border-white/[0.08] bg-white/[0.045] hover:border-white/[0.16] hover:bg-white/[0.08]'
+      className={`relative w-full overflow-hidden rounded-xl border text-left transition-all ${
+        isSelected ? priorityMeta.selectedTileClass : priorityMeta.tileClass
       }`}
     >
-      <div className="p-3">
-        {/* Layer 1: Title & summary */}
-        <div className="line-clamp-2 text-[12px] font-bold leading-4 text-slate-100">
-          {card.title}
+      {priorityMeta.stripeClass && (
+        <span
+          aria-hidden="true"
+          className={`absolute inset-y-0 left-0 w-1 ${priorityMeta.stripeClass}`}
+        />
+      )}
+      <div className={priorityMeta.stripeClass ? 'p-3 pl-3.5' : 'p-3'}>
+        {/* Layer 1: Title, priority badge & summary */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="line-clamp-2 min-w-0 flex-1 text-[12px] font-bold leading-4 text-slate-100">
+            {card.title}
+          </div>
+          {priorityMeta.showTileBadge && (
+            <span
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold leading-none ${priorityMeta.badgeClass}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${priorityMeta.dotClass}`} />
+              {priorityMeta.label}
+            </span>
+          )}
         </div>
         <div className="mt-1.5 line-clamp-2 text-[10px] leading-4 text-slate-400">{summary}</div>
 

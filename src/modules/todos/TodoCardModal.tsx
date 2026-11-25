@@ -20,9 +20,11 @@ import type {
   TodoAttachmentFocalPoint,
   TodoAttachmentPreviewMode,
   TodoCard,
+  TodoPriority,
   TodoSubtask
 } from '../../types/todo';
 import { MarkdownPreview } from './MarkdownPreview';
+import { getTodoPriorityMeta, normalizeTodoPriority, TODO_PRIORITY_OPTIONS } from './priority';
 import { isAttachmentFileOversized, isImageFile } from './mediaUtils';
 import { TodoAttachmentsSection } from './TodoAttachmentsSection';
 import { TodoCameraModal } from './TodoCameraModal';
@@ -163,6 +165,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
   // Shared draft state
   const [title, setTitle] = useState('');
   const [columnId, setColumnId] = useState(defaultColumnId);
+  const [priority, setPriority] = useState<TodoPriority>('normal');
   const [content, setContent] = useState('');
   const [subtasks, setSubtasks] = useState<TodoSubtask[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>('write');
@@ -185,6 +188,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
     setDetailCard(null);
     setTitle('');
     setColumnId(defaultColumnId);
+    setPriority('normal');
     setContent('');
     setSubtasks([]);
     setEditorMode('write');
@@ -205,6 +209,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
       setDetailCard(null);
       setTitle(selectedCardSummary.title);
       setColumnId(selectedCardSummary.columnId);
+      setPriority(normalizeTodoPriority(selectedCardSummary.priority));
       setContent(selectedCardSummary.content ?? '');
       setSubtasks([]);
       setEditorMode('write');
@@ -232,6 +237,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
           setContent(detail.content ?? '');
         }
         setColumnId(detail.columnId);
+        setPriority(normalizeTodoPriority(detail.priority));
         if (isInitialHydrate || pendingSubtaskSavesRef.current === 0) {
           setSubtasks(detail.subtasks || []);
         }
@@ -338,6 +344,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
         title: title.trim() || '新待办',
         content,
         columnId,
+        priority,
         subtasks: subtasks.map(item => ({
           id: item.id,
           title: item.title,
@@ -617,6 +624,47 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
               <X size={15} />
             </button>
           </div>
+        </div>
+
+        {/* Urgency / Card Color Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] bg-white/[0.02] px-5 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              紧急度
+            </span>
+            {TODO_PRIORITY_OPTIONS.map(option => {
+              const isActive = priority === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    setPriority(option.value);
+                    if (
+                      mode === 'detail' &&
+                      activeCard &&
+                      normalizeTodoPriority(activeCard.priority) !== option.value
+                    ) {
+                      void updateCard({ id: activeCard.id, priority: option.value });
+                    }
+                  }}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                    isActive
+                      ? option.chipActiveClass
+                      : 'bg-white/[0.04] text-slate-400 hover:bg-white/[0.08] hover:text-slate-200'
+                  }`}
+                >
+                  <span className={`h-2 w-2 rounded-full ${option.dotClass}`} />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {getTodoPriorityMeta(priority).value !== 'normal' && (
+            <span className="text-[10px] text-slate-500">
+              卡片将在看板中以{getTodoPriorityMeta(priority).label}级颜色高亮显示
+            </span>
+          )}
         </div>
 
         {visibleNotice && (

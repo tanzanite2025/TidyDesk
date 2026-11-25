@@ -1,15 +1,16 @@
 use super::model::{
     normalize_sticky_color, RawStickyNoteRecord, StickyNoteRecord, StickyNotesState,
-    StickyWindowBounds, StoredStickyNotesFile, WritableStickyNotesFile, DEFAULT_STICKY_HEIGHT,
-    DEFAULT_STICKY_WIDTH, MIN_STICKY_HEIGHT, MIN_STICKY_WIDTH, STICKY_NOTES_VERSION,
+    StickyWindowBounds, StoredStickyNotesFile, DEFAULT_STICKY_HEIGHT, DEFAULT_STICKY_WIDTH,
+    MIN_STICKY_HEIGHT, MIN_STICKY_WIDTH, STICKY_NOTES_VERSION,
 };
 use crate::shell::{
     available_work_areas, clamp_physical_bounds_to_monitors, default_cascade_bounds_for_monitor,
     scaled_px, ShellBounds, WorkAreaMonitor,
 };
+use rusqlite::Connection;
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
@@ -32,11 +33,6 @@ pub fn with_sticky_notes_store_lock<T>(
 
 pub fn sticky_notes_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(crate::accounts::account_quick_notes_root(app)?.join(STICKY_NOTES_FILE_NAME))
-}
-
-fn ensure_storage_root_unlocked(app: &AppHandle) -> Result<(), String> {
-    fs::create_dir_all(crate::accounts::account_quick_notes_root(app)?)
-        .map_err(|err| format!("failed to create sticky notes storage root: {err}"))
 }
 
 pub fn clamp_sticky_bounds_for_monitors(
@@ -149,26 +145,177 @@ pub(super) fn read_sticky_notes_from_path(
     Ok((stickies, needs_rewrite))
 }
 
+pub(crate) fn migrate_sticky_notes_json_if_needed(
+    conn: &mut Connection,
+    legacy_path: &Path,
+    monitors: &[WorkAreaMonitor],
+    primary: Option<WorkAreaMonitor>,
+) -> Result<(), String> {
+    if crate::local_db::get_meta_flag(conn, "migrated_sticky_notes")?.is_some() {
+        return Ok(());
+    }
+    if !legacy_path.is_file() {
+        crate::local_db::set_meta_flag(conn, "migrated_sticky_notes", "none")?;
+        return Ok(());
+    }
+
+    let (stickies, _) = read_sticky_notes_from_path(&legacy_path.to_path_buf(), monitors, primary)?;
+    {
+        let tx = conn
+            .transaction()
+            .map_err(|err| format!("开启 sticky_notes 迁移事务失败: {err}"))?;
+        let existing: i64 = tx
+            .query_row("SELECT COUNT(*) FROM sticky_notes", [], |r| r.get(0))
+            .map_err(|err| format!("统计 sticky_notes 行数失败: {err}"))?;
+        if existing == 0 {
+            for (idx, item) in stickies.iter().enumerate() {
+                tx.execute(
+                    "INSERT OR REPLACE INTO sticky_notes
+                     (note_id, x, y, width, height, always_on_top, color, updated_at, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        item.note_id,
+                        item.bounds.x,
+                        item.bounds.y,
+                        i64::from(item.bounds.width),
+                        i64::from(item.bounds.height),
+                        if item.always_on_top { 1 } else { 0 },
+                        item.color,
+                        item.updated_at,
+                        i64::try_from(idx).unwrap_or(i64::MAX)
+                    ],
+                )
+                .map_err(|err| format!("迁移写入 sticky_notes 失败: {err}"))?;
+            }
+        }
+        tx.execute(
+            "INSERT OR REPLACE INTO db_meta (key, value) VALUES ('migrated_sticky_notes', ?1)",
+            [crate::timestamp_string()],
+        )
+        .map_err(|err| format!("写入 migrated_sticky_notes 标记失败: {err}"))?;
+        tx.commit()
+            .map_err(|err| format!("提交 sticky_notes 迁移事务失败: {err}"))?;
+    }
+
+    crate::local_db::archive_legacy_file_once(legacy_path)?;
+    Ok(())
+}
+
+fn read_sticky_notes_from_conn(
+    conn: &Connection,
+    monitors: &[WorkAreaMonitor],
+    primary: Option<WorkAreaMonitor>,
+) -> Result<(Vec<StickyNoteRecord>, bool), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT note_id, x, y, width, height, always_on_top, color, updated_at
+             FROM sticky_notes
+             ORDER BY sort_order ASC",
+        )
+        .map_err(|err| format!("查询 sticky_notes 失败: {err}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(RawStickyNoteRecord {
+                note_id: Some(row.get::<_, String>(0)?),
+                bounds: Some(StickyWindowBounds {
+                    x: row.get::<_, i32>(1)?,
+                    y: row.get::<_, i32>(2)?,
+                    width: u32::try_from(row.get::<_, i64>(3)?.max(1))
+                        .unwrap_or(DEFAULT_STICKY_WIDTH),
+                    height: u32::try_from(row.get::<_, i64>(4)?.max(1))
+                        .unwrap_or(DEFAULT_STICKY_HEIGHT),
+                }),
+                always_on_top: Some(row.get::<_, i64>(5)? != 0),
+                color: Some(row.get::<_, String>(6)?),
+                updated_at: Some(row.get::<_, String>(7)?),
+            })
+        })
+        .map_err(|err| format!("读取 sticky_notes 行失败: {err}"))?;
+
+    let mut raw_records = Vec::new();
+    for r in rows {
+        raw_records.push(r.map_err(|err| format!("解析 sticky_notes 行失败: {err}"))?);
+    }
+    let raw_count = raw_records.len();
+    let mut seen_ids = HashSet::new();
+    let mut stickies = Vec::with_capacity(raw_count);
+    let mut bounds_adjusted = false;
+
+    for raw in raw_records {
+        let orig_bounds = raw.bounds;
+        if let Some(norm) = normalize_sticky_record(raw, monitors, primary, &mut seen_ids) {
+            if let Some(ob) = orig_bounds {
+                if ob.x != norm.bounds.x
+                    || ob.y != norm.bounds.y
+                    || ob.width != norm.bounds.width
+                    || ob.height != norm.bounds.height
+                {
+                    bounds_adjusted = true;
+                }
+            }
+            stickies.push(norm);
+        } else {
+            bounds_adjusted = true;
+        }
+    }
+    let needs_rewrite = bounds_adjusted || stickies.len() != raw_count;
+    Ok((stickies, needs_rewrite))
+}
+
+fn write_sticky_notes_in_conn(
+    conn: &mut Connection,
+    stickies: &[StickyNoteRecord],
+) -> Result<(), String> {
+    let tx = conn
+        .transaction()
+        .map_err(|err| format!("开启 sticky_notes 写入事务失败: {err}"))?;
+    tx.execute("DELETE FROM sticky_notes", [])
+        .map_err(|err| format!("清理 sticky_notes 表失败: {err}"))?;
+    for (idx, item) in stickies.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO sticky_notes
+             (note_id, x, y, width, height, always_on_top, color, updated_at, sort_order)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                item.note_id,
+                item.bounds.x,
+                item.bounds.y,
+                i64::from(item.bounds.width),
+                i64::from(item.bounds.height),
+                if item.always_on_top { 1 } else { 0 },
+                item.color,
+                item.updated_at,
+                i64::try_from(idx).unwrap_or(i64::MAX)
+            ],
+        )
+        .map_err(|err| format!("写入 sticky_notes 行失败: {err}"))?;
+    }
+    tx.commit()
+        .map_err(|err| format!("提交 sticky_notes 事务失败: {err}"))?;
+    Ok(())
+}
+
 pub fn write_sticky_notes_unlocked(
     app: &AppHandle,
     stickies: &[StickyNoteRecord],
 ) -> Result<(), String> {
-    ensure_storage_root_unlocked(app)?;
-    let path = sticky_notes_path(app)?;
-    let payload = WritableStickyNotesFile {
-        version: STICKY_NOTES_VERSION,
-        stickies,
-    };
-    crate::persistence::atomic_write_json_fast(&path, &payload, "sticky notes")
+    let db_path = crate::local_db::workspace_db_path(app)?;
+    let legacy_path = sticky_notes_path(app)?;
+    let (monitors, primary) = available_work_areas(app);
+    let mut conn = crate::local_db::open_workspace_db_at(&db_path)?;
+    migrate_sticky_notes_json_if_needed(&mut conn, &legacy_path, &monitors, primary)?;
+    write_sticky_notes_in_conn(&mut conn, stickies)
 }
 
 pub fn read_sticky_notes_unlocked(app: &AppHandle) -> Result<Vec<StickyNoteRecord>, String> {
-    ensure_storage_root_unlocked(app)?;
-    let path = sticky_notes_path(app)?;
+    let db_path = crate::local_db::workspace_db_path(app)?;
+    let legacy_path = sticky_notes_path(app)?;
     let (monitors, primary) = available_work_areas(app);
-    let (stickies, needs_rewrite) = read_sticky_notes_from_path(&path, &monitors, primary)?;
-    if needs_rewrite || !path.exists() {
-        write_sticky_notes_unlocked(app, &stickies)?;
+    let mut conn = crate::local_db::open_workspace_db_at(&db_path)?;
+    migrate_sticky_notes_json_if_needed(&mut conn, &legacy_path, &monitors, primary)?;
+    let (stickies, needs_rewrite) = read_sticky_notes_from_conn(&conn, &monitors, primary)?;
+    if needs_rewrite {
+        write_sticky_notes_in_conn(&mut conn, &stickies)?;
     }
     Ok(stickies)
 }
@@ -308,6 +455,45 @@ mod tests {
             .filter_map(Result::ok)
             .any(|entry| entry.file_name().to_string_lossy().contains("corrupt"));
         assert!(has_backup);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sticky_notes_sqlite_migrates_legacy_json_and_clamps_bounds() {
+        let dir = test_temp_dir("sqlite-mig");
+        let legacy_path = dir.join("sticky-notes.json");
+        fs::write(
+            &legacy_path,
+            r#"{"version":1,"stickies":[{"noteId":"s1","bounds":{"x":-32000,"y":100,"width":320,"height":340},"alwaysOnTop":true,"color":"sky","updatedAt":"50"}]}"#,
+        )
+        .unwrap();
+
+        let primary = WorkAreaMonitor {
+            bounds: ShellBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1040,
+            },
+            scale_factor: 1.0,
+        };
+        let db_path = dir.join("tidydesk-local.db");
+        let mut conn = crate::local_db::open_workspace_db_at(&db_path).unwrap();
+        migrate_sticky_notes_json_if_needed(&mut conn, &legacy_path, &[primary], Some(primary))
+            .unwrap();
+        assert!(!legacy_path.exists());
+        assert!(dir.join("sticky-notes.json.pre-sqlite.bak").is_file());
+
+        let (stickies, needs_rewrite) =
+            read_sticky_notes_from_conn(&conn, &[primary], Some(primary)).unwrap();
+        assert!(!needs_rewrite);
+        assert_eq!(stickies.len(), 1);
+        assert_eq!(stickies[0].note_id, "s1");
+        assert!(stickies[0].bounds.x >= 0);
+        assert!(stickies[0].always_on_top);
+        assert_eq!(stickies[0].color, "sky");
+
+        drop(conn);
         let _ = fs::remove_dir_all(&dir);
     }
 }

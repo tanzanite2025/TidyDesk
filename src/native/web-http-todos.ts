@@ -11,6 +11,7 @@ import type {
   UpdateTodoAttachmentMetaInput,
   UpdateTodoCardInput
 } from '../types/todo';
+import { normalizeTodoPriority } from '../types/todo';
 import type { NativeTodosClient } from './types';
 import type { WebHttpContext } from './web-http-context';
 import {
@@ -126,6 +127,7 @@ export function createWebTodosModule(
     return {
       ...raw,
       boardId: DEFAULT_MOBILE_BOARD.id,
+      priority: normalizeTodoPriority(raw.priority),
       summaryText: summarizeMarkdown(raw.content || ''),
       subtasks: enrichedSubs,
       subtaskTotal: enrichedSubs.length,
@@ -234,6 +236,7 @@ export function createWebTodosModule(
         boardId: DEFAULT_MOBILE_BOARD.id,
         columnId: colId,
         title: (payload.title || '').trim() || '新待办',
+        priority: normalizeTodoPriority(payload.priority),
         content: payload.content || '',
         tags: [],
         archived: false,
@@ -297,6 +300,9 @@ export function createWebTodosModule(
         title: payload.title !== undefined ? payload.title.trim() || '未命名待办' : existing.title,
         content: payload.content !== undefined ? payload.content : existing.content,
         columnId: payload.columnId ?? existing.columnId,
+        priority: payload.priority !== undefined
+          ? normalizeTodoPriority(payload.priority)
+          : normalizeTodoPriority(existing.priority),
         tags: payload.tags ?? existing.tags,
         archived: payload.archived ?? existing.archived,
         subtasks: nextSubs ?? existing.subtasks,

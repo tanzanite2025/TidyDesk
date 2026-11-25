@@ -4,20 +4,19 @@ use super::credentials::{
 };
 use super::session::{
     account_todos_root, copy_dir_recursive_merge, legacy_local_todos_root, load_session,
-    sanitize_account_user_id, sanitize_workspace_id, set_cached_session, snapshot_from_session,
-    validate_server_endpoint, workspace_data_dir, AccountSessionSnapshot, StoredAccountSession,
+    sanitize_account_user_id, sanitize_workspace_id, snapshot_from_session,
+    validate_server_endpoint, AccountSessionSnapshot, StoredAccountSession,
 };
 use crate::sync::http_transport::{HttpSyncClient, RemoteAuthSessionInfo, RemoteWorkspaceInfo};
 use crate::sync::outbox::has_pending_outbox_for_workspace;
 use crate::todos::model::merge_imported_todo_index;
 use crate::todos::store::{
-    clear_todo_content_cache, read_todo_index_unlocked, todo_index_path_in_root,
-    todo_state_from_index_unlocked, with_todo_store_lock, write_todo_index_unlocked,
+    clear_todo_content_cache, load_local_todos_snapshot_for_import, read_todo_index_unlocked,
+    save_todo_index_with_contents_unlocked, todo_state_from_index_unlocked, with_todo_store_lock,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::fs;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,39 +120,21 @@ fn apply_account_session_sync(
     };
     save_account_sync_profile(app, &user_id, &next_profile)?;
 
-    let user_todos_dir = workspace_data_dir(app, &user_id, &workspace_id)?.join("todos");
     let next = StoredAccountSession {
         version: 1,
-        active_user_id: Some(user_id),
+        active_user_id: Some(user_id.clone()),
         display_name: resolved_name,
         server_endpoint,
-        workspace_id,
+        workspace_id: workspace_id.clone(),
         has_token: token_present,
         last_sync_cursor: next_cursor,
         last_sync_at: next_sync_at,
     };
     let snapshot = snapshot_from_session(&next);
 
-    with_todo_store_lock(app, |store| {
-        crate::sync::stop_realtime_sync(app);
-        if workspace_changed && user_todos_dir.exists() {
-            fs::remove_dir_all(&user_todos_dir).map_err(|err| {
-                format!(
-                    "切换工作区时清理本地缓存目录失败 {}: {err}",
-                    user_todos_dir.display()
-                )
-            })?;
-        }
-        set_cached_session(app, next)?;
-        clear_todo_content_cache(store);
-        Ok(())
-    })?;
-
-    crate::todos::commands::refresh_and_emit_active_todo_state(app)?;
-    if let Err(err) = crate::quick_notes::refresh_and_emit_active_quick_notes_state(app) {
-        eprintln!("[TIDYDESK] Failed to refresh quick notes after workspace switch: {err}");
-    }
-    emit_account_workspace_refreshed(app, &snapshot)?;
+    let reset_scope = workspace_changed.then_some((user_id.as_str(), workspace_id.as_str()));
+    crate::workspace_runtime::apply_workspace_session_transition(app, next, reset_scope)?;
+    crate::workspace_runtime::refresh_all_workspace_modules(app, Some(&snapshot))?;
     Ok(snapshot)
 }
 
@@ -170,21 +151,6 @@ fn build_active_http_client(app: &AppHandle) -> Result<HttpSyncClient, String> {
     let token = load_account_token(app, user_id)?
         .ok_or_else(|| "缺少有效的账号 Token，请重新登录后重试".to_string())?;
     HttpSyncClient::new(endpoint, user_id, &token)?.with_workspace(&session.workspace_id)
-}
-
-pub(crate) fn emit_account_workspace_refreshed(
-    app: &AppHandle,
-    snapshot: &AccountSessionSnapshot,
-) -> Result<(), String> {
-    crate::sticky_notes::reload_sticky_notes_for_active_account(app);
-    for label in ["handle", "main", "todos", "capture"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .emit("account-session-changed", snapshot.clone())
-                .map_err(|err| err.to_string())?;
-        }
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -362,18 +328,8 @@ pub async fn accounts_logout_to_local(app: AppHandle) -> Result<AccountSessionSn
         let next = StoredAccountSession::default();
         let snapshot = snapshot_from_session(&next);
 
-        with_todo_store_lock(&app, |store| {
-            crate::sync::stop_realtime_sync(&app);
-            set_cached_session(&app, next)?;
-            clear_todo_content_cache(store);
-            Ok(())
-        })?;
-
-        crate::todos::commands::refresh_and_emit_active_todo_state(&app)?;
-        if let Err(err) = crate::quick_notes::refresh_and_emit_active_quick_notes_state(&app) {
-            eprintln!("[TIDYDESK] Failed to refresh quick notes after logout: {err}");
-        }
-        emit_account_workspace_refreshed(&app, &snapshot)?;
+        crate::workspace_runtime::apply_workspace_session_transition(&app, next, None)?;
+        crate::workspace_runtime::refresh_all_workspace_modules(&app, Some(&snapshot))?;
         Ok(snapshot)
     })
     .await
@@ -389,19 +345,14 @@ pub async fn accounts_import_local_todos(app: AppHandle) -> Result<Value, String
         };
 
         let legacy_root = legacy_local_todos_root(&app)?;
-        let legacy_index_path = todo_index_path_in_root(&legacy_root);
-        if !legacy_index_path.exists() {
-            return Ok(json!({ "importedCards": 0 }));
-        }
-
         let target_root = account_todos_root(&app)?;
         let imported_cards = with_todo_store_lock(&app, |store| {
-            let legacy_raw = fs::read_to_string(&legacy_index_path)
-                .map_err(|err| format!("读取本地默认待办失败: {err}"))?;
-            let legacy_index: Value = serde_json::from_str(&legacy_raw)
-                .map_err(|err| format!("解析本地默认待办失败: {err}"))?;
+            let Some(local_snapshot) = load_local_todos_snapshot_for_import(&app)? else {
+                return Ok(0usize);
+            };
+            let legacy_index = local_snapshot.index;
+            let local_contents = local_snapshot.contents;
 
-            copy_dir_recursive_merge(&legacy_root.join("cards"), &target_root.join("cards"))?;
             copy_dir_recursive_merge(
                 &legacy_root.join("attachments"),
                 &target_root.join("attachments"),
@@ -411,7 +362,19 @@ pub async fn accounts_import_local_todos(app: AppHandle) -> Result<Value, String
             let (merged_index, imported_cards) =
                 merge_imported_todo_index(current_index, &legacy_index, &user_id);
 
-            write_todo_index_unlocked(&app, &merged_index)?;
+            let imported_contents: Vec<(&str, &str)> = imported_cards
+                .iter()
+                .filter_map(|card| {
+                    let card_id = card["id"].as_str()?;
+                    let body = local_contents
+                        .get(card_id)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    Some((card_id, body))
+                })
+                .collect();
+
+            save_todo_index_with_contents_unlocked(&app, &merged_index, &imported_contents)?;
             clear_todo_content_cache(store);
             let counts = crate::todos::model::todo_counts(&merged_index);
             let _ = todo_state_from_index_unlocked(&app, store, &merged_index, counts)?;

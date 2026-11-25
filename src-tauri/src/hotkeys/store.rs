@@ -164,6 +164,6 @@ fn hotkey_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("failed to resolve app data directory: {err}"))
 }
 
-fn hotkey_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn hotkey_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(hotkey_root(app)?.join(HOTKEY_SETTINGS_FILE))
 }

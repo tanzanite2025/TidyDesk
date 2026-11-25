@@ -17,21 +17,51 @@ export const RailBar: React.FC = () => {
   const [todoCounts, setTodoCounts] = useState<TodoCounts>({ total: 0, open: 0, done: 0 });
 
   useEffect(() => {
-    (nativeClient.isAvailable()
-      ? nativeClient.todos.getCounts()
-      : Promise.resolve({ total: 0, open: 0, done: 0 })
-    )
-      .then(setTodoCounts)
-      .catch(() => undefined);
+    let disposed = false;
 
-    const unsubscribeCounts = nativeClient.todos.onCountsUpdated(setTodoCounts);
-    const unsubscribeModule = nativeClient.windows.onModuleState(payload => {
-      setActiveModule(payload.activeModule || null);
+    const syncCounts = () => {
+      if (!nativeClient.isAvailable()) {
+        setTodoCounts({ total: 0, open: 0, done: 0 });
+        return;
+      }
+      nativeClient.todos
+        .getCounts()
+        .then(next => {
+          if (!disposed) setTodoCounts(next);
+        })
+        .catch(err => {
+          console.error('[TIDYDESK] Failed to load todo counts for handle badge:', err);
+        });
+    };
+
+    syncCounts();
+
+    const unsubscribeCounts = nativeClient.todos.onCountsUpdated(next => {
+      if (!disposed) setTodoCounts(next);
     });
+    const unsubscribeTodos = nativeClient.todos.onUpdated(state => {
+      if (!disposed && state?.counts) setTodoCounts(state.counts);
+    });
+    const unsubscribeSession = nativeClient.accounts.onSessionChanged(() => {
+      syncCounts();
+    });
+    const unsubscribeModule = nativeClient.windows.onModuleState(payload => {
+      if (!disposed) setActiveModule(payload.activeModule || null);
+    });
+    const handleVisibilityOrFocus = () => {
+      if (!document.hidden) syncCounts();
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
     return () => {
+      disposed = true;
       unsubscribeCounts?.();
+      unsubscribeTodos?.();
+      unsubscribeSession?.();
       unsubscribeModule?.();
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, []);
 
@@ -80,12 +110,18 @@ export const RailBar: React.FC = () => {
 
   return (
     <div
-      className="flex h-screen w-full select-none flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl bg-[#10131d] px-1.5 py-3 text-slate-100"
+      className="group relative flex h-screen w-full select-none flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl border-y border-l border-slate-200/25 bg-gradient-to-b from-[#21283c] via-[#1a2030] to-[#151a27] py-3 pl-[5px] pr-1.5 text-slate-100"
       style={{
         WebkitAppRegion: 'no-drag',
-        WebkitMaskImage: '-webkit-radial-gradient(white, white)'
+        WebkitMaskImage: '-webkit-radial-gradient(white, white)',
+        boxShadow:
+          'inset 1px 0 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.45)'
       } as React.CSSProperties}
     >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-[2px] top-1/2 h-8 w-[2px] -translate-y-1/2 rounded-full bg-sky-400/60 transition-colors group-hover:bg-sky-300/90"
+      />
       {items.map(item => {
         const isActive = activeModule === item.id;
         return (
@@ -96,8 +132,8 @@ export const RailBar: React.FC = () => {
             data-testid={`rail-${item.id}`}
             className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-xl border transition-all ${
               isActive
-                ? 'border-sky-400/20 bg-sky-400/18 text-sky-100 shadow-lg shadow-sky-950/20'
-                : 'border-white/[0.03] bg-white/[0.05] text-slate-300 hover:bg-white/[0.08] hover:text-slate-100'
+                ? 'border-sky-300/40 bg-sky-400/22 text-sky-100 shadow-lg shadow-sky-950/25'
+                : 'border-white/[0.12] bg-white/[0.08] text-slate-200 hover:border-sky-300/40 hover:bg-white/[0.15] hover:text-white'
             }`}
             title={item.title}
           >

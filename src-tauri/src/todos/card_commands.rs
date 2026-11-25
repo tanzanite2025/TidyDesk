@@ -6,21 +6,19 @@ use super::model::{
     bump_card_revision, card_has_attachment_id, column_position_for_insert,
     column_position_for_prepend, create_todo_id, find_fallback_cover_id, find_todo_card_index,
     insert_card_order, merge_subtask_inputs_preserving_attachments, normalize_subtasks_from_inputs,
-    prepend_card_order, remove_card_from_orders, safe_todo_title, todo_board_id, todo_column_ids,
-    todo_counts, CreateTodoCardPayload, MoveTodoCardPayload, UpdateTodoCardPayload,
+    parse_todo_priority_input, prepend_card_order, remove_card_from_orders, safe_todo_title,
+    todo_board_id, todo_column_ids, todo_counts, CreateTodoCardPayload, MoveTodoCardPayload,
+    UpdateTodoCardPayload,
 };
 use super::store::{
-    enrich_card_detail_view, read_todo_card_content_unlocked, read_todo_index_unlocked,
-    todo_card_path, todo_state_from_cache_or_disk, todo_state_from_index_unlocked,
-    with_todo_store_lock, write_todo_card_content_unlocked, write_todo_index_unlocked,
-    TodoStoreState,
+    delete_todo_card_in_db, enrich_card_detail_view, insert_todo_card_in_db,
+    read_todo_card_content_unlocked, read_todo_index_unlocked, todo_state_from_cache_or_disk,
+    todo_state_from_index_unlocked, update_todo_card_in_db, with_todo_store_lock, TodoStoreState,
 };
 use crate::accounts::{current_actor_id, is_account_sync_active};
 use crate::sync::{enqueue_outbox_batch, OutboxBatchItem, OutboxEntityKind, OutboxOperation};
 use serde_json::{json, Value};
-use std::fs;
-use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 pub(super) fn read_cached_card_content(
     app: &AppHandle,
@@ -213,6 +211,12 @@ pub async fn todos_create_card(
                 .unwrap_or_else(|| "todo".to_string());
             let card_id = create_todo_id("card");
             let actor_id = current_actor_id(&app);
+            let priority = payload
+                .priority
+                .as_deref()
+                .map(parse_todo_priority_input)
+                .transpose()?
+                .unwrap_or("normal");
             let position = column_position_for_prepend(&index, &column_id);
             let subtasks = payload
                 .subtasks
@@ -224,6 +228,7 @@ pub async fn todos_create_card(
                 "boardId": board_id,
                 "columnId": column_id,
                 "title": title,
+                "priority": priority,
                 "tags": [],
                 "archived": false,
                 "subtasks": subtasks,
@@ -237,6 +242,7 @@ pub async fn todos_create_card(
                 "updatedAt": now,
             });
             let card_snapshot = build_card_outbox_payload(&card, content.clone(), 0);
+            let card_for_db = card.clone();
 
             index["cards"]
                 .as_array_mut()
@@ -244,17 +250,7 @@ pub async fn todos_create_card(
                 .push(card);
             prepend_card_order(&mut index, &column_id, &card_id)?;
             index["boards"][0]["updatedAt"] = json!(crate::timestamp_string());
-            write_todo_card_content_unlocked(&app, &card_id, &content)?;
-            if let Err(err) = write_todo_index_unlocked(&app, &index) {
-                if let Err(remove_err) = fs::remove_file(todo_card_path(&app, &card_id)?) {
-                    if remove_err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(format!(
-                            "{err}; additionally failed to remove orphan todo card content: {remove_err}"
-                        ));
-                    }
-                }
-                return Err(err);
-            }
+            insert_todo_card_in_db(&app, &index, &card_for_db, &content)?;
             if let Ok(mut cache) = store.content_cache.lock() {
                 cache.insert(card_id.clone(), content);
             }
@@ -297,6 +293,10 @@ pub async fn todos_update_card(
 
             if let Some(title) = payload.title {
                 index["cards"][card_index]["title"] = json!(safe_todo_title(&title, "未命名待办"));
+            }
+            if let Some(raw_priority) = payload.priority.as_deref() {
+                let next_priority = parse_todo_priority_input(raw_priority)?;
+                index["cards"][card_index]["priority"] = json!(next_priority);
             }
             if let Some(column_id) = payload.column_id {
                 let current_column = index["cards"][card_index]["columnId"]
@@ -353,50 +353,13 @@ pub async fn todos_update_card(
                     }
                 }
             }
-            let content_path = if payload.content.is_some() {
-                Some(todo_card_path(&app, &payload.id)?)
-            } else {
-                None
-            };
-            let staged_content_path = if let Some(content_path) = &content_path {
-                stage_todo_card_content_delete(content_path, &payload.id)?
-            } else {
-                None
-            };
             let next_content = payload.content;
-            if let Some(content) = &next_content {
-                if let Err(err) = write_todo_card_content_unlocked(&app, &payload.id, content) {
-                    if let Some(content_path) = &content_path {
-                        let _ = rollback_todo_card_content_update(
-                            content_path,
-                            staged_content_path.as_deref(),
-                        );
-                    }
-                    return Err(err);
-                }
-            }
-
             let actor_id = current_actor_id(&app);
             let base_revision = index["cards"][card_index]["revision"].as_u64().unwrap_or(1);
             bump_card_revision(&mut index["cards"][card_index], &actor_id, &now);
             let updated_card = index["cards"][card_index].clone();
             index["boards"][0]["updatedAt"] = json!(now);
-            if let Err(err) = write_todo_index_unlocked(&app, &index) {
-                if let Some(content_path) = &content_path {
-                    if let Err(restore_err) = rollback_todo_card_content_update(
-                        content_path,
-                        staged_content_path.as_deref(),
-                    ) {
-                        return Err(format!(
-                            "{err}; additionally failed to restore todo card content: {restore_err}"
-                        ));
-                    }
-                }
-                return Err(err);
-            }
-            if let Some(staged_path) = staged_content_path {
-                remove_staged_todo_card_content(&staged_path);
-            }
+            update_todo_card_in_db(&app, &index, &updated_card, next_content.as_deref())?;
             let mut outbox_batch = Vec::new();
             for orphan_att in &removed_subtask_attachments {
                 if let Some(orphan_id) = orphan_att["id"].as_str() {
@@ -487,18 +450,24 @@ pub async fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value,
             }
             remove_card_from_orders(&mut index, &card_id)?;
             index["boards"][0]["updatedAt"] = json!(now);
-            let card_path = todo_card_path(&app, &card_id)?;
-            let staged_content_path = stage_todo_card_content_delete(&card_path, &card_id)?;
+            let tombstone_card = sync_active
+                .then(|| {
+                    index["cards"]
+                        .as_array()
+                        .and_then(|cards| {
+                            cards
+                                .iter()
+                                .find(|c| c["id"].as_str() == Some(card_id.as_str()))
+                        })
+                        .cloned()
+                })
+                .flatten();
             let staged_attachments_dir = stage_card_attachments_delete(&app, &card_id)?;
-            if let Err(err) = write_todo_index_unlocked(&app, &index) {
+            if let Err(err) =
+                delete_todo_card_in_db(&app, &index, &card_id, tombstone_card.as_ref())
+            {
                 rollback_card_attachments_delete(staged_attachments_dir.as_ref());
-                if let Some(staged_path) = &staged_content_path {
-                    let _ = fs::rename(staged_path, &card_path);
-                }
                 return Err(err);
-            }
-            if let Some(staged_path) = staged_content_path {
-                remove_staged_todo_card_content(&staged_path);
             }
             finalize_card_attachments_delete(staged_attachments_dir.as_ref());
             if let Ok(mut cache) = store.content_cache.lock() {
@@ -573,7 +542,7 @@ pub async fn todos_move_card(
             bump_card_revision(&mut index["cards"][card_index], &actor_id, &now);
             let moved_card = index["cards"][card_index].clone();
             index["boards"][0]["updatedAt"] = json!(now);
-            write_todo_index_unlocked(&app, &index)?;
+            update_todo_card_in_db(&app, &index, &moved_card, None)?;
             let content = read_cached_card_content(&app, store, &payload.id)?;
             enqueue_outbox_batch(
                 &app,
@@ -597,12 +566,8 @@ pub async fn todos_move_card(
 }
 
 pub(super) fn emit_todos_updated(app: &AppHandle, state: &Value) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("todos") {
-        window
-            .emit("todos-updated", state.clone())
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
+    app.emit("todos-updated", state.clone())
+        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn refresh_and_emit_active_todo_state(app: &AppHandle) -> Result<(), String> {
@@ -617,81 +582,8 @@ pub(crate) fn refresh_and_emit_active_todo_state(app: &AppHandle) -> Result<(), 
 }
 
 pub(super) fn emit_todo_counts(app: &AppHandle, counts: &Value) -> Result<(), String> {
-    for label in ["handle", "main", "todos", "capture"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .emit("todo-counts-updated", counts.clone())
-                .map_err(|err| err.to_string())?;
-        }
-    }
-    Ok(())
-}
-
-fn stage_todo_card_content_delete(
-    card_path: &Path,
-    card_id: &str,
-) -> Result<Option<PathBuf>, String> {
-    match fs::metadata(card_path) {
-        Ok(metadata) if metadata.is_file() => {
-            let staged_path = staged_todo_card_delete_path(card_path, card_id);
-            fs::rename(card_path, &staged_path)
-                .map_err(|err| format!("failed to stage todo card content deletion: {err}"))?;
-            Ok(Some(staged_path))
-        }
-        Ok(_) => Err("todo card content path is not a file".to_string()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("failed to inspect todo card content: {err}")),
-    }
-}
-
-fn rollback_todo_card_content_update(
-    card_path: &Path,
-    staged_path: Option<&Path>,
-) -> Result<(), String> {
-    match fs::remove_file(card_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("failed to remove new todo card content: {err}")),
-    }
-    if let Some(staged_path) = staged_path {
-        fs::rename(staged_path, card_path)
-            .map_err(|err| format!("failed to restore previous todo card content: {err}"))?;
-    }
-    Ok(())
-}
-
-fn remove_staged_todo_card_content(staged_path: &Path) {
-    if let Err(err) = fs::remove_file(staged_path) {
-        eprintln!(
-            "[TIDYDESK] Failed to remove staged todo content {}: {err}",
-            staged_path.display()
-        );
-    }
-}
-
-fn staged_todo_card_delete_path(card_path: &Path, card_id: &str) -> PathBuf {
-    let file_name = card_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("todo-card.md");
-    card_path.with_file_name(format!(
-        "{file_name}.{}.{}.deleting",
-        safe_todo_card_delete_suffix(card_id),
-        crate::timestamp_string()
-    ))
-}
-
-fn safe_todo_card_delete_suffix(card_id: &str) -> String {
-    card_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    app.emit("todo-counts-updated", counts.clone())
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
