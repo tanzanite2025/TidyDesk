@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering},
     Mutex,
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -16,6 +16,8 @@ pub struct ShellState {
     snapshot: Mutex<ShellWindowSnapshot>,
     pub(super) animation_generation: AtomicU64,
     pub(super) drawer_ready: AtomicBool,
+    pub(super) registered_handle_hwnd: AtomicIsize,
+    pub(super) registered_drawer_hwnd: AtomicIsize,
 }
 
 pub fn update_shell_state(

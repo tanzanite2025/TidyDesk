@@ -212,42 +212,52 @@ pub fn sticker_get(
 }
 
 #[tauri::command]
-pub fn sticker_toggle_pin(
+pub async fn sticker_toggle_pin(
     app: AppHandle,
     sticker_id: String,
 ) -> Result<StickerPinResultPayload, String> {
-    match toggle_sticker_pin_by_id(&app, &sticker_id)? {
-        Some(always_on_top) => Ok(StickerPinResultPayload {
-            success: true,
-            always_on_top: Some(always_on_top),
-        }),
-        None => Ok(StickerPinResultPayload {
-            success: false,
-            always_on_top: None,
-        }),
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        match toggle_sticker_pin_by_id(&app, &sticker_id)? {
+            Some(always_on_top) => Ok(StickerPinResultPayload {
+                success: true,
+                always_on_top: Some(always_on_top),
+            }),
+            None => Ok(StickerPinResultPayload {
+                success: false,
+                always_on_top: None,
+            }),
+        }
+    })
+    .await
+    .map_err(|err| format!("sticker toggle pin task failed: {err}"))?
 }
 
 #[tauri::command]
-pub fn sticker_copy(app: AppHandle, sticker_id: String) -> Result<Value, String> {
-    copy_sticker_by_id(&app, &sticker_id)?;
+pub async fn sticker_copy(app: AppHandle, sticker_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || copy_sticker_by_id(&app, &sticker_id))
+        .await
+        .map_err(|err| format!("sticker copy task failed: {err}"))??;
     Ok(json!({ "success": true }))
 }
 
 #[tauri::command]
-pub fn sticker_save_as(app: AppHandle, sticker_id: String) -> Result<Value, String> {
-    match save_sticker_as_by_id(&app, &sticker_id)? {
+pub async fn sticker_save_as(app: AppHandle, sticker_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || match save_sticker_as_by_id(&app, &sticker_id)? {
         Some(file_path) => Ok(json!({
             "success": true,
             "filePath": file_path.display().to_string(),
         })),
         None => Ok(json!({ "success": false, "canceled": true })),
-    }
+    })
+    .await
+    .map_err(|err| format!("sticker save as task failed: {err}"))?
 }
 
 #[tauri::command]
-pub fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String> {
-    close_sticker_by_id(&app, &sticker_id)?;
+pub async fn sticker_close(app: AppHandle, sticker_id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || close_sticker_by_id(&app, &sticker_id))
+        .await
+        .map_err(|err| format!("sticker close task failed: {err}"))??;
     Ok(json!({ "success": true }))
 }
 

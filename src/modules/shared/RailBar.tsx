@@ -146,12 +146,12 @@ export const RailBar: React.FC = () => {
 
   return (
     <div
-      className="group relative flex h-screen w-full select-none flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl border-y border-l border-slate-200/25 bg-gradient-to-b from-[#21283c] via-[#1a2030] to-[#151a27] py-3 pl-[5px] pr-1.5 text-slate-100"
+      className="group relative flex h-screen w-full select-none flex-col items-center justify-center gap-2 overflow-hidden rounded-l-2xl border-y border-l border-white/[0.12] bg-[#11131c] py-3 pl-[5px] pr-1.5 text-slate-100"
       style={{
         WebkitAppRegion: 'no-drag',
         WebkitMaskImage: '-webkit-radial-gradient(white, white)',
         boxShadow:
-          'inset 1px 0 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.45)'
+          'inset 1px 0 0 rgba(255, 255, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.06), inset 0 -1px 0 rgba(0, 0, 0, 0.35)'
       } as React.CSSProperties}
     >
       <span
@@ -168,7 +168,7 @@ export const RailBar: React.FC = () => {
             data-testid={`rail-${item.id}`}
             className={`relative grid h-11 w-11 shrink-0 place-items-center rounded-xl border transition-all ${
               isActive
-                ? 'border-sky-300/40 bg-sky-400/22 text-sky-100 shadow-lg shadow-sky-950/25'
+                ? 'border-sky-300/40 bg-sky-400/20 text-sky-100 shadow-lg shadow-sky-950/25'
                 : 'border-white/[0.12] bg-white/[0.08] text-slate-200 hover:border-sky-300/40 hover:bg-white/[0.15] hover:text-white'
             }`}
             title={item.title}

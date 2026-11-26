@@ -38,14 +38,14 @@ function categoryIcon(category: FileCategory) {
 
 function categoryTone(category: FileCategory): string {
   const tones: Record<FileCategory, string> = {
-    image: 'bg-violet-500/16 text-violet-200',
-    document: 'bg-sky-500/16 text-sky-200',
-    archive: 'bg-amber-500/16 text-amber-200',
-    app: 'bg-emerald-500/16 text-emerald-200',
-    developer: 'bg-cyan-500/16 text-cyan-200',
-    temporary: 'bg-rose-500/16 text-rose-200',
-    folder: 'bg-amber-500/16 text-amber-200',
-    other: 'bg-slate-500/16 text-slate-200'
+    image: 'bg-violet-500/15 text-violet-200',
+    document: 'bg-sky-500/15 text-sky-200',
+    archive: 'bg-amber-500/15 text-amber-200',
+    app: 'bg-emerald-500/15 text-emerald-200',
+    developer: 'bg-cyan-500/15 text-cyan-200',
+    temporary: 'bg-rose-500/15 text-rose-200',
+    folder: 'bg-amber-500/15 text-amber-200',
+    other: 'bg-slate-500/15 text-slate-200'
   };
   return tones[category];
 }

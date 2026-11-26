@@ -149,7 +149,7 @@ export const QuickNotesPanel: React.FC = () => {
                         onClick={() => selectNote(note)}
                         className={`w-full min-w-0 rounded-xl border px-3 py-2.5 text-left transition-all ${
                           isSelected
-                            ? 'border-sky-300/35 bg-sky-400/14'
+                            ? 'border-sky-300/35 bg-sky-400/15'
                             : 'border-white/[0.08] bg-white/[0.035] hover:bg-white/[0.07]'
                         }`}
                       >
@@ -355,7 +355,7 @@ export const QuickNotesPanel: React.FC = () => {
               title={isSelectedStuck ? '点击从桌面收起该便签' : '将当前记录作为可编辑便签贴到桌面'}
               className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                 isSelectedStuck
-                  ? 'border-emerald-400/35 bg-emerald-400/18 text-emerald-100 hover:bg-rose-500/20 hover:border-rose-300/35 hover:text-rose-100'
+                  ? 'border-emerald-400/35 bg-emerald-400/20 text-emerald-100 hover:bg-rose-500/20 hover:border-rose-300/35 hover:text-rose-100'
                   : 'border-amber-300/30 bg-amber-400/15 text-amber-100 hover:bg-amber-400/25'
               }`}
             >

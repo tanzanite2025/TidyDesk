@@ -14,12 +14,16 @@ fn require_command_window(
 }
 
 #[tauri::command]
-pub fn clipboard_read_text(window: WebviewWindow) -> Result<String, String> {
+pub async fn clipboard_read_text(window: WebviewWindow) -> Result<String, String> {
     require_command_window(&window, &["main", "capture"], "clipboard_read_text")?;
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|err| format!("failed to access system clipboard: {err}"))?;
-    match clipboard.get_text() {
-        Ok(text) => Ok(text),
-        Err(_) => Ok(String::new()),
-    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|err| format!("failed to access system clipboard: {err}"))?;
+        match clipboard.get_text() {
+            Ok(text) => Ok(text),
+            Err(_) => Ok(String::new()),
+        }
+    })
+    .await
+    .map_err(|err| format!("clipboard read task failed: {err}"))?
 }

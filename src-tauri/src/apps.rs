@@ -138,20 +138,6 @@ fn spawn_app_icon_updates(app: &AppHandle, apps: &[InstalledApp]) {
     });
 }
 
-fn complete_installed_apps(
-    app: &AppHandle,
-    trusted_shortcuts: &State<'_, TrustedShortcutState>,
-    metadata: ScanMetadataResult,
-) -> Result<ScanInstalledResult, String> {
-    let result = crate::apps_classifier::complete_installed_apps(metadata);
-    remember_trusted_shortcuts(
-        trusted_shortcuts,
-        result.apps.iter().map(|app| app.shortcut_path.clone()),
-    )?;
-    spawn_app_icon_updates(app, &result.apps);
-    Ok(result)
-}
-
 fn scan_installed_metadata(app: &AppHandle) -> ScanMetadataResult {
     let metadata = crate::apps_classifier::scan_shortcut_metadata();
     if let Err(err) = crate::apps_classifier::write_app_cache(app, &metadata) {
@@ -181,11 +167,21 @@ pub async fn apps_scan_installed(
     app: AppHandle,
     trusted_shortcuts: State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
-    if let Some(metadata) = read_cached_metadata_background(app.clone()).await? {
-        return complete_installed_apps(&app, &trusted_shortcuts, metadata);
-    }
-    let metadata = scan_installed_metadata_background(app.clone()).await?;
-    complete_installed_apps(&app, &trusted_shortcuts, metadata)
+    let metadata = match read_cached_metadata_background(app.clone()).await? {
+        Some(cached) => cached,
+        None => scan_installed_metadata_background(app.clone()).await?,
+    };
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::apps_classifier::complete_installed_apps(metadata)
+    })
+    .await
+    .map_err(|err| format!("complete installed apps task failed: {err}"))?;
+    remember_trusted_shortcuts(
+        &trusted_shortcuts,
+        result.apps.iter().map(|item| item.shortcut_path.clone()),
+    )?;
+    spawn_app_icon_updates(&app, &result.apps);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -194,7 +190,17 @@ pub async fn apps_refresh_installed(
     trusted_shortcuts: State<'_, TrustedShortcutState>,
 ) -> Result<ScanInstalledResult, String> {
     let metadata = scan_installed_metadata_background(app.clone()).await?;
-    complete_installed_apps(&app, &trusted_shortcuts, metadata)
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::apps_classifier::complete_installed_apps(metadata)
+    })
+    .await
+    .map_err(|err| format!("complete installed apps task failed: {err}"))?;
+    remember_trusted_shortcuts(
+        &trusted_shortcuts,
+        result.apps.iter().map(|item| item.shortcut_path.clone()),
+    )?;
+    spawn_app_icon_updates(&app, &result.apps);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -224,12 +230,16 @@ pub fn apps_add_to_drawer(
 }
 
 #[tauri::command]
-pub fn open_app_picker(
+pub async fn open_app_picker(
     app: AppHandle,
-    state: State<'_, AppPickerTargetState>,
     payload: Option<OpenAppPickerPayload>,
 ) -> Result<(), String> {
-    crate::tool_windows::open_app_picker_window(app, state, payload)
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tool_windows::open_app_picker_window(&app_handle, payload)
+    })
+    .await
+    .map_err(|err| format!("open app picker task failed: {err}"))?
 }
 
 #[tauri::command]
@@ -245,6 +255,11 @@ pub fn apps_get_picker_target(
 }
 
 #[tauri::command]
-pub fn close_app_picker(app: AppHandle) -> Result<(), String> {
-    crate::tool_windows::close_app_picker_window(app)
+pub async fn close_app_picker(app: AppHandle) -> Result<(), String> {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tool_windows::close_app_picker_window(&app_handle)
+    })
+    .await
+    .map_err(|err| format!("close app picker task failed: {err}"))?
 }

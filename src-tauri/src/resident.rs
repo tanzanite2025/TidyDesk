@@ -122,21 +122,30 @@ pub fn resident_update_settings(
 }
 
 #[tauri::command]
-pub fn resident_show_handle(app: AppHandle) -> Result<(), String> {
-    show_handle_window(&app)
+pub async fn resident_show_handle(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || show_handle_window(&app))
+        .await
+        .map_err(|err| format!("show handle task failed: {err}"))?
 }
 
 #[tauri::command]
-pub fn resident_hide_handle(app: AppHandle) -> Result<(), String> {
-    hide_handle_window(&app)
+pub async fn resident_hide_handle(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || hide_handle_window(&app))
+        .await
+        .map_err(|err| format!("hide handle task failed: {err}"))?
 }
 
 #[tauri::command]
-pub fn resident_open_settings(app: AppHandle) -> Result<(), String> {
-    open_resident_settings(&app)
+pub async fn resident_open_settings(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || open_resident_settings(&app))
+        .await
+        .map_err(|err| format!("open resident settings task failed: {err}"))?
 }
 
 pub fn show_handle_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(drawer) = app.get_webview_window("main") {
+        let _ = drawer.hide();
+    }
     crate::shell::ensure_handle_window(app)?;
     crate::shell::apply_window_bounds(
         app,
@@ -174,23 +183,28 @@ pub fn open_resident_settings(app: &AppHandle) -> Result<(), String> {
         crate::shell::handle_window_bounds(app, true)?,
     )?;
 
+    let shell = app.state::<crate::shell::ShellState>();
+    crate::shell::update_shell_state(app, &shell, true, Some("files".to_string()))?;
+
     if let Some(window) = app.get_webview_window("main") {
         window.show().map_err(|err| err.to_string())?;
         window.set_focus().map_err(|err| err.to_string())?;
     }
     if let Some(window) = app.get_webview_window("handle") {
         window.show().map_err(|err| err.to_string())?;
-        window
-            .set_always_on_top(false)
-            .map_err(|err| err.to_string())?;
     }
-
-    let shell = app.state::<crate::shell::ShellState>();
-    crate::shell::update_shell_state(app, &shell, true, Some("files".to_string()))?;
+    crate::shell::sync_expanded_shell_z_order(app)?;
 
     let handle = app.clone();
     thread::spawn(move || {
-        thread::sleep(Duration::from_millis(250));
+        let started_at = std::time::Instant::now();
+        while !crate::shell::is_drawer_ready(&handle) {
+            if started_at.elapsed() >= Duration::from_millis(1500) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        thread::sleep(Duration::from_millis(80));
         let _ = handle.emit(OPEN_SETTINGS_EVENT, ());
     });
     Ok(())

@@ -55,7 +55,7 @@ export const DrawerCard: React.FC<DrawerCardProps> = ({
       data-drawer-name={drawer.name}
       className={`rounded-lg border transition-all ${
         isDraggingOver
-          ? 'border-sky-300/60 bg-sky-400/14'
+          ? 'border-sky-300/60 bg-sky-400/15'
           : 'border-white/[0.08] bg-white/[0.04]'
       }`}
       onDragEnter={event => {

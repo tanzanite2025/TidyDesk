@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AppWindow, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { useInstalledApps } from './modules/apps/useInstalledApps';
 import { APP_CATEGORIES, AppPickerRow, getCategoryIcon, getCategoryName } from './modules/apps/AppPickerRow';
@@ -22,6 +22,16 @@ export const AppPickerApp: React.FC = () => {
     handleSelectApp,
     handleClose
   } = useInstalledApps();
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.isComposing) {
+        void handleClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleClose]);
 
   return (
     <div data-testid="app-picker-root" className="flex h-screen w-full flex-col bg-[#1a1d2e]">

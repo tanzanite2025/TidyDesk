@@ -382,13 +382,22 @@ fn main() {
                 .tooltip("TidyDesk")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show_handle" => {
-                        let _ = crate::resident::show_handle_window(app);
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = crate::resident::show_handle_window(&app_handle);
+                        });
                     }
                     "hide_handle" => {
-                        let _ = crate::resident::hide_handle_window(app);
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = crate::resident::hide_handle_window(&app_handle);
+                        });
                     }
                     "settings" => {
-                        let _ = crate::resident::open_resident_settings(app);
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = crate::resident::open_resident_settings(&app_handle);
+                        });
                     }
                     "quit" => {
                         crate::sticky_notes::mark_app_exiting(app);
@@ -403,7 +412,10 @@ fn main() {
                         ..
                     } = event
                     {
-                        let _ = crate::resident::show_handle_window(tray.app_handle());
+                        let app_handle = tray.app_handle().clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = crate::resident::show_handle_window(&app_handle);
+                        });
                     }
                 })
                 .build(app)?;

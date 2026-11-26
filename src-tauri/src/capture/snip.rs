@@ -153,6 +153,13 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
         return Err("A screenshot capture is already in progress".to_string());
     }
 
+    let is_sticker_target = matches!(target, SnipTarget::Sticker);
+    let monitor = snip_open_monitor(app)?;
+    if is_sticker_target {
+        crate::shell::hide_shell_windows_for_snip(app)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
     let state = app.state::<SnipCaptureState>();
     {
         let mut target_guard = state
@@ -164,7 +171,6 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
     state.snip_session_active.store(true, Ordering::Release);
 
     // 在打开窗口之前，先静默截取全屏
-    let monitor = snip_open_monitor(app)?;
     let rect = SnipRectPayload {
         x: 0.0,
         y: 0.0,
@@ -209,7 +215,16 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
         }
     }
 
-    crate::tool_windows::open_snip_window(app)
+    if let Err(err) = crate::tool_windows::open_snip_window(app) {
+        state.snip_session_active.store(false, Ordering::Release);
+        let recovered_target = take_snip_target(app);
+        let _ = clear_frozen_background(app);
+        if is_sticker_target || matches!(recovered_target, SnipTarget::Sticker) {
+            let _ = crate::shell::recover_shell_windows(app);
+        }
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn require_snip_window(window: &WebviewWindow, command: &str) -> Result<(), String> {
@@ -343,20 +358,24 @@ fn restore_window_after_snip_abort(app: &AppHandle, target: &SnipTarget) -> Resu
 }
 
 #[tauri::command]
-pub fn snip_cancel(app: AppHandle) -> Result<Value, String> {
-    let was_active = app
-        .state::<SnipCaptureState>()
-        .snip_session_active
-        .swap(false, Ordering::AcqRel);
-    if !was_active {
-        return Ok(json!({ "success": true }));
-    }
-    let target = take_snip_target(&app);
-    crate::tool_windows::close_snip_window(&app)?;
-    clear_frozen_background(&app)?;
-    finish_snip_capture(&app);
-    restore_window_after_snip_abort(&app, &target)?;
-    Ok(json!({ "success": true }))
+pub async fn snip_cancel(app: AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let was_active = app
+            .state::<SnipCaptureState>()
+            .snip_session_active
+            .swap(false, Ordering::AcqRel);
+        if !was_active {
+            return Ok(json!({ "success": true }));
+        }
+        let target = take_snip_target(&app);
+        crate::tool_windows::close_snip_window(&app)?;
+        clear_frozen_background(&app)?;
+        finish_snip_capture(&app);
+        restore_window_after_snip_abort(&app, &target)?;
+        Ok(json!({ "success": true }))
+    })
+    .await
+    .map_err(|err| format!("snip cancel task failed: {err}"))?
 }
 
 /// Recover target window state if the snip overlay window was closed externally by OS/Alt+F4.
@@ -371,7 +390,10 @@ pub fn handle_snip_window_aborted(app: &AppHandle) {
     let target = take_snip_target(app);
     let _ = clear_frozen_background(app);
     finish_snip_capture(app);
-    let _ = restore_window_after_snip_abort(app, &target);
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = restore_window_after_snip_abort(&app_handle, &target);
+    });
 }
 
 pub fn paste_pending_sticker(app: &AppHandle) -> Result<Option<String>, String> {

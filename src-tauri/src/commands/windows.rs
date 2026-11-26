@@ -1,6 +1,7 @@
 use crate::capture::open_snip_window;
 use crate::shell::{
-    apply_drawer_state, close_active_module, shell_snapshot, update_active_module, ShellState,
+    apply_drawer_state, close_active_module, shell_snapshot, sync_expanded_shell_z_order,
+    update_active_module, ShellState,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -61,9 +62,9 @@ pub async fn windows_control(
                 apply_drawer_state(&app, &shell, false)?;
             } else if current.expanded {
                 update_active_module(&app, &shell, Some("files".to_string()))?;
+                sync_expanded_shell_z_order(&app)?;
             } else {
                 apply_drawer_state(&app, &shell, true)?;
-                update_active_module(&app, &shell, Some("files".to_string()))?;
             }
         }
         "open-capture" => {
