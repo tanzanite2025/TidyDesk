@@ -106,15 +106,14 @@ jobs:
       - name: Package sync server + mobile PWA bundle
         run: npm run server:package
 
+      - name: Stage flat Windows & server release bundle
+        run: node scripts/verify-release-bundle.cjs --stage-windows release-windows
+
       - name: Upload Windows & server artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-release-artifacts
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.exe.sig
-            release-tauri/latest.json
-            release-server/*.zip
+          path: release-windows/*
 
   android:
     name: Build Android companion APK (zero-coupling)
@@ -192,10 +191,11 @@ jobs:
         shell: bash
         run: |
           APP_VERSION=$(node -p "require('./package.json').version")
+          rm -rf release-android
           mkdir -p release-android
           APK_SRC="mobile-android/android/app/build/outputs/apk/release/app-release.apk"
-          if [ ! -f "$APK_SRC" ]; then
-            echo "[CRITICAL] Expected signed APK not found at $APK_SRC" >&2
+          if [ ! -s "$APK_SRC" ]; then
+            echo "[CRITICAL] Expected signed APK not found or empty at $APK_SRC" >&2
             exit 1
           fi
           cp "$APK_SRC" "release-android/TidyDesk-Mobile-v${APP_VERSION}.apk"
@@ -214,6 +214,13 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          sparse-checkout: |
+            scripts
+
       - name: Download Windows & server artifacts
         uses: actions/download-artifact@v4
         with:
@@ -226,12 +233,16 @@ jobs:
           name: android-release-artifacts
           path: release-bundle/android
 
+      - name: Validate all required release artifacts before publishing
+        run: node scripts/verify-release-bundle.cjs --verify-publish release-bundle/windows release-bundle/android
+
       - name: Upload all artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           make_latest: true
+          fail_on_unmatched_files: true
           files: |
             release-bundle/windows/*.exe
             release-bundle/windows/*.exe.sig

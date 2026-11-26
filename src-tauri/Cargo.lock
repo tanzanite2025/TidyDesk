@@ -4549,7 +4549,7 @@ dependencies = [
 
 [[package]]
 name = "tidydesk"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "arboard",
  "base64 0.22.1",
