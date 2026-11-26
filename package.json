@@ -2,7 +2,7 @@
   "name": "tidydesk",
   "private": true,
   "type": "module",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "repository": {
     "type": "git",
     "url": "https://github.com/tanzanite2025/TidyDesk.git"
@@ -17,6 +17,8 @@
     "dev": "npm run tauri:dev",
     "dev:web": "vite",
     "build": "tsc && vite build",
+    "build:mobile": "tsc && vite build --config vite.mobile.config.ts",
+    "mobile:sync": "node scripts/sync-mobile-android.cjs",
     "preview": "vite preview",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "check:rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",

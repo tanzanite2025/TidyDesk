@@ -651,6 +651,7 @@ export const AccountSyncCard: React.FC = () => {
                   type="button"
                   disabled={busyAction}
                   onClick={() => void handleToggleRealtime()}
+                  title="开启后将记忆偏好，重启桌面端后自动恢复后台协同"
                   className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 font-semibold disabled:opacity-50 ${
                     syncStatus?.realtimeActive
                       ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
@@ -662,7 +663,7 @@ export const AccountSyncCard: React.FC = () => {
                       syncStatus?.realtimeActive ? 'animate-pulse bg-emerald-400' : 'bg-slate-500'
                     }`}
                   />
-                  {syncStatus?.realtimeActive ? '实时推送已开启' : '开启实时推送'}
+                  {syncStatus?.realtimeActive ? '实时推送已开启（重启自动恢复）' : '开启实时推送'}
                 </button>
               )}
               <button

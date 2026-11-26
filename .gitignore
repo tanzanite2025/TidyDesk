@@ -162,11 +162,21 @@ public
 /*.yml
 !/.github/**/*.yml
 
-# Tauri build artifacts
+# Tauri & Android build artifacts
 /release/
 /release-tauri/
 /release-server/
+/release-android/
+/dist-mobile/
 /src-tauri/target/
+/mobile-android/node_modules/
+/mobile-android/android/build/
+/mobile-android/android/.gradle/
+/mobile-android/android/app/build/
+/mobile-android/android/capacitor-cordova-android-plugins/build/
+/mobile-android/android/local.properties
+*.keystore
+*.jks
 
 # Sync server runtime storage
 /server/data/

@@ -31,6 +31,7 @@ import {
   findFallbackCoverId,
   summarizeMarkdown
 } from './web-http-helpers';
+import { createHttpStatusError, isTransientSyncError } from './web-offline-store';
 
 export interface WebTodosModule {
   client: NativeTodosClient;
@@ -40,13 +41,24 @@ export interface WebTodosModule {
     cardComments?: TodoCardComment[];
     removedCardCommentIds?: string[];
   }) => Promise<TodoState>;
+  buildLocalState: () => Promise<TodoState>;
+  emitLocalState: (state: TodoState) => void;
   resetSessionFlags: () => void;
 }
 
 export function createWebTodosModule(
   ctx: WebHttpContext,
-  pullLatest: () => Promise<TodoState>
+  pullLatest: () => Promise<TodoState>,
+  onUnauthorized?: () => void,
+  pullLatestUnlocked: () => Promise<TodoState> = pullLatest
 ): WebTodosModule {
+  const handleUnauthorizedResponse = (res: Response, message: string): never => {
+    if (res.status === 401) {
+      onUnauthorized?.();
+      throw createHttpStatusError('登录凭证已失效或被吊销，请重新登录 (401)', 401);
+    }
+    throw createHttpStatusError(message, res.status);
+  };
   const resolveAuthorizedBlobUrl = async (
     kind: 'thumb' | 'original',
     key?: string
@@ -375,8 +387,30 @@ export function createWebTodosModule(
     for (const rid of params.removedCardIds || []) {
       ctx.cardsById.delete(rid);
     }
+
+    const mergedComments = [...(params.cardComments || [])];
+    const removedCommentIds = new Set(params.removedCardCommentIds || []);
+    for (const pending of ctx.getOutboxEntries()) {
+      if (pending.entityKind === 'card') {
+        if (pending.operation === 'delete') {
+          ctx.cardsById.delete(pending.entityId);
+        } else {
+          ctx.cardsById.set(pending.entityId, pending.payload as unknown as TodoCard);
+        }
+      } else if (pending.entityKind === 'cardComment') {
+        if (pending.operation === 'delete') {
+          removedCommentIds.add(pending.entityId);
+        } else {
+          const comment = pending.payload as unknown as TodoCardComment;
+          const idx = mergedComments.findIndex(item => item.id === pending.entityId);
+          if (idx >= 0) mergedComments[idx] = comment;
+          else mergedComments.push(comment);
+        }
+      }
+    }
+
     // Apply comments AFTER cardsById is updated so unread summary and notifications resolve exact card titles.
-    applyPulledComments(params.cardComments, params.removedCardCommentIds);
+    applyPulledComments(mergedComments, Array.from(removedCommentIds));
     const state = await buildTodoStateSnapshot();
     emitState(state);
     return state;
@@ -386,56 +420,86 @@ export function createWebTodosModule(
     hadPulledCommentsOnce = false;
   };
 
-  const pushCardMutation = async (
+  const pushCardMutation = (
     card: TodoCard,
     operation: 'upsert' | 'delete' = 'upsert'
-  ): Promise<TodoState> => {
-    const active = ctx.requireSession();
-    const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
-      method: 'POST',
-      headers: ctx.authHeaders(active, 'application/json'),
-      body: JSON.stringify({
-        workspaceId: ctx.resolveWorkspaceId(active),
-        entries: [
-          {
+  ): Promise<TodoState> =>
+    ctx.runSerializedSync(async () => {
+      ctx.requireActiveOrDetachedScope();
+      const active = ctx.getSession();
+      const cardPayload = {
+        ...card,
+        baseRevision: card.revision ?? 0
+      };
+
+      const commitLocal = async (queueOffline: boolean, mergedCard?: TodoCard) => {
+        if (operation === 'delete') {
+          ctx.cardsById.delete(card.id);
+        } else if (mergedCard) {
+          ctx.cardsById.set(card.id, mergedCard);
+        } else {
+          ctx.cardsById.set(card.id, card);
+        }
+        if (queueOffline) {
+          ctx.enqueueOfflineMutation({
             entityKind: 'card',
             entityId: card.id,
             operation,
-            payload: {
-              ...card,
-              baseRevision: card.revision ?? 0
-            }
-          }
-        ]
-      })
+            payload: cardPayload,
+            updatedAt: card.updatedAt || String(Date.now())
+          });
+        } else {
+          ctx.persistScopeSnapshot();
+        }
+        const state = await buildTodoStateSnapshot();
+        emitState(state);
+        return state;
+      };
+
+      if (!active) {
+        return commitLocal(true);
+      }
+
+      try {
+        const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
+          method: 'POST',
+          headers: ctx.authHeaders(active, 'application/json'),
+          body: JSON.stringify({
+            workspaceId: ctx.resolveWorkspaceId(active),
+            entries: [
+              {
+                entityKind: 'card',
+                entityId: card.id,
+                operation,
+                payload: cardPayload
+              }
+            ]
+          })
+        });
+        if (!res.ok) {
+          handleUnauthorizedResponse(res, `提交云端变更失败 (${res.status})`);
+        }
+        const pushed = (await res.json()) as {
+          nextCursor?: string;
+          mergedCards?: TodoCard[];
+        };
+        if (pushed.nextCursor) {
+          ctx.recordSyncCursor(pushed.nextCursor);
+        }
+        return commitLocal(false, pushed.mergedCards?.[0]);
+      } catch (err) {
+        if (isTransientSyncError(err)) {
+          return commitLocal(true);
+        }
+        throw err;
+      }
     });
-    if (!res.ok) {
-      throw new Error(`提交云端变更失败 (${res.status})`);
-    }
-    const pushed = (await res.json()) as {
-      nextCursor?: string;
-      mergedCards?: TodoCard[];
-    };
-    if (pushed.nextCursor) {
-      ctx.recordSyncCursor(pushed.nextCursor);
-    }
-    if (operation === 'delete') {
-      ctx.cardsById.delete(card.id);
-    } else if (pushed.mergedCards && pushed.mergedCards[0]) {
-      ctx.cardsById.set(card.id, pushed.mergedCards[0]);
-    } else {
-      ctx.cardsById.set(card.id, card);
-    }
-    const state = await buildTodoStateSnapshot();
-    emitState(state);
-    return state;
-  };
 
   const client: NativeTodosClient = {
     readState: () => pullLatest(),
     getCounts: async () => computeTodoCounts(Array.from(ctx.cardsById.values())),
     createCard: async (payload: CreateTodoCardInput) => {
-      const active = ctx.requireSession();
+      const scope = ctx.requireActiveOrDetachedScope();
       const now = String(Date.now());
       const existing = Array.from(ctx.cardsById.values());
       const colId = payload.columnId || 'todo';
@@ -461,7 +525,7 @@ export function createWebTodosModule(
         coverAttachmentId: null,
         position: computePositionForColumn(existing, colId),
         revision: 0,
-        updatedBy: active.userId,
+        updatedBy: scope.userId,
         deletedAt: null,
         createdAt: now,
         updatedAt: now
@@ -542,7 +606,10 @@ export function createWebTodosModule(
       return enrichSummaryCard(card, true);
     },
     addAttachmentBytes: async (payload: AddTodoAttachmentBytesInput) => {
-      const active = ctx.requireSession();
+      const active = ctx.getSession();
+      if (!active) {
+        throw new Error('当前处于离线连续模式，图片附件暂不支持离线上传，请联网重登后再试');
+      }
       const existing = ctx.cardsById.get(payload.cardId);
       if (!existing) throw new Error('Todo card not found');
       const rawBytes = new Uint8Array(payload.bytes);
@@ -565,7 +632,9 @@ export function createWebTodosModule(
         headers: ctx.authHeaders(active, 'application/json'),
         body: JSON.stringify({ sha256, mimeType, workspaceId: wsId })
       });
-      if (!presignRes.ok) throw new Error(`媒体上传预检失败 (${presignRes.status})`);
+      if (!presignRes.ok) {
+        handleUnauthorizedResponse(presignRes, `媒体上传预检失败 (${presignRes.status})`);
+      }
       const presigned = (await presignRes.json()) as {
         deduplicated: boolean;
         thumbKey: string;
@@ -591,7 +660,7 @@ export function createWebTodosModule(
               ) as ArrayBuffer
             }
           );
-          if (!up.ok) throw new Error(`上传媒体文件失败 (${up.status})`);
+          if (!up.ok) handleUnauthorizedResponse(up, `上传媒体文件失败 (${up.status})`);
         };
         await uploadPart(presigned.thumbUploadPath, dims.thumbBytes);
         await uploadPart(presigned.originalUploadPath, rawBytes);
@@ -722,77 +791,140 @@ export function createWebTodosModule(
       emitState(state);
       return summary;
     },
-    addCardComment: async (payload: AddTodoCommentInput) => {
-      const active = ctx.requireSession();
-      const body = payload.body.trim();
-      if (!body) throw new Error('评论内容不能为空');
-      const now = String(Date.now());
-      const id = createUuid();
-      const draft: TodoCardComment = {
-        id,
-        cardId: payload.cardId,
-        parentId: payload.parentId ?? null,
-        authorId: active.userId,
-        authorName: active.displayName || active.userId,
-        body,
-        mentions: [],
-        createdAt: now,
-        updatedAt: now,
-        deletedAt: null
-      };
-      const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
-        method: 'POST',
-        headers: ctx.authHeaders(active, 'application/json'),
-        body: JSON.stringify({
-          workspaceId: ctx.resolveWorkspaceId(active),
-          entries: [
-            {
-              entityKind: 'cardComment',
-              entityId: id,
-              operation: 'upsert',
-              payload: draft
-            }
-          ]
-        })
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`提交评论失败 (${res.status}): ${text}`);
-      }
-      await pullLatest();
-      const created = (ctx.commentsByCardId.get(payload.cardId) || []).find(c => c.id === id);
-      return created || draft;
-    },
-    deleteCardComment: async (payload: DeleteTodoCommentInput) => {
-      const active = ctx.requireSession();
-      const now = String(Date.now());
-      const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
-        method: 'POST',
-        headers: ctx.authHeaders(active, 'application/json'),
-        body: JSON.stringify({
-          workspaceId: ctx.resolveWorkspaceId(active),
-          entries: [
-            {
-              entityKind: 'cardComment',
-              entityId: payload.commentId,
-              operation: 'delete',
-              payload: {
-                id: payload.commentId,
-                cardId: payload.cardId,
-                deletedAt: now,
-                updatedAt: now
-              }
-            }
-          ]
-        })
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`删除评论失败 (${res.status}): ${text}`);
-      }
-      await pullLatest();
-      return (ctx.commentsByCardId.get(payload.cardId) || []).filter(c => !c.deletedAt);
-    },
+    addCardComment: (payload: AddTodoCommentInput) =>
+      ctx.runSerializedSync(async () => {
+        const scope = ctx.requireActiveOrDetachedScope();
+        const active = ctx.getSession();
+        const body = payload.body.trim();
+        if (!body) throw new Error('评论内容不能为空');
+        const now = String(Date.now());
+        const id = createUuid();
+        const draft: TodoCardComment = {
+          id,
+          cardId: payload.cardId,
+          parentId: payload.parentId ?? null,
+          authorId: scope.userId,
+          authorName: scope.displayName || scope.userId,
+          body,
+          mentions: [],
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null
+        };
+
+        const queueOfflineComment = async () => {
+          const currentList = ctx.commentsByCardId.get(payload.cardId) || [];
+          ctx.commentsByCardId.set(payload.cardId, [...currentList, draft]);
+          ctx.enqueueOfflineMutation({
+            entityKind: 'cardComment',
+            entityId: id,
+            operation: 'upsert',
+            payload: draft as unknown as Record<string, unknown>,
+            updatedAt: now
+          });
+          emitUnreadSummary();
+          for (const cb of ctx.commentListeners) cb({ cardIds: [payload.cardId] });
+          emitState(await buildTodoStateSnapshot());
+          return draft;
+        };
+
+        if (!active) {
+          return queueOfflineComment();
+        }
+
+        try {
+          const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
+            method: 'POST',
+            headers: ctx.authHeaders(active, 'application/json'),
+            body: JSON.stringify({
+              workspaceId: ctx.resolveWorkspaceId(active),
+              entries: [
+                {
+                  entityKind: 'cardComment',
+                  entityId: id,
+                  operation: 'upsert',
+                  payload: draft
+                }
+              ]
+            })
+          });
+          if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            handleUnauthorizedResponse(res, `提交评论失败 (${res.status}): ${text}`);
+          }
+          await pullLatestUnlocked();
+          const created = (ctx.commentsByCardId.get(payload.cardId) || []).find(c => c.id === id);
+          return created || draft;
+        } catch (err) {
+          if (isTransientSyncError(err)) {
+            return queueOfflineComment();
+          }
+          throw err;
+        }
+      }),
+    deleteCardComment: (payload: DeleteTodoCommentInput) =>
+      ctx.runSerializedSync(async () => {
+        ctx.requireActiveOrDetachedScope();
+        const active = ctx.getSession();
+        const now = String(Date.now());
+        const deletePayload = {
+          id: payload.commentId,
+          cardId: payload.cardId,
+          deletedAt: now,
+          updatedAt: now
+        };
+
+        const queueOfflineDelete = async () => {
+          const currentList = (ctx.commentsByCardId.get(payload.cardId) || []).filter(
+            c => c.id !== payload.commentId
+          );
+          ctx.commentsByCardId.set(payload.cardId, currentList);
+          ctx.enqueueOfflineMutation({
+            entityKind: 'cardComment',
+            entityId: payload.commentId,
+            operation: 'delete',
+            payload: deletePayload,
+            updatedAt: now
+          });
+          emitUnreadSummary();
+          for (const cb of ctx.commentListeners) cb({ cardIds: [payload.cardId] });
+          emitState(await buildTodoStateSnapshot());
+          return currentList.filter(c => !c.deletedAt);
+        };
+
+        if (!active) {
+          return queueOfflineDelete();
+        }
+
+        try {
+          const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
+            method: 'POST',
+            headers: ctx.authHeaders(active, 'application/json'),
+            body: JSON.stringify({
+              workspaceId: ctx.resolveWorkspaceId(active),
+              entries: [
+                {
+                  entityKind: 'cardComment',
+                  entityId: payload.commentId,
+                  operation: 'delete',
+                  payload: deletePayload
+                }
+              ]
+            })
+          });
+          if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            handleUnauthorizedResponse(res, `删除评论失败 (${res.status}): ${text}`);
+          }
+          await pullLatestUnlocked();
+          return (ctx.commentsByCardId.get(payload.cardId) || []).filter(c => !c.deletedAt);
+        } catch (err) {
+          if (isTransientSyncError(err)) {
+            return queueOfflineDelete();
+          }
+          throw err;
+        }
+      }),
     onCountsUpdated: cb => {
       ctx.countListeners.add(cb);
       return () => ctx.countListeners.delete(cb);
@@ -815,5 +947,11 @@ export function createWebTodosModule(
     }
   };
 
-  return { client, applyPulledSync, resetSessionFlags };
+  return {
+    client,
+    applyPulledSync,
+    buildLocalState: buildTodoStateSnapshot,
+    emitLocalState: emitState,
+    resetSessionFlags
+  };
 }

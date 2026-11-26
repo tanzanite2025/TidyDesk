@@ -175,7 +175,51 @@ pub fn set_realtime_sync_enabled(app: &AppHandle, enabled: bool) -> Result<bool,
     });
 
     emit_realtime_state_changed(app, true, None);
+    if !super::outbox::read_outbox_entries(app)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        schedule_realtime_push_if_active(app);
+    }
     Ok(true)
+}
+
+/// Restore SSE realtime sync on desktop cold startup when the user persisted the preference
+/// and a valid signed-in session already exists on disk (decoupled from auth commands).
+pub fn schedule_restore_realtime_sync(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        let settings = crate::resident::read_resident_settings(&app);
+        if !settings.realtime_sync_enabled {
+            return;
+        }
+        let Ok(session) = load_session(&app) else {
+            return;
+        };
+        if !can_restore_realtime_for_session(&session) {
+            return;
+        }
+        let Some(user_id) = session.active_user_id.as_deref() else {
+            return;
+        };
+        if load_account_token(&app, user_id).ok().flatten().is_none() {
+            return;
+        }
+        if let Err(err) = set_realtime_sync_enabled(&app, true) {
+            eprintln!("[TIDYDESK][SSE] Skipping cold-start realtime restore: {err}");
+        }
+    });
+}
+
+fn can_restore_realtime_for_session(
+    session: &crate::accounts::session::StoredAccountSession,
+) -> bool {
+    session.active_user_id.is_some()
+        && session
+            .server_endpoint
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty())
+        && session.has_token
 }
 
 async fn run_sse_loop(
@@ -340,5 +384,20 @@ mod tests {
         assert!(should_trigger_sync(Some("4"), "5"));
         assert!(!should_trigger_sync(Some("5"), "5"));
         assert!(!should_trigger_sync(Some("6"), "5"));
+    }
+
+    #[test]
+    fn restore_realtime_guard_requires_active_account_endpoint_and_token() {
+        let mut session = crate::accounts::session::StoredAccountSession::default();
+        assert!(!can_restore_realtime_for_session(&session));
+
+        session.detached_user_id = Some("alice".to_string());
+        session.server_endpoint = Some("http://127.0.0.1:8787".to_string());
+        session.has_token = true;
+        assert!(!can_restore_realtime_for_session(&session));
+
+        session.detached_user_id = None;
+        session.active_user_id = Some("alice".to_string());
+        assert!(can_restore_realtime_for_session(&session));
     }
 }

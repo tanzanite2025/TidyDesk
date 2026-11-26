@@ -39,6 +39,12 @@ jobs:
       - name: Build frontend & check Rust format/compile
         run: npm run check
 
+      - name: Build pure mobile bundle & sync Android assets
+        run: |
+          npm run build:mobile
+          npm --prefix mobile-android ci
+          npm run mobile:sync
+
       - name: Run sync server & release script tests
         run: node --test server/test/sync.test.mjs server/test/phase2_pg_minio.test.mjs scripts/test-release-scripts.mjs
 

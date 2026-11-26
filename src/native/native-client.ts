@@ -5,8 +5,12 @@ import type { OpenAppPickerPayload } from '../types/tidydesk-api';
 
 function isMobileWebMode(): boolean {
   if (typeof window === 'undefined') return false;
-  const isTauri = Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-  if (isTauri) return false;
+  const win = window as unknown as {
+    __TAURI_INTERNALS__?: unknown;
+    __TIDYDESK_MOBILE__?: boolean;
+  };
+  if (win.__TAURI_INTERNALS__) return false;
+  if (win.__TIDYDESK_MOBILE__) return true;
   return new URLSearchParams(window.location.search).get('mode') === 'mobile';
 }
 

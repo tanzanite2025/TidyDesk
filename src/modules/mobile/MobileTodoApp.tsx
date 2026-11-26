@@ -1,8 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Loader2, LogOut, NotebookPen, Plus, RefreshCw, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Camera,
+  Check,
+  ChevronDown,
+  Loader2,
+  LogOut,
+  NotebookPen,
+  Plus,
+  RefreshCw,
+  Users,
+  X
+} from 'lucide-react';
 import { TodoProvider, useTodos } from '../../context/TodoContext';
 import { nativeClient } from '../../native/native-client';
-import type { AccountSessionSnapshot } from '../../types/todo';
+import { resolveDefaultMobileServerEndpoint } from '../../native/web-http-helpers';
+import type { AccountSessionSnapshot, RemoteWorkspaceInfo } from '../../types/todo';
 import { isAttachmentFileOversized, isImageFile } from '../todos/mediaUtils';
 import { TodoCardModal } from '../todos/TodoCardModal';
 import { clearCommentDraftCache } from '../todos/TodoCommentsSection';
@@ -11,10 +23,43 @@ import { TodoCommentNotificationBanner, TodoUnreadBell } from '../todos/TodoUnre
 import { MobileAuthGate } from './MobileAuthGate';
 import { MobileQuickNotesView } from './MobileQuickNotesView';
 
+interface CapacitorAppPluginLike {
+  addListener?: (
+    eventName: string,
+    listener: (data: { isActive?: boolean }) => void
+  ) => Promise<{ remove: () => Promise<void> }> | { remove: () => void };
+  minimizeApp?: () => Promise<void>;
+}
+
+interface CapacitorStatusBarPluginLike {
+  setStyle?: (options: { style: 'DARK' | 'LIGHT' }) => Promise<void>;
+  setBackgroundColor?: (options: { color: string }) => Promise<void>;
+  setOverlaysWebView?: (options: { overlay: boolean }) => Promise<void>;
+}
+
+function getCapacitorPlugins(): {
+  App?: CapacitorAppPluginLike;
+  StatusBar?: CapacitorStatusBarPluginLike;
+} {
+  if (typeof window === 'undefined') return {};
+  const cap = (
+    window as unknown as {
+      Capacitor?: {
+        Plugins?: { App?: CapacitorAppPluginLike; StatusBar?: CapacitorStatusBarPluginLike };
+      };
+    }
+  ).Capacitor;
+  return cap?.Plugins || {};
+}
+
 const MobileBoardContent: React.FC<{
   session: AccountSessionSnapshot;
-  onLogout: () => Promise<void>;
-}> = ({ session, onLogout }) => {
+  pendingCount: number;
+  onSyncStatusRefresh: () => void;
+  onOpenReconnectAuth: () => void;
+  onLogout: (keepLocalContinuity: boolean) => Promise<void>;
+}> = ({ session, pendingCount, onSyncStatusRefresh, onOpenReconnectAuth, onLogout }) => {
+  const isAccountMode = session.authMode === 'account';
   const {
     board,
     cards,
@@ -40,8 +85,169 @@ const MobileBoardContent: React.FC<{
   const [isCreating, setIsCreating] = useState(false);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [createModalColumnId, setCreateModalColumnId] = useState<string | null>(null);
+  const [showWorkspaceSheet, setShowWorkspaceSheet] = useState(false);
+  const [workspaces, setWorkspaces] = useState<RemoteWorkspaceInfo[]>([]);
+  const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+  const [newWorkspaceTitle, setNewWorkspaceTitle] = useState('');
+  const [inviteCodeInput, setInviteCodeInput] = useState('');
+  const [workspaceActionBusy, setWorkspaceActionBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const quickPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  const uiStateRef = useRef({
+    createModalColumnId,
+    selectedCardId,
+    showWorkspaceSheet,
+    mobileView
+  });
+  uiStateRef.current = {
+    createModalColumnId,
+    selectedCardId,
+    showWorkspaceSheet,
+    mobileView
+  };
+
+  useEffect(() => {
+    if (board && board.columns.length > 0 && !board.columns.some(col => col.id === activeColumnId)) {
+      setActiveColumnId(board.columns[0].id);
+    }
+  }, [activeColumnId, board]);
+
+  useEffect(() => {
+    onSyncStatusRefresh();
+  }, [cards, onSyncStatusRefresh, session]);
+
+  useEffect(() => {
+    const unsubNotes = nativeClient.quickNotes.onUpdated(() => onSyncStatusRefresh());
+    const unsubRealtime = nativeClient.sync.onRealtimeApplied?.(() => onSyncStatusRefresh());
+    return () => {
+      unsubNotes?.();
+      unsubRealtime?.();
+    };
+  }, [onSyncStatusRefresh]);
+
+  const loadWorkspaces = useCallback(async () => {
+    if (!isAccountMode || !nativeClient.accounts.listWorkspaces) return;
+    setLoadingWorkspaces(true);
+    try {
+      const list = await nativeClient.accounts.listWorkspaces();
+      setWorkspaces(list);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingWorkspaces(false);
+    }
+  }, [isAccountMode]);
+
+  const switchTargetWorkspace = async (workspaceId: string) => {
+    if (!session.activeUserId) return;
+    setWorkspaceActionBusy(true);
+    setLocalError(null);
+    try {
+      await nativeClient.accounts.switchSession({
+        userId: session.activeUserId,
+        serverEndpoint: session.serverEndpoint || undefined,
+        workspaceId
+      });
+      clearCommentDraftCache();
+      setSelectedCardId(null);
+      setCreateModalColumnId(null);
+      setShowWorkspaceSheet(false);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorkspaceActionBusy(false);
+    }
+  };
+
+  const handleCreateWorkspace = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const title = newWorkspaceTitle.trim();
+    if (!title || !nativeClient.accounts.createWorkspace || workspaceActionBusy) return;
+    setWorkspaceActionBusy(true);
+    setLocalError(null);
+    try {
+      const created = await nativeClient.accounts.createWorkspace(title);
+      setNewWorkspaceTitle('');
+      await switchTargetWorkspace(created.workspaceId);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorkspaceActionBusy(false);
+    }
+  };
+
+  const handleJoinByInvite = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const code = inviteCodeInput.trim();
+    if (!code || !nativeClient.accounts.joinWorkspaceByInvite || workspaceActionBusy) return;
+    setWorkspaceActionBusy(true);
+    setLocalError(null);
+    try {
+      const joined = await nativeClient.accounts.joinWorkspaceByInvite(code);
+      setInviteCodeInput('');
+      await switchTargetWorkspace(joined.workspaceId);
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorkspaceActionBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    const plugins = getCapacitorPlugins();
+    let active = true;
+    const handles: Array<{ remove: () => Promise<void> | void }> = [];
+
+    if (plugins.App?.addListener) {
+      void Promise.resolve(
+        plugins.App.addListener('backButton', () => {
+          const ui = uiStateRef.current;
+          if (ui.createModalColumnId !== null || ui.selectedCardId !== null) {
+            setCreateModalColumnId(null);
+            setSelectedCardId(null);
+            return;
+          }
+          if (ui.showWorkspaceSheet) {
+            setShowWorkspaceSheet(false);
+            return;
+          }
+          if (ui.mobileView === 'notes') {
+            setMobileView('todos');
+            return;
+          }
+          void plugins.App?.minimizeApp?.();
+        })
+      ).then(handle => {
+        if (!active) void handle.remove();
+        else handles.push(handle);
+      });
+
+      void Promise.resolve(
+        plugins.App.addListener('appStateChange', state => {
+          if (state?.isActive) {
+            void nativeClient.sync.setRealtimeEnabled?.(true).catch(err => {
+              console.warn('[TIDYDESK][MOBILE] Foreground SSE resume error:', err);
+            });
+            void refreshTodos();
+          }
+        })
+      ).then(handle => {
+        if (!active) void handle.remove();
+        else handles.push(handle);
+      });
+    }
+
+    const onOnline = () => {
+      void refreshTodos();
+    };
+    window.addEventListener('online', onOnline);
+
+    return () => {
+      active = false;
+      window.removeEventListener('online', onOnline);
+      for (const h of handles) void h.remove();
+    };
+  }, [refreshTodos]);
 
   const openCardSafely = (cardId: string) => {
     const target = cards.find(card => card.id === cardId && !card.deletedAt && !card.archived);
@@ -118,45 +324,58 @@ const MobileBoardContent: React.FC<{
 
   return (
     <div className="flex min-h-[100dvh] w-full flex-col bg-[#0f131d] text-slate-100">
-      <header className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#131826]/95 px-4 py-3 backdrop-blur-md">
+      <header className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#131826]/95 px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))] backdrop-blur-md">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="truncate text-[15px] font-black tracking-tight">
                 TidyDesk 待办
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-                {session.displayName || session.activeUserId}
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                  isAccountMode
+                    ? 'border-emerald-400/30 bg-emerald-500/15 text-emerald-200'
+                    : 'border-amber-400/30 bg-amber-500/15 text-amber-200'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isAccountMode ? 'animate-pulse bg-emerald-400' : 'bg-amber-400'
+                  }`}
+                />
+                {isAccountMode
+                  ? session.displayName || session.activeUserId
+                  : `离线连续 · ${session.detachedUserId}`}
               </span>
+              {pendingCount > 0 && (
+                <span className="inline-flex items-center rounded-full border border-sky-400/30 bg-sky-500/15 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-sky-200">
+                  待传 {pendingCount}
+                </span>
+              )}
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 font-mono text-[10px] text-slate-400">
               <span>{counts.open} 未完成 · {counts.done} 已完成</span>
-              <span className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-sky-200">
-                {session.workspaceId === 'default' ? '共享看板 (default)' : session.workspaceId}
-              </span>
-              {session.activeUserId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!session.activeUserId) return;
-                    const nextWs =
-                      session.workspaceId === 'default'
-                        ? `private:${session.activeUserId}`
-                        : 'default';
-                    void nativeClient.accounts
-                      .switchSession({
-                        userId: session.activeUserId,
-                        serverEndpoint: session.serverEndpoint || undefined,
-                        workspaceId: nextWs
-                      })
-                      .catch(err => setLocalError(err instanceof Error ? err.message : String(err)));
-                  }}
-                  className="rounded border border-white/[0.1] px-1.5 py-0.5 text-[9px] text-slate-300 hover:bg-white/[0.08]"
-                >
-                  {session.workspaceId === 'default' ? '切到私人空间' : '切回共享看板'}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isAccountMode) {
+                    setLocalError('当前处于离线连续模式，重连登录原账号后即可切换工作区。');
+                    return;
+                  }
+                  setShowWorkspaceSheet(true);
+                  void loadWorkspaces();
+                }}
+                className="inline-flex items-center gap-1 rounded border border-white/[0.1] bg-white/[0.06] px-1.5 py-0.5 text-[9px] text-sky-200 hover:bg-white/[0.12]"
+              >
+                <span>
+                  {session.workspaceId === 'default'
+                    ? '共享看板 (default)'
+                    : session.workspaceId.startsWith('private:')
+                      ? '私人空间'
+                      : session.workspaceId}
+                </span>
+                <ChevronDown size={10} />
+              </button>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
@@ -167,22 +386,52 @@ const MobileBoardContent: React.FC<{
             />
             <button
               type="button"
-              onClick={() => void refreshTodos()}
+              onClick={() => {
+                if (!isAccountMode) {
+                  onOpenReconnectAuth();
+                  return;
+                }
+                void refreshTodos().finally(onSyncStatusRefresh);
+              }}
               className="rounded-lg border border-white/[0.08] bg-white/[0.05] p-2 text-slate-300 hover:bg-white/[0.1]"
-              title="刷新同步"
+              title={isAccountMode ? '立即同步待传队列与云端最新' : '重连登录并同步'}
             >
               <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} />
             </button>
             <button
               type="button"
-              onClick={() => void onLogout()}
+              onClick={() => void onLogout(isAccountMode)}
               className="rounded-lg border border-white/[0.08] bg-white/[0.05] p-2 text-slate-300 hover:bg-rose-500/20 hover:text-rose-200"
-              title="切换账号"
+              title={isAccountMode ? '退出账号（保留本地离线继续编辑）' : '彻底退出并清空本地离线缓存'}
             >
               <LogOut size={15} />
             </button>
           </div>
         </div>
+
+        {!isAccountMode && session.detachedUserId && (
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+            <span>
+              已退出账号并保留离线编辑（{pendingCount} 条待上传）；联网重登原账号即可同步上云
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onOpenReconnectAuth}
+                className="rounded-lg bg-sky-500/25 px-2.5 py-1 text-[10px] font-bold text-sky-100"
+              >
+                重连登录同步
+              </button>
+              <button
+                type="button"
+                onClick={() => void onLogout(false)}
+                className="rounded-lg border border-rose-400/30 bg-rose-500/15 px-2 py-1 text-[10px] font-semibold text-rose-100"
+              >
+                彻底清空
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* View Switcher: Todos vs QuickNotes */}
         <div className="mt-3 grid grid-cols-2 gap-1.5 rounded-xl bg-black/30 p-1">
@@ -310,7 +559,7 @@ const MobileBoardContent: React.FC<{
       )}
 
       {/* Single-Column Card List */}
-      <main className="flex-1 space-y-2.5 overflow-y-auto p-4 pb-20">
+      <main className="flex-1 space-y-2.5 overflow-y-auto p-4 pb-[calc(5rem+env(safe-area-inset-bottom))]">
         {activeCards.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/[0.1] px-4 py-10 text-center text-[12px] text-slate-500">
             {isLoading ? '正在从云端同步...' : '当前列暂无待办，可直接拍照或点击上方加号创建'}
@@ -337,11 +586,104 @@ const MobileBoardContent: React.FC<{
           setSelectedCardId(null);
           setCreateModalColumnId(activeColumnId);
         }}
-        className="fixed bottom-5 right-5 z-20 inline-flex h-12 items-center gap-1.5 rounded-full bg-sky-500 px-4 text-[13px] font-bold text-white shadow-lg shadow-sky-500/30"
+        className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] right-5 z-20 inline-flex h-12 items-center gap-1.5 rounded-full bg-sky-500 px-4 text-[13px] font-bold text-white shadow-lg shadow-sky-500/30"
       >
         <Plus size={16} />
         详细新建
       </button>
+
+      {showWorkspaceSheet && (
+        <div
+          className="fixed inset-0 z-40 flex items-end justify-center bg-black/70 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={() => setShowWorkspaceSheet(false)}
+        >
+          <div
+            className="w-full max-w-[460px] space-y-4 rounded-t-2xl border border-white/[0.12] bg-[#151a29] p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] text-[12px] shadow-2xl sm:rounded-2xl sm:pb-5"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users size={16} className="text-sky-300" />
+                <span className="text-[14px] font-black">工作区管理与切换</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWorkspaceSheet(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-white/[0.08] hover:text-slate-100"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="max-h-56 space-y-1.5 overflow-y-auto">
+              {loadingWorkspaces ? (
+                <div className="flex items-center justify-center py-6 text-slate-400">
+                  <Loader2 size={16} className="animate-spin" />
+                </div>
+              ) : (
+                workspaces.map(ws => {
+                  const active = ws.workspaceId === session.workspaceId;
+                  return (
+                    <button
+                      key={ws.workspaceId}
+                      type="button"
+                      disabled={workspaceActionBusy}
+                      onClick={() => void switchTargetWorkspace(ws.workspaceId)}
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                        active
+                          ? 'border-sky-400/45 bg-sky-500/15 text-sky-100'
+                          : 'border-white/[0.08] bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold">{ws.title || ws.workspaceId}</div>
+                        <div className="truncate font-mono text-[10px] text-slate-400">
+                          {ws.workspaceId} · {ws.role}
+                        </div>
+                      </div>
+                      {active && <Check size={15} className="shrink-0 text-sky-300" />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            <form onSubmit={event => void handleCreateWorkspace(event)} className="flex gap-2">
+              <input
+                value={newWorkspaceTitle}
+                onChange={event => setNewWorkspaceTitle(event.target.value)}
+                placeholder="新建共享工作区名称..."
+                className="h-10 min-w-0 flex-1 rounded-xl border border-white/[0.1] bg-white/[0.05] px-3 text-slate-100 outline-none focus:border-sky-400/50"
+              />
+              <button
+                type="submit"
+                disabled={workspaceActionBusy || !newWorkspaceTitle.trim()}
+                className="h-10 shrink-0 rounded-xl bg-sky-500 px-3.5 font-bold text-white disabled:opacity-45"
+              >
+                新建
+              </button>
+            </form>
+
+            <form onSubmit={event => void handleJoinByInvite(event)} className="flex gap-2">
+              <input
+                value={inviteCodeInput}
+                onChange={event => setInviteCodeInput(event.target.value)}
+                placeholder="输入团队工作区邀请码..."
+                autoCapitalize="none"
+                autoCorrect="off"
+                className="h-10 min-w-0 flex-1 rounded-xl border border-white/[0.1] bg-white/[0.05] px-3 font-mono text-slate-100 outline-none focus:border-sky-400/50"
+              />
+              <button
+                type="submit"
+                disabled={workspaceActionBusy || !inviteCodeInput.trim()}
+                className="h-10 shrink-0 rounded-xl border border-emerald-400/35 bg-emerald-500/20 px-3.5 font-bold text-emerald-100 disabled:opacity-45"
+              >
+                加入
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {(createModalColumnId !== null || selectedCardSummary !== null) && (
         <TodoCardModal
@@ -367,25 +709,53 @@ const MobileBoardContent: React.FC<{
 export const MobileTodoApp: React.FC = () => {
   const [session, setSession] = useState<AccountSessionSnapshot | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
-  const [defaultEndpoint, setDefaultEndpoint] = useState(
-    typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8787'
-  );
+  const [showReconnectAuth, setShowReconnectAuth] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [defaultEndpoint, setDefaultEndpoint] = useState(() => resolveDefaultMobileServerEndpoint());
   const [defaultWorkspaceId, setDefaultWorkspaceId] = useState('default');
 
+  const refreshPendingCount = useCallback(() => {
+    void nativeClient.sync
+      .getStatus()
+      .then(status => setPendingCount(status.pendingCount || 0))
+      .catch(err => {
+        console.warn('[TIDYDESK][MOBILE] Failed reading sync pending count:', err);
+      });
+  }, []);
+
   useEffect(() => {
+    const plugins = getCapacitorPlugins();
+    void plugins.StatusBar?.setOverlaysWebView?.({ overlay: false });
+    void plugins.StatusBar?.setStyle?.({ style: 'DARK' });
+    void plugins.StatusBar?.setBackgroundColor?.({ color: '#0f131d' });
+
     void nativeClient.accounts
       .getSession()
       .then(snap => {
         setSession(snap);
-        if (snap.serverEndpoint) setDefaultEndpoint(snap.serverEndpoint);
+        setDefaultEndpoint(snap.serverEndpoint || resolveDefaultMobileServerEndpoint());
         if (snap.workspaceId) setDefaultWorkspaceId(snap.workspaceId);
+        refreshPendingCount();
+      })
+      .catch(err => {
+        console.error('[CRITICAL] Failed to initialize mobile session:', err);
       })
       .finally(() => setCheckingSession(false));
 
     return nativeClient.accounts.onSessionChanged(next => {
       setSession(next);
+      if (next.authMode === 'account') {
+        setShowReconnectAuth(false);
+      }
+      if (next.serverEndpoint) {
+        setDefaultEndpoint(next.serverEndpoint);
+      }
+      if (next.workspaceId) {
+        setDefaultWorkspaceId(next.workspaceId);
+      }
+      refreshPendingCount();
     });
-  }, []);
+  }, [refreshPendingCount]);
 
   if (checkingSession) {
     return (
@@ -395,12 +765,42 @@ export const MobileTodoApp: React.FC = () => {
     );
   }
 
-  if (!session || session.authMode !== 'account') {
+  const hasAccountSession = session?.authMode === 'account';
+  const hasDetachedContinuity = Boolean(session?.detachedUserId);
+
+  if (!session || (!hasAccountSession && !hasDetachedContinuity) || showReconnectAuth) {
     return (
       <MobileAuthGate
         initialEndpoint={defaultEndpoint}
         initialWorkspaceId={defaultWorkspaceId}
-        onAuthenticated={setSession}
+        initialUserId={session?.detachedUserId || ''}
+        detachedScope={
+          session?.detachedUserId
+            ? {
+                userId: session.detachedUserId,
+                workspaceId: session.detachedWorkspaceId || session.workspaceId || 'default',
+                pendingCount
+              }
+            : null
+        }
+        onAuthenticated={next => {
+          setShowReconnectAuth(false);
+          setSession(next);
+          refreshPendingCount();
+        }}
+        onCancelOffline={
+          hasDetachedContinuity ? () => setShowReconnectAuth(false) : undefined
+        }
+        onWipeDetachedLocal={
+          hasDetachedContinuity
+            ? async () => {
+                clearCommentDraftCache();
+                await nativeClient.accounts.logoutToLocal(false);
+                setShowReconnectAuth(false);
+                refreshPendingCount();
+              }
+            : undefined
+        }
       />
     );
   }
@@ -409,9 +809,13 @@ export const MobileTodoApp: React.FC = () => {
     <TodoProvider client={nativeClient}>
       <MobileBoardContent
         session={session}
-        onLogout={async () => {
+        pendingCount={pendingCount}
+        onSyncStatusRefresh={refreshPendingCount}
+        onOpenReconnectAuth={() => setShowReconnectAuth(true)}
+        onLogout={async keepLocalContinuity => {
           clearCommentDraftCache();
-          await nativeClient.accounts.logoutToLocal();
+          await nativeClient.accounts.logoutToLocal(keepLocalContinuity);
+          refreshPendingCount();
         }}
       />
     </TodoProvider>

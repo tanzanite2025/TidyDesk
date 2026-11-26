@@ -10,6 +10,7 @@ const {
   buildUpdaterManifest,
   selectInstallerArtifact
 } = require('./generate-tauri-latest-json.cjs');
+const { computeAndroidVersionCode, updateGradleVersion } = require('./sync-mobile-android.cjs');
 
 test('selectInstallerArtifact matches exact version and rejects stale leftovers', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-updater-pkg-'));
@@ -84,4 +85,28 @@ test('buildUpdaterManifest validates required fields and constructs release URL'
       }),
     /non-empty signature/
   );
+});
+
+test('computeAndroidVersionCode and updateGradleVersion enforce monotonic Android release versions', () => {
+  assert.equal(computeAndroidVersionCode('0.0.7'), 7);
+  assert.equal(computeAndroidVersionCode('0.1.2'), 1002);
+  assert.equal(computeAndroidVersionCode('1.2.3'), 1002003);
+  assert.throws(() => computeAndroidVersionCode('0.0.0'), /must be positive/);
+  assert.throws(() => computeAndroidVersionCode('invalid'), /Invalid semantic version/);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tidydesk-gradle-ver-'));
+  try {
+    const gradleFile = path.join(tmpDir, 'build.gradle');
+    fs.writeFileSync(
+      gradleFile,
+      'defaultConfig {\n  applicationId "com.tidydesk.mobile"\n  versionCode 1\n  versionName "0.0.1"\n}\n',
+      'utf8'
+    );
+    updateGradleVersion(gradleFile, '0.0.7', 7);
+    const updated = fs.readFileSync(gradleFile, 'utf8');
+    assert.match(updated, /versionCode 7/);
+    assert.match(updated, /versionName "0\.0\.7"/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

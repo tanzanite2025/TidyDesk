@@ -214,16 +214,18 @@ export const TodoAttachmentsSection: React.FC<TodoAttachmentsSectionProps> = ({
                   </button>
                 </>
               )}
-              <button
-                type="button"
-                disabled={isUploading}
-                onClick={onOpenCamera}
-                className="inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
-                title="调用摄像头拍照"
-              >
-                <Camera size={12} className="text-sky-300" />
-                拍照
-              </button>
+              {capabilities.platformLayout !== 'mobile' && (
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  onClick={onOpenCamera}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
+                  title="调用摄像头拍照"
+                >
+                  <Camera size={12} className="text-sky-300" />
+                  拍照
+                </button>
+              )}
               {capabilities.canScreenSnip && (
                 <button
                   type="button"

@@ -9,7 +9,8 @@ export interface WebSseController {
 
 export function createWebSseController(
   ctx: WebHttpContext,
-  pullLatest: () => Promise<TodoState>
+  pullLatest: () => Promise<TodoState>,
+  onUnauthorized?: () => void
 ): WebSseController {
   let realtimeAbort: AbortController | null = null;
   let realtimeGeneration = 0;
@@ -104,7 +105,13 @@ export function createWebSseController(
             }
           } else if (!controller.signal.aborted) {
             console.warn(`[TIDYDESK][MOBILE] SSE endpoint returned status ${res.status}`);
-            if (res.status === 401 || res.status === 403) {
+            if (res.status === 401) {
+              ctx.setRealtimeEnabledFlag(false);
+              stop();
+              onUnauthorized?.();
+              break;
+            }
+            if (res.status === 403) {
               ctx.setRealtimeEnabledFlag(false);
               stop();
               break;

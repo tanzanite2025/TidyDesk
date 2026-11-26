@@ -15,7 +15,7 @@ pub use outbox::{
     enqueue_outbox_batch, enqueue_outbox_event, OutboxBatchItem, OutboxEntityKind, OutboxOperation,
     SyncOutboxState,
 };
-pub use realtime::{stop_realtime_sync, SyncRealtimeState};
+pub use realtime::{schedule_restore_realtime_sync, stop_realtime_sync, SyncRealtimeState};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]

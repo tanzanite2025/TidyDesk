@@ -445,6 +445,7 @@ fn main() {
             schedule_restore_stickers(handle.clone());
             schedule_restore_sticky_notes(handle.clone());
             start_shortcut_background_services(handle.clone());
+            sync::schedule_restore_realtime_sync(handle.clone());
             Ok(())
         })
         .invoke_handler(tidydesk_generate_handler!())

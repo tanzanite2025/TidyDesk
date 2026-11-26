@@ -20,6 +20,8 @@ pub struct ResidentSettings {
     pub auto_update_check_enabled: bool,
     #[serde(default)]
     pub auto_stick_after_snip: bool,
+    #[serde(default)]
+    pub realtime_sync_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -30,6 +32,7 @@ pub struct ResidentSettingsSnapshot {
     pub background_monitor_enabled: bool,
     pub auto_update_check_enabled: bool,
     pub auto_stick_after_snip: bool,
+    pub realtime_sync_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,6 +48,8 @@ pub struct ResidentSettingsUpdate {
     pub auto_update_check_enabled: Option<bool>,
     #[serde(default)]
     pub auto_stick_after_snip: Option<bool>,
+    #[serde(default)]
+    pub realtime_sync_enabled: Option<bool>,
 }
 
 impl Default for ResidentSettings {
@@ -54,6 +59,7 @@ impl Default for ResidentSettings {
             background_monitor_enabled: true,
             auto_update_check_enabled: true,
             auto_stick_after_snip: false,
+            realtime_sync_enabled: false,
         }
     }
 }
@@ -68,6 +74,15 @@ fn default_auto_update_check_enabled() -> bool {
 
 pub fn read_resident_settings(app: &AppHandle) -> ResidentSettings {
     load_resident_settings(app).unwrap_or_default()
+}
+
+pub fn set_persisted_realtime_sync_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = load_resident_settings(app)?;
+    if settings.realtime_sync_enabled != enabled {
+        settings.realtime_sync_enabled = enabled;
+        write_resident_settings(app, &settings)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -110,10 +125,14 @@ pub fn resident_update_settings(
     if let Some(auto_stick_after_snip) = payload.auto_stick_after_snip {
         settings.auto_stick_after_snip = auto_stick_after_snip;
     }
+    if let Some(realtime_sync_enabled) = payload.realtime_sync_enabled {
+        settings.realtime_sync_enabled = realtime_sync_enabled;
+    }
     if payload.launch_minimized.is_some()
         || payload.background_monitor_enabled.is_some()
         || payload.auto_update_check_enabled.is_some()
         || payload.auto_stick_after_snip.is_some()
+        || payload.realtime_sync_enabled.is_some()
     {
         write_resident_settings(&app, &settings)?;
     }
@@ -223,6 +242,7 @@ fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapsho
         background_monitor_enabled: settings.background_monitor_enabled,
         auto_update_check_enabled: settings.auto_update_check_enabled,
         auto_stick_after_snip: settings.auto_stick_after_snip,
+        realtime_sync_enabled: settings.realtime_sync_enabled,
     })
 }
 
@@ -260,4 +280,30 @@ fn load_resident_settings(app: &AppHandle) -> Result<ResidentSettings, String> {
 fn write_resident_settings(app: &AppHandle, settings: &ResidentSettings) -> Result<(), String> {
     let path = settings_path(app)?;
     crate::persistence::atomic_write_json(&path, settings, "resident settings")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resident_settings_backward_compatibility_defaults_realtime_disabled() {
+        let legacy_json = r#"{"launchMinimized":true,"backgroundMonitorEnabled":false,"autoUpdateCheckEnabled":true,"autoStickAfterSnip":true}"#;
+        let parsed: ResidentSettings =
+            serde_json::from_str(legacy_json).expect("legacy json parses");
+        assert!(parsed.launch_minimized);
+        assert!(!parsed.background_monitor_enabled);
+        assert!(parsed.auto_update_check_enabled);
+        assert!(parsed.auto_stick_after_snip);
+        assert!(!parsed.realtime_sync_enabled);
+
+        let serialized = serde_json::to_string(&ResidentSettings {
+            realtime_sync_enabled: true,
+            ..parsed
+        })
+        .expect("serialize works");
+        let roundtrip: ResidentSettings =
+            serde_json::from_str(&serialized).expect("roundtrip works");
+        assert!(roundtrip.realtime_sync_enabled);
+    }
 }

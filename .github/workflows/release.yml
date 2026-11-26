@@ -76,7 +76,7 @@ jobs:
           $notes = if ($lines.Count -gt 0) {
             ($lines -join "`n").Trim()
           } else {
-            "- TidyDesk $currentTag 桌面端与同步服务端/移动端 PWA 更新"
+            "- TidyDesk $currentTag 桌面端、服务端与安卓端更新"
           }
           $delimiter = "TIDYDESK_NOTES_$([guid]::NewGuid().ToString('N'))"
           Add-Content -Path $env:GITHUB_ENV -Value "TIDYDESK_UPDATER_NOTES<<$delimiter"
@@ -106,14 +106,135 @@ jobs:
       - name: Package sync server + mobile PWA bundle
         run: npm run server:package
 
-      - name: Upload artifacts to GitHub Release
+      - name: Upload Windows & server artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
+            release-tauri/latest.json
+            release-server/*.zip
+
+  android:
+    name: Build Android companion APK (zero-coupling)
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install dependencies & sync mobile assets
+        run: |
+          npm ci
+          npm run tauri:verify-version
+          npm run build:mobile
+          npm --prefix mobile-android ci
+          npm run mobile:sync
+
+      - name: Prepare Android signing keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          KEYSTORE_PATH="/tmp/tidydesk-android-release.jks"
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+            echo "TIDYDESK_ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::notice::ANDROID_KEYSTORE_BASE64 not configured; generating ephemeral release signing key for installable APK"
+            keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -alias tidydesk \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass tidydesk-release -keypass tidydesk-release \
+              -dname "CN=TidyDesk,OU=Mobile,O=TidyDesk,C=CN"
+            echo "TIDYDESK_ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEYSTORE_PASSWORD=tidydesk-release" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEY_ALIAS=tidydesk" >> "$GITHUB_ENV"
+            echo "TIDYDESK_ANDROID_KEY_PASSWORD=tidydesk-release" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build signed Android APK
+        shell: bash
+        run: |
+          ANDROID_SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -n "$ANDROID_SDK_DIR" ] && [ -x "$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager" ]; then
+            yes | "$ANDROID_SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          fi
+          chmod +x mobile-android/android/gradlew
+          cd mobile-android/android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Collect named Android APK artifact
+        shell: bash
+        run: |
+          APP_VERSION=$(node -p "require('./package.json').version")
+          mkdir -p release-android
+          APK_SRC="mobile-android/android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$APK_SRC" ]; then
+            echo "[CRITICAL] Expected signed APK not found at $APK_SRC" >&2
+            exit 1
+          fi
+          cp "$APK_SRC" "release-android/TidyDesk-Mobile-v${APP_VERSION}.apk"
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-artifacts
+          path: release-android/*.apk
+
+  publish:
+    name: Publish GitHub Release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Download Windows & server artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: release-bundle/windows
+
+      - name: Download Android APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-release-artifacts
+          path: release-bundle/android
+
+      - name: Upload all artifacts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           make_latest: true
           files: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.exe.sig
-            release-tauri/latest.json
-            release-server/*.zip
+            release-bundle/windows/*.exe
+            release-bundle/windows/*.exe.sig
+            release-bundle/windows/latest.json
+            release-bundle/windows/*.zip
+            release-bundle/android/*.apk

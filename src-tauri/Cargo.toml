@@ -1,6 +1,6 @@
 [package]
 name = "tidydesk"
-version = "0.0.7"
+version = "0.0.8"
 description = "TidyDesk desktop application"
 edition = "2021"
 

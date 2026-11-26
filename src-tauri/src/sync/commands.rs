@@ -116,8 +116,9 @@ pub async fn sync_set_realtime_enabled(
 ) -> Result<SyncStatusSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let active = set_realtime_sync_enabled(&app, enabled)?;
+        crate::resident::set_persisted_realtime_sync_enabled(&app, active)?;
         let message = if active {
-            "已开启实时协同推送（SSE），远端新任务与照片变更将自动同步".to_string()
+            "已开启实时协同推送（SSE），已保存偏好并在重启后自动恢复".to_string()
         } else {
             "已关闭实时协同推送，改为按需手动同步".to_string()
         };
