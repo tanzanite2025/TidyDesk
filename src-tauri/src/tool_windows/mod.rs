@@ -8,6 +8,7 @@ pub use capture::{close_capture_window, open_or_toggle_capture_window};
 pub use snip::{close_snip_window, open_snip_window};
 pub use todo::{
     close_todo_window, hide_todo_window_for_snip, open_todo_window, show_todo_window_after_snip,
+    todos_consume_pending_focus_card, TodoFocusCardState,
 };
 
 use crate::shell::{

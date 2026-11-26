@@ -45,6 +45,20 @@ CREATE TABLE IF NOT EXISTS workspace_members (
   PRIMARY KEY (workspace_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  invite_code TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'member', 'viewer')),
+  created_by TEXT NOT NULL,
+  max_uses INTEGER NOT NULL DEFAULT 1,
+  used_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TEXT,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_invites_ws ON workspace_invites(workspace_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS cards (
   workspace_id TEXT NOT NULL,
   id TEXT NOT NULL,
@@ -62,6 +76,18 @@ CREATE TABLE IF NOT EXISTS quick_notes (
   payload_json JSONB NOT NULL,
   PRIMARY KEY (workspace_id, id)
 );
+
+CREATE TABLE IF NOT EXISTS card_comments (
+  workspace_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  card_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  payload_json JSONB NOT NULL,
+  PRIMARY KEY (workspace_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_card_comments_ws_card ON card_comments(workspace_id, card_id);
 
 CREATE TABLE IF NOT EXISTS media_meta (
   sha256 TEXT PRIMARY KEY,

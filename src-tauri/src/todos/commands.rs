@@ -10,3 +10,7 @@ pub use super::card_commands::{
     todos_create_card, todos_delete_card, todos_get_card_detail, todos_get_counts, todos_move_card,
     todos_read_state, todos_update_card,
 };
+pub use super::comment_commands::{
+    todos_add_card_comment, todos_delete_card_comment, todos_get_unread_comment_summary,
+    todos_list_card_comments, todos_mark_all_comments_read, todos_mark_card_comments_read,
+};

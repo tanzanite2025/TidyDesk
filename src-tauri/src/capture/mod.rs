@@ -1,8 +1,10 @@
 pub mod monitor;
+pub mod output;
 pub mod screen_gdi;
 pub mod snip;
 
 pub use monitor::{snip_open_monitor, MonitorSnapshot};
+pub use output::{copy_png_bytes_to_clipboard, save_png_bytes_with_dialog};
 pub use snip::{
     clear_pending_sticker_cache, handle_snip_window_aborted, is_snip_capture_in_flight,
     open_snip_window, open_snip_window_for_todo_card, paste_pending_sticker, snip_cancel,

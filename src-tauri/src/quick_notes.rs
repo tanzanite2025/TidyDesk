@@ -523,6 +523,80 @@ pub(crate) fn apply_pulled_quick_notes(
     Ok(())
 }
 
+fn read_local_quick_notes_snapshot(app: &AppHandle) -> Result<Vec<QuickNote>, String> {
+    let local_db = crate::local_db::local_workspace_db_path(app)?;
+    if local_db.is_file() {
+        let conn = crate::local_db::open_workspace_db_at(&local_db)?;
+        return read_quick_notes_from_conn(&conn);
+    }
+    let legacy_path = crate::files::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME);
+    if !legacy_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&legacy_path)
+        .map_err(|err| format!("failed to read local quick notes: {err}"))?;
+    match serde_json::from_str::<StoredQuickNotesFile>(&raw) {
+        Ok(parsed) => {
+            let mut notes: Vec<QuickNote> = parsed
+                .notes
+                .into_iter()
+                .filter_map(normalize_quick_note)
+                .collect();
+            sort_quick_notes(&mut notes);
+            Ok(notes)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Non-destructively copy quick notes from the pure local store into the active account workspace.
+pub(crate) fn import_local_quick_notes_into_active_scope(app: &AppHandle) -> Result<usize, String> {
+    if crate::accounts::account_sync_root(app)?.is_none() {
+        return Ok(0);
+    }
+    let local_notes = read_local_quick_notes_snapshot(app)?;
+    if local_notes.is_empty() {
+        return Ok(0);
+    }
+
+    let imported = with_quick_notes_store_lock(app, || {
+        let mut current = read_quick_notes_unlocked(app)?;
+        let existing_ids: std::collections::HashSet<String> =
+            current.iter().map(|n| n.id.clone()).collect();
+        let mut added = Vec::new();
+        for note in local_notes {
+            if !existing_ids.contains(&note.id) {
+                added.push(note.clone());
+                current.push(note);
+            }
+        }
+        if added.is_empty() {
+            return Ok(0);
+        }
+        sort_quick_notes(&mut current);
+        write_quick_notes_unlocked(app, &current)?;
+
+        let mut batch = Vec::with_capacity(added.len());
+        for note in &added {
+            let payload =
+                serde_json::to_value(note).map_err(|err| format!("序列化导入速记失败: {err}"))?;
+            batch.push(crate::sync::OutboxBatchItem {
+                entity_kind: crate::sync::OutboxEntityKind::QuickNote,
+                entity_id: note.id.clone(),
+                operation: crate::sync::OutboxOperation::Upsert,
+                payload,
+            });
+        }
+        crate::sync::enqueue_outbox_batch(app, batch)?;
+        Ok(added.len())
+    })?;
+
+    if imported > 0 {
+        let _ = refresh_and_emit_active_quick_notes_state(app);
+    }
+    Ok(imported)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

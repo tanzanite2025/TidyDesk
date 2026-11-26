@@ -47,12 +47,6 @@ pub struct StickerUpdatedPayload {
     pub always_on_top: bool,
 }
 
-#[derive(Debug)]
-pub struct CapturedSticker {
-    pub sticker_id: Option<String>,
-    pub pasted: bool,
-}
-
 pub fn sanitize_sticker_id(value: &str) -> String {
     value
         .chars()

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CheckSquare, Film, Image as ImageIcon, Play, Star } from 'lucide-react';
+import { CheckSquare, Film, Image as ImageIcon, MessageSquare, Play, Star } from 'lucide-react';
 import type { TodoAttachment, TodoCard } from '../../types/todo';
 import { attachmentImageStyle, isAttachmentContainMode } from './mediaUtils';
 import { getTodoPriorityMeta } from './priority';
@@ -47,6 +47,9 @@ export const TodoCardTile: React.FC<TodoCardTileProps> = ({
   const subtaskCompleted =
     card.subtaskCompleted ?? card.subtasks?.filter(item => item.completed).length ?? 0;
   const subtaskPercent = subtaskTotal > 0 ? Math.round((subtaskCompleted / subtaskTotal) * 100) : 0;
+  const commentCount = card.commentCount ?? 0;
+  const unreadCommentCount = card.unreadCommentCount ?? 0;
+  const unreadMentionCount = card.unreadMentionCount ?? 0;
   const hasVideoPreview = previewItems.some(item => item.kind === 'video');
   const summary = card.summaryText?.trim() || fallbackSummary(card.content || '') || '没有描述';
   const priorityMeta = getTodoPriorityMeta(card.priority);
@@ -161,8 +164,8 @@ export const TodoCardTile: React.FC<TodoCardTileProps> = ({
           </div>
         )}
 
-        {/* Layer 3: Subtask progress & media counter footer */}
-        {(totalCount > 0 || subtaskTotal > 0) && (
+        {/* Layer 3: Subtask progress, comment counter & media counter footer */}
+        {(totalCount > 0 || subtaskTotal > 0 || commentCount > 0) && (
           <div className="mt-2.5 space-y-1.5">
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
@@ -178,6 +181,32 @@ export const TodoCardTile: React.FC<TodoCardTileProps> = ({
                     <span>
                       {subtaskCompleted}/{subtaskTotal}
                     </span>
+                  </span>
+                )}
+                {commentCount > 0 && (
+                  <span
+                    className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                      unreadMentionCount > 0
+                        ? 'bg-amber-400/20 text-amber-200 ring-1 ring-amber-400/35'
+                        : unreadCommentCount > 0
+                          ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/35'
+                          : 'bg-white/[0.06] text-slate-300'
+                    }`}
+                    title={
+                      unreadMentionCount > 0
+                        ? `${commentCount} 条评论（${unreadMentionCount} 条 @你未读）`
+                        : unreadCommentCount > 0
+                          ? `${commentCount} 条评论（${unreadCommentCount} 条未读）`
+                          : `${commentCount} 条评论`
+                    }
+                  >
+                    <MessageSquare size={10} />
+                    <span>{commentCount}</span>
+                    {unreadMentionCount > 0 ? (
+                      <span className="font-sans text-[9px] font-black text-amber-300">@你</span>
+                    ) : unreadCommentCount > 0 ? (
+                      <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+                    ) : null}
                   </span>
                 )}
                 {totalCount > 0 && (

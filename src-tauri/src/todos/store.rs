@@ -213,6 +213,16 @@ fn delete_todo_card_in_conn(
         )
         .map_err(|err| format!("清空已删除待办正文失败 ({card_id}): {err}"))?;
     } else {
+        tx.execute(
+            "DELETE FROM card_comment_reads WHERE card_id = ?1",
+            params![card_id],
+        )
+        .map_err(|err| format!("删除待办已读游标失败 ({card_id}): {err}"))?;
+        tx.execute(
+            "DELETE FROM card_comments WHERE card_id = ?1",
+            params![card_id],
+        )
+        .map_err(|err| format!("删除待办关联评论失败 ({card_id}): {err}"))?;
         tx.execute("DELETE FROM todo_cards WHERE id = ?1", params![card_id])
             .map_err(|err| format!("删除待办卡片行失败 ({card_id}): {err}"))?;
     }
@@ -552,6 +562,10 @@ pub(crate) fn clear_todos_tables_in_db(db_path: &Path) -> Result<(), String> {
         .map_err(|err| format!("清理工作区看板表失败: {err}"))?;
     tx.execute("DELETE FROM todo_cards", [])
         .map_err(|err| format!("清理工作区卡片表失败: {err}"))?;
+    tx.execute("DELETE FROM card_comments", [])
+        .map_err(|err| format!("清理工作区评论表失败: {err}"))?;
+    tx.execute("DELETE FROM card_comment_reads", [])
+        .map_err(|err| format!("清理工作区评论已读表失败: {err}"))?;
     tx.execute(
         "DELETE FROM db_meta WHERE key = ?1",
         params![TODOS_MIGRATION_META_KEY],
@@ -564,6 +578,7 @@ pub(crate) fn clear_todos_tables_in_db(db_path: &Path) -> Result<(), String> {
 pub(crate) struct ImportedTodosSnapshot {
     pub index: Value,
     pub contents: HashMap<String, String>,
+    pub comments: Vec<super::TodoCardComment>,
 }
 
 pub(crate) fn load_local_todos_snapshot_for_import(
@@ -579,7 +594,12 @@ pub(crate) fn load_local_todos_snapshot_for_import(
     migrate_todos_json_if_needed_at(&mut conn, &legacy_root)?;
     let index = read_todo_index_from_conn(&mut conn)?;
     let contents = read_all_card_contents_from_conn(&conn)?;
-    Ok(Some(ImportedTodosSnapshot { index, contents }))
+    let comments = super::read_all_active_comments_from_conn(&conn)?;
+    Ok(Some(ImportedTodosSnapshot {
+        index,
+        contents,
+        comments,
+    }))
 }
 
 const CARD_PREVIEW_ATTACHMENT_LIMIT: usize = 2;
@@ -699,17 +719,31 @@ fn build_card_projection_base(card: &Value, content: &str) -> (Value, Vec<Value>
 }
 
 /// Lightweight board-list summary projection (omits full Markdown body, full subtasks, and bloated attachment metadata).
-pub(super) fn enrich_card_summary_view(card: &Value, content: &str) -> Value {
-    let (summary, _, _) = build_card_projection_base(card, content);
+pub(super) fn enrich_card_summary_view(
+    card: &Value,
+    content: &str,
+    metrics: &super::comment_commands::CardCommentBadgeMetrics,
+) -> Value {
+    let (mut summary, _, _) = build_card_projection_base(card, content);
+    summary["commentCount"] = json!(metrics.total_count);
+    summary["unreadCommentCount"] = json!(metrics.unread_count);
+    summary["unreadMentionCount"] = json!(metrics.unread_mention_count);
     summary
 }
 
 /// Full card detail projection used when opening or editing a single card modal.
-pub(super) fn enrich_card_detail_view(card: &Value, content: String) -> Value {
+pub(super) fn enrich_card_detail_view(
+    card: &Value,
+    content: String,
+    metrics: &super::comment_commands::CardCommentBadgeMetrics,
+) -> Value {
     let (mut detail, subtasks, attachments) = build_card_projection_base(card, &content);
     detail["content"] = json!(content);
     detail["subtasks"] = Value::Array(subtasks);
     detail["attachments"] = Value::Array(attachments);
+    detail["commentCount"] = json!(metrics.total_count);
+    detail["unreadCommentCount"] = json!(metrics.unread_count);
+    detail["unreadMentionCount"] = json!(metrics.unread_mention_count);
     detail
 }
 
@@ -727,6 +761,8 @@ pub fn todo_state_from_index_unlocked(
     counts: Value,
 ) -> Result<Value, String> {
     let db_contents = read_all_todo_card_contents_unlocked(app)?;
+    let comment_metrics = super::comment_commands::read_card_comment_metrics_unlocked(app)?;
+    let default_metrics = super::comment_commands::CardCommentBadgeMetrics::default();
     let mut cache = store
         .content_cache
         .lock()
@@ -741,7 +777,8 @@ pub fn todo_state_from_index_unlocked(
                 .map(|card| {
                     let card_id = card["id"].as_str().unwrap_or_default().to_string();
                     let content = db_contents.get(&card_id).cloned().unwrap_or_default();
-                    let view = enrich_card_summary_view(card, &content);
+                    let metrics = comment_metrics.get(&card_id).unwrap_or(&default_metrics);
+                    let view = enrich_card_summary_view(card, &content, metrics);
                     cache.insert(card_id, content);
                     Ok(view)
                 })
@@ -763,6 +800,8 @@ pub(super) fn todo_state_from_cache_or_disk(
     counts: Value,
 ) -> Result<Value, String> {
     let mut lazy_db_contents: Option<HashMap<String, String>> = None;
+    let comment_metrics = super::comment_commands::read_card_comment_metrics_unlocked(app)?;
+    let default_metrics = super::comment_commands::CardCommentBadgeMetrics::default();
     let mut cache = store
         .content_cache
         .lock()
@@ -786,10 +825,11 @@ pub(super) fn todo_state_from_cache_or_disk(
                             .and_then(|map| map.get(&card_id))
                             .cloned()
                             .unwrap_or_default();
-                        cache.insert(card_id, loaded.clone());
+                        cache.insert(card_id.clone(), loaded.clone());
                         loaded
                     };
-                    Ok(enrich_card_summary_view(card, &content))
+                    let metrics = comment_metrics.get(&card_id).unwrap_or(&default_metrics);
+                    Ok(enrich_card_summary_view(card, &content, metrics))
                 })
                 .collect::<Result<Vec<_>, String>>()
         })
@@ -1115,12 +1155,20 @@ mod tests {
             "coverAttachmentId": "a2"
         });
 
-        let summary = enrich_card_summary_view(&card, "# 标题\n这是详细长正文\n第二行");
+        let metrics = super::super::comment_commands::CardCommentBadgeMetrics {
+            total_count: 4,
+            unread_count: 2,
+            unread_mention_count: 1,
+        };
+        let summary = enrich_card_summary_view(&card, "# 标题\n这是详细长正文\n第二行", &metrics);
         assert!(summary.get("content").is_none());
         assert!(summary.get("subtasks").is_none());
         assert!(summary.get("attachments").is_none());
         assert_eq!(summary["summaryText"], json!("标题"));
         assert_eq!(summary["priority"], json!("high"));
+        assert_eq!(summary["commentCount"], json!(4));
+        assert_eq!(summary["unreadCommentCount"], json!(2));
+        assert_eq!(summary["unreadMentionCount"], json!(1));
         assert_eq!(summary["subtaskTotal"], json!(2));
         assert_eq!(summary["subtaskCompleted"], json!(1));
         assert_eq!(summary["attachmentCount"], json!(3));
@@ -1131,8 +1179,11 @@ mod tests {
         );
         assert_eq!(summary["previewAttachments"][0]["id"], json!("a2"));
 
-        let detail = enrich_card_detail_view(&card, "完整正文".to_string());
+        let detail = enrich_card_detail_view(&card, "完整正文".to_string(), &metrics);
         assert_eq!(detail["content"], json!("完整正文"));
+        assert_eq!(detail["commentCount"], json!(4));
+        assert_eq!(detail["unreadCommentCount"], json!(2));
+        assert_eq!(detail["unreadMentionCount"], json!(1));
         assert_eq!(detail["subtasks"].as_array().map(Vec::len), Some(2));
         assert_eq!(detail["attachments"].as_array().map(Vec::len), Some(3));
     }
@@ -1162,7 +1213,8 @@ mod tests {
             "coverAttachmentId": "sa2"
         });
 
-        let summary = enrich_card_summary_view(&card, "");
+        let zero_metrics = super::super::comment_commands::CardCommentBadgeMetrics::default();
+        let summary = enrich_card_summary_view(&card, "", &zero_metrics);
         assert_eq!(summary["attachmentCount"], json!(3));
         assert_eq!(summary["extraAttachmentCount"], json!(1));
         assert_eq!(
@@ -1172,7 +1224,7 @@ mod tests {
         assert_eq!(summary["previewAttachments"][0]["id"], json!("sa2"));
         assert_eq!(summary["previewAttachments"][1]["id"], json!("sa1"));
 
-        let detail = enrich_card_detail_view(&card, String::new());
+        let detail = enrich_card_detail_view(&card, String::new(), &zero_metrics);
         assert_eq!(detail["subtasks"][0]["attachmentCount"], json!(3));
         assert!(detail["subtasks"][0]["attachments"][0]["thumbUrl"]
             .as_str()

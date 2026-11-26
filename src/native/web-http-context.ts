@@ -1,5 +1,14 @@
 import type { QuickNote, QuickNotesState } from '../types/quick-note';
-import type { AccountSessionSnapshot, SyncStatusSnapshot, TodoCard, TodoCounts, TodoState } from '../types/todo';
+import type {
+  AccountSessionSnapshot,
+  SyncStatusSnapshot,
+  TodoCard,
+  TodoCardComment,
+  TodoCommentNotificationPayload,
+  TodoCounts,
+  TodoState,
+  TodoUnreadCommentSummary
+} from '../types/todo';
 import type { SyncRealtimeAppliedPayload } from './types';
 import { readStoredWebSession, type StoredWebSession, writeStoredWebSession } from './web-http-helpers';
 
@@ -15,12 +24,16 @@ export interface WebHttpContext {
   isRealtimeEnabled: () => boolean;
   setRealtimeEnabledFlag: (enabled: boolean) => void;
   cardsById: Map<string, TodoCard>;
+  commentsByCardId: Map<string, TodoCardComment[]>;
   quickNotesById: Map<string, QuickNote>;
   blobUrlCache: Map<string, string>;
   pendingBlobFetches: Map<string, Promise<string | undefined>>;
   sessionListeners: Set<(payload: AccountSessionSnapshot) => void>;
   stateListeners: Set<(payload: TodoState) => void>;
   countListeners: Set<(payload: TodoCounts) => void>;
+  commentListeners: Set<(payload: { cardIds: string[] }) => void>;
+  unreadListeners: Set<(payload: TodoUnreadCommentSummary) => void>;
+  notificationListeners: Set<(payload: TodoCommentNotificationPayload) => void>;
   quickNoteListeners: Set<(payload: QuickNotesState) => void>;
   realtimeListeners: Set<(payload: SyncRealtimeAppliedPayload) => void>;
   clearAllCaches: () => void;
@@ -31,6 +44,7 @@ export function createWebHttpContext(): WebHttpContext {
   let realtimeEnabled = true;
 
   const cardsById = new Map<string, TodoCard>();
+  const commentsByCardId = new Map<string, TodoCardComment[]>();
   const quickNotesById = new Map<string, QuickNote>();
   const blobUrlCache = new Map<string, string>();
   const pendingBlobFetches = new Map<string, Promise<string | undefined>>();
@@ -38,6 +52,9 @@ export function createWebHttpContext(): WebHttpContext {
   const sessionListeners = new Set<(payload: AccountSessionSnapshot) => void>();
   const stateListeners = new Set<(payload: TodoState) => void>();
   const countListeners = new Set<(payload: TodoCounts) => void>();
+  const commentListeners = new Set<(payload: { cardIds: string[] }) => void>();
+  const unreadListeners = new Set<(payload: TodoUnreadCommentSummary) => void>();
+  const notificationListeners = new Set<(payload: TodoCommentNotificationPayload) => void>();
   const quickNoteListeners = new Set<(payload: QuickNotesState) => void>();
   const realtimeListeners = new Set<(payload: SyncRealtimeAppliedPayload) => void>();
 
@@ -112,6 +129,7 @@ export function createWebHttpContext(): WebHttpContext {
     blobUrlCache.clear();
     pendingBlobFetches.clear();
     cardsById.clear();
+    commentsByCardId.clear();
     quickNotesById.clear();
   };
 
@@ -132,12 +150,16 @@ export function createWebHttpContext(): WebHttpContext {
       realtimeEnabled = enabled;
     },
     cardsById,
+    commentsByCardId,
     quickNotesById,
     blobUrlCache,
     pendingBlobFetches,
     sessionListeners,
     stateListeners,
     countListeners,
+    commentListeners,
+    unreadListeners,
+    notificationListeners,
     quickNoteListeners,
     realtimeListeners,
     clearAllCaches

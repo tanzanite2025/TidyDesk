@@ -352,6 +352,82 @@ fn rust_http_sync_client_roundtrips_with_live_node_server() {
             "removed quick note id missing in delta pull: {:?}",
             delta_alice.removed_quick_note_ids
         );
+
+        // 7. Card comments live roundtrip + workspace members lookup + remote delete propagation.
+        let members = alice
+            .list_workspace_members("default")
+            .await
+            .expect("list_workspace_members should succeed");
+        assert!(
+            members.iter().any(|m| m.user_id == "alice")
+                && members.iter().any(|m| m.user_id == "bob"),
+            "workspace members missing alice/bob: {members:?}"
+        );
+
+        let comment_push = alice
+            .push_changes(&[OutboxEntry {
+                entity_kind: OutboxEntityKind::CardComment,
+                entity_id: "cmt-e2e-1".to_string(),
+                operation: OutboxOperation::Upsert,
+                payload: json!({
+                    "id": "cmt-e2e-1",
+                    "cardId": card_id,
+                    "parentId": "cmt-root-0",
+                    "authorId": "spoofed-ignored",
+                    "authorName": "spoofed",
+                    "body": "请 @bob 确认协同卡片评论",
+                    "createdAt": "3500",
+                    "updatedAt": "3500"
+                }),
+                actor_id: "alice".to_string(),
+                updated_at: "3500".to_string(),
+            }])
+            .await
+            .expect("cardComment upsert should succeed");
+        assert_eq!(comment_push.acked.len(), 1);
+
+        let bob_comment_pull = bob
+            .pull_changes(Some(&pull_bob.next_cursor))
+            .await
+            .expect("bob should pull card comment");
+        let pulled_cmt = bob_comment_pull
+            .card_comments
+            .iter()
+            .find(|c| c["id"] == json!("cmt-e2e-1"))
+            .expect("cmt-e2e-1 missing from bob pull");
+        assert_eq!(pulled_cmt["authorId"], json!("alice"));
+        assert_eq!(pulled_cmt["parentId"], json!("cmt-root-0"));
+        assert_eq!(pulled_cmt["mentions"], json!(["bob"]));
+
+        let comment_del = alice
+            .push_changes(&[OutboxEntry {
+                entity_kind: OutboxEntityKind::CardComment,
+                entity_id: "cmt-e2e-1".to_string(),
+                operation: OutboxOperation::Delete,
+                payload: json!({
+                    "id": "cmt-e2e-1",
+                    "cardId": card_id,
+                    "deletedAt": "3600",
+                    "updatedAt": "3600"
+                }),
+                actor_id: "alice".to_string(),
+                updated_at: "3600".to_string(),
+            }])
+            .await
+            .expect("alice should delete own card comment");
+        assert_eq!(comment_del.acked.len(), 1);
+
+        let bob_comment_del_pull = bob
+            .pull_changes(Some(&bob_comment_pull.next_cursor))
+            .await
+            .expect("bob delta pull should receive comment delete");
+        assert!(
+            bob_comment_del_pull
+                .removed_card_comment_ids
+                .contains(&"cmt-e2e-1".to_string()),
+            "removed comment missing: {:?}",
+            bob_comment_del_pull.removed_card_comment_ids
+        );
     });
 }
 

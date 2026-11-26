@@ -238,10 +238,57 @@ export interface SnipRect {
   height: number;
 }
 
+export type SnipTargetKind = 'standard' | 'todo_card';
+
+export type SnipOutputAction =
+  | 'default'
+  | 'copy'
+  | 'pin_sticker'
+  | 'save_as'
+  | 'stash_pending'
+  | 'attach_todo';
+
+export interface SnipMonitorMeta {
+  width: number;
+  height: number;
+  logicalWidth: number;
+  logicalHeight: number;
+  scaleFactor: number;
+}
+
+export interface SnipSnapRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  title?: string;
+}
+
+export interface SnipCompletePayload extends SnipRect {
+  action?: SnipOutputAction;
+  hasAnnotations?: boolean;
+  compositedPngBase64?: string;
+  compositedPngBytes?: number[];
+  sessionId?: number;
+}
+
+export interface SnipCompleteResult {
+  success: boolean;
+  action?: SnipOutputAction;
+  stickerId?: string | null;
+  pasted?: boolean;
+  savedPath?: string | null;
+  canceled?: boolean;
+}
+
 export interface SnipBackgroundImageResult {
   success: boolean;
+  sessionId?: number | null;
   imagePath?: string | null;
   imageUrl?: string | null;
+  targetKind?: SnipTargetKind;
+  monitor?: SnipMonitorMeta | null;
+  snapRects?: SnipSnapRect[];
   error?: string;
 }
 

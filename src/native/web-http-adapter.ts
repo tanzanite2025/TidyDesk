@@ -1,5 +1,5 @@
 import type { QuickNote } from '../types/quick-note';
-import type { TodoCard, TodoState } from '../types/todo';
+import type { TodoCard, TodoCardComment, TodoState } from '../types/todo';
 import type { NativeCapabilities, NativeClient } from './types';
 import { createWebAccountsClient } from './web-http-auth';
 import { createWebHttpContext } from './web-http-context';
@@ -39,12 +39,19 @@ export function createWebHttpNativeClient(): NativeClient {
       nextCursor: string;
       cards: TodoCard[];
       removedCardIds: string[];
+      cardComments?: TodoCardComment[];
+      removedCardCommentIds?: string[];
       quickNotes?: QuickNote[];
       removedQuickNoteIds?: string[];
     };
 
     ctx.recordSyncCursor(pulled.nextCursor);
-    const state = await todosModule.applyPulledCards(pulled.cards, pulled.removedCardIds);
+    const state = await todosModule.applyPulledSync({
+      cards: pulled.cards,
+      removedCardIds: pulled.removedCardIds,
+      cardComments: pulled.cardComments,
+      removedCardCommentIds: pulled.removedCardCommentIds
+    });
     notesModule.applyPulledNotes(pulled.quickNotes, pulled.removedQuickNoteIds);
     return state;
   };
@@ -55,6 +62,7 @@ export function createWebHttpNativeClient(): NativeClient {
 
   const accounts = createWebAccountsClient(ctx, sse, () => {
     ctx.clearAllCaches();
+    todosModule.resetSessionFlags();
     notesModule.clearAndEmitEmpty();
   });
 

@@ -6,31 +6,36 @@ import {
   LogOut,
   MonitorSmartphone,
   RefreshCw,
-  Trash2
+  Trash2,
+  Users
 } from 'lucide-react';
 import { nativeClient } from '../../native/native-client';
 import type {
   AccountSessionSnapshot,
   RemoteAuthSessionInfo,
-  SyncStatusSnapshot
+  RemoteWorkspaceInfo,
+  SyncStatusSnapshot,
+  WorkspaceInviteInfo
 } from '../../types/todo';
 import {
   AccountEndpointEditor,
   AccountPasswordPanel,
   AccountRemoteSessionsPanel
 } from './AccountDevicePanels';
-import { AccountLoginForm } from './AccountLoginForm';
+import { AccountLoginForm, type AccountAuthMode } from './AccountLoginForm';
+import { AccountWorkspacePanel } from './AccountWorkspaceInvitesPanel';
 
 /**
- * Settings card managing multi-account workspace isolation, cloud sync actions,
- * and delegation to login, endpoint, device session, and password panels.
+ * Settings card managing multi-account workspace isolation, self-service registration,
+ * detached offline continuity, cloud sync actions, and workspace invitations.
  */
 export const AccountSyncCard: React.FC = () => {
   const [session, setSession] = useState<AccountSessionSnapshot | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatusSnapshot | null>(null);
-  const [authMethod, setAuthMethod] = useState<'password' | 'token'>('password');
+  const [authMethod, setAuthMethod] = useState<AccountAuthMode>('password');
   const [userIdInput, setUserIdInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
   const [displayNameInput, setDisplayNameInput] = useState('');
   const [endpointInput, setEndpointInput] = useState('');
   const [workspaceInput, setWorkspaceInput] = useState('default');
@@ -38,6 +43,9 @@ export const AccountSyncCard: React.FC = () => {
   const [editingEndpoint, setEditingEndpoint] = useState(false);
   const [showSessionsPanel, setShowSessionsPanel] = useState(false);
   const [remoteSessions, setRemoteSessions] = useState<RemoteAuthSessionInfo[]>([]);
+  const [showWorkspacesPanel, setShowWorkspacesPanel] = useState(false);
+  const [remoteWorkspaces, setRemoteWorkspaces] = useState<RemoteWorkspaceInfo[]>([]);
+  const [workspaceInvites, setWorkspaceInvites] = useState<WorkspaceInviteInfo[]>([]);
   const [showPasswordPanel, setShowPasswordPanel] = useState(false);
   const [oldPasswordInput, setOldPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -86,15 +94,25 @@ export const AccountSyncCard: React.FC = () => {
     };
   }, [loadAccountAndSync]);
 
-  const resetSessionToLocal = useCallback(async (message: string) => {
-    const nextSession = await nativeClient.accounts.logoutToLocal();
-    setSession(nextSession);
-    setSyncStatus(await nativeClient.sync.getStatus());
-    setShowSessionsPanel(false);
-    setShowPasswordPanel(false);
-    setEditingEndpoint(false);
-    setNotice(message);
-  }, []);
+  const resetSessionToLocal = useCallback(
+    async (message: string, keepLocalContinuity = true) => {
+      const nextSession = await nativeClient.accounts.logoutToLocal(keepLocalContinuity);
+      setSession(nextSession);
+      setSyncStatus(await nativeClient.sync.getStatus());
+      setShowSessionsPanel(false);
+      setShowWorkspacesPanel(false);
+      setShowPasswordPanel(false);
+      setEditingEndpoint(false);
+      if (keepLocalContinuity && nextSession.detachedUserId) {
+        setUserIdInput(nextSession.detachedUserId);
+        if (nextSession.detachedWorkspaceId) {
+          setWorkspaceInput(nextSession.detachedWorkspaceId);
+        }
+      }
+      setNotice(message);
+    },
+    []
+  );
 
   const handleSwitchAccount = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -105,7 +123,23 @@ export const AccountSyncCard: React.FC = () => {
     try {
       const targetWs = workspaceInput.trim() || 'default';
       let nextSession: AccountSessionSnapshot;
-      if (authMethod === 'password') {
+      if (authMethod === 'register') {
+        if (!nativeClient.accounts.registerWithPassword) {
+          throw new Error('当前运行环境不支持账号注册');
+        }
+        if (passwordInput !== confirmPasswordInput) {
+          throw new Error('两次输入的密码不一致');
+        }
+        nextSession = await nativeClient.accounts.registerWithPassword({
+          userId: userIdInput,
+          password: passwordInput,
+          displayName: displayNameInput.trim() || undefined,
+          serverEndpoint: endpointInput,
+          deviceLabel: 'TidyDesk Windows'
+        });
+        setPasswordInput('');
+        setConfirmPasswordInput('');
+      } else if (authMethod === 'password') {
         if (!nativeClient.accounts.loginWithPassword) {
           throw new Error('当前运行环境不支持密码登录');
         }
@@ -129,7 +163,136 @@ export const AccountSyncCard: React.FC = () => {
       }
       setSession(nextSession);
       setSyncStatus(await nativeClient.sync.getStatus());
-      setNotice(`已切换至账号工作区：${nextSession.activeUserId}（${nextSession.workspaceId}）`);
+      setNotice(
+        authMethod === 'register'
+          ? `注册成功并已承接本机数据至个人空间：${nextSession.activeUserId}（${nextSession.workspaceId}）`
+          : `已连接账号工作区：${nextSession.activeUserId}（${nextSession.workspaceId}）`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const refreshWorkspacesAndInvites = useCallback(async (targetWsId?: string) => {
+    if (!nativeClient.isAvailable() || !nativeClient.accounts.listWorkspaces) return;
+    const list = await nativeClient.accounts.listWorkspaces();
+    setRemoteWorkspaces(list);
+    const activeId = targetWsId || session?.workspaceId || 'default';
+    const currentWs = list.find(w => w.workspaceId === activeId);
+    if (
+      currentWs &&
+      !currentWs.isPrivate &&
+      (currentWs.role === 'owner' || currentWs.role === 'admin') &&
+      nativeClient.accounts.listWorkspaceInvites
+    ) {
+      setWorkspaceInvites(await nativeClient.accounts.listWorkspaceInvites(activeId));
+    } else {
+      setWorkspaceInvites([]);
+    }
+  }, [session?.workspaceId]);
+
+  const handleToggleWorkspacesPanel = async () => {
+    if (showWorkspacesPanel) {
+      setShowWorkspacesPanel(false);
+      return;
+    }
+    setBusyAction(true);
+    setError('');
+    try {
+      await refreshWorkspacesAndInvites();
+      setShowWorkspacesPanel(true);
+      setShowSessionsPanel(false);
+      setShowPasswordPanel(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleSwitchWorkspace = async (nextWorkspaceId: string) => {
+    if (!nativeClient.isAvailable() || !session?.activeUserId) return;
+    setBusyAction(true);
+    setError('');
+    setNotice('');
+    try {
+      const nextSession = await nativeClient.accounts.switchSession({
+        userId: session.activeUserId,
+        serverEndpoint: session.serverEndpoint || undefined,
+        workspaceId: nextWorkspaceId
+      });
+      setSession(nextSession);
+      setSyncStatus(await nativeClient.sync.getStatus());
+      await refreshWorkspacesAndInvites(nextWorkspaceId);
+      setNotice(`已切换工作区：${nextWorkspaceId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleCreateSharedWorkspace = async (title: string) => {
+    if (!nativeClient.accounts.createWorkspace || !session?.activeUserId) return;
+    setBusyAction(true);
+    setError('');
+    try {
+      const created = await nativeClient.accounts.createWorkspace(title);
+      await handleSwitchWorkspace(created.workspaceId);
+      setNotice(`已创建共享工作区「${created.title}」，您可以生成邀请码拉人加入`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleJoinWorkspaceByInvite = async (inviteCode: string) => {
+    if (!nativeClient.accounts.joinWorkspaceByInvite || !session?.activeUserId) return;
+    setBusyAction(true);
+    setError('');
+    try {
+      const joined = await nativeClient.accounts.joinWorkspaceByInvite(inviteCode);
+      await handleSwitchWorkspace(joined.workspaceId);
+      setNotice(`已加入共享工作区「${joined.title}」（权限：${joined.role}）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleCreateInvite = async (role: 'admin' | 'member' | 'viewer', maxUses: number) => {
+    if (!nativeClient.accounts.createWorkspaceInvite || !session?.workspaceId) return;
+    setBusyAction(true);
+    setError('');
+    try {
+      const created = await nativeClient.accounts.createWorkspaceInvite({
+        workspaceId: session.workspaceId,
+        role,
+        maxUses,
+        expiresInHours: 72
+      });
+      await refreshWorkspacesAndInvites(session.workspaceId);
+      setNotice(`已生成邀请码 ${created.inviteCode}（角色 ${created.role}）`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleRevokeInvite = async (inviteCode: string) => {
+    if (!nativeClient.accounts.revokeWorkspaceInvite || !session?.workspaceId) return;
+    if (!confirm(`确定撤回邀请码 ${inviteCode} 吗？撤回后他人将无法凭此码加入。`)) return;
+    setBusyAction(true);
+    setError('');
+    try {
+      await nativeClient.accounts.revokeWorkspaceInvite(session.workspaceId, inviteCode);
+      await refreshWorkspacesAndInvites(session.workspaceId);
+      setNotice(`已撤回邀请码 ${inviteCode}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -159,6 +322,10 @@ export const AccountSyncCard: React.FC = () => {
 
   const handleRevokeSession = async (tokenId: string, isCurrent = false) => {
     if (!nativeClient.isAvailable() || !nativeClient.accounts.revokeRemoteSession) return;
+    const msg = isCurrent
+      ? '确定吊销当前本机设备会话吗？本机将立即退出登录，需要重新验证。'
+      : `确定下线并吊销设备会话 ${tokenId} 吗？`;
+    if (!confirm(msg)) return;
     setBusyAction(true);
     setError('');
     try {
@@ -205,13 +372,26 @@ export const AccountSyncCard: React.FC = () => {
     }
   };
 
-  const handleLogoutToLocal = async () => {
+  const handleLogoutToLocal = async (keepLocalContinuity = true) => {
     if (!nativeClient.isAvailable()) return;
+    if (!keepLocalContinuity) {
+      const pending = syncStatus?.pendingCount ?? 0;
+      const warnMsg =
+        pending > 0
+          ? `当前仍有 ${pending} 条离线改动尚未同步到云端。\n\n切回独立的空白本地模式后界面将暂时看不到这些改动（重新登录原账号可找回并继续同步），确定切换吗？`
+          : '确定切回独立的纯本地默认工作区吗？重新登录原账号可随时恢复原数据视图。';
+      if (!confirm(warnMsg)) return;
+    }
     setBusyAction(true);
     setError('');
     setNotice('');
     try {
-      await resetSessionToLocal('已切回纯本地默认工作区');
+      await resetSessionToLocal(
+        keepLocalContinuity
+          ? '已断开云端登录，当前最新数据仍保留在本地供继续编辑（同账号重登将自动接续同步）'
+          : '已注销并切回独立的纯本地默认工作区',
+        keepLocalContinuity
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -282,6 +462,14 @@ export const AccountSyncCard: React.FC = () => {
 
   const handleClearOutbox = async () => {
     if (!nativeClient.isAvailable()) return;
+    const pending = syncStatus?.pendingCount ?? 0;
+    if (
+      !confirm(
+        `确定清空待同步队列中的 ${pending} 条本地未上传变更吗？\n\n清空后这些本地修改将不会再自动推送到云端。`
+      )
+    ) {
+      return;
+    }
     setBusyAction(true);
     setError('');
     setNotice('');
@@ -337,14 +525,31 @@ export const AccountSyncCard: React.FC = () => {
             <button
               type="button"
               disabled={busyAction}
-              onClick={() => void handleLogoutToLocal()}
+              onClick={() => void handleLogoutToLocal(true)}
               className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-white/[0.1] hover:text-white disabled:opacity-50"
             >
               <LogOut size={12} />
-              切回本地
+              退出账号（保留数据）
             </button>
           )}
         </div>
+
+        {!isAccountMode && session?.detachedUserId && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+            <span>
+              当前正离线延续使用账号 <span className="font-mono font-semibold">{session.detachedUserId}</span>
+              （{session.detachedWorkspaceId || 'default'}）的最新数据；本机编辑会暂存队列（待推 {syncStatus?.pendingCount ?? 0} 条），同账号重登即可同步上云。
+            </span>
+            <button
+              type="button"
+              disabled={busyAction}
+              onClick={() => void handleLogoutToLocal(false)}
+              className="rounded border border-amber-300/30 bg-black/25 px-2 py-0.5 text-[10px] font-semibold text-amber-100 hover:bg-black/40 disabled:opacity-50"
+            >
+              彻底切回独立空白本地
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-md border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-100">
@@ -403,6 +608,21 @@ export const AccountSyncCard: React.FC = () => {
               />
             )}
 
+            {showWorkspacesPanel && (
+              <AccountWorkspacePanel
+                activeWorkspaceId={session?.workspaceId || 'default'}
+                workspaces={remoteWorkspaces}
+                invites={workspaceInvites}
+                busyAction={busyAction}
+                onSwitchWorkspace={wsId => void handleSwitchWorkspace(wsId)}
+                onCreateWorkspace={handleCreateSharedWorkspace}
+                onJoinByInvite={handleJoinWorkspaceByInvite}
+                onCreateInvite={handleCreateInvite}
+                onRevokeInvite={handleRevokeInvite}
+                onRefreshWorkspaces={() => refreshWorkspacesAndInvites()}
+              />
+            )}
+
             {showPasswordPanel && (
               <AccountPasswordPanel
                 oldPasswordInput={oldPasswordInput}
@@ -458,6 +678,17 @@ export const AccountSyncCard: React.FC = () => {
               >
                 配置服务端
               </button>
+              {session?.serverEndpoint && nativeClient.accounts.listWorkspaces && (
+                <button
+                  type="button"
+                  disabled={busyAction}
+                  onClick={() => void handleToggleWorkspacesPanel()}
+                  className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
+                >
+                  <Users size={12} />
+                  工作区与邀请
+                </button>
+              )}
               {session?.serverEndpoint && nativeClient.accounts.listRemoteSessions && (
                 <button
                   type="button"
@@ -476,6 +707,7 @@ export const AccountSyncCard: React.FC = () => {
                   onClick={() => {
                     setShowPasswordPanel(prev => !prev);
                     setShowSessionsPanel(false);
+                    setShowWorkspacesPanel(false);
                   }}
                   className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.05] px-2.5 py-1.5 font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-50"
                 >
@@ -513,6 +745,8 @@ export const AccountSyncCard: React.FC = () => {
             onUserIdChange={setUserIdInput}
             passwordInput={passwordInput}
             onPasswordChange={setPasswordInput}
+            confirmPasswordInput={confirmPasswordInput}
+            onConfirmPasswordChange={setConfirmPasswordInput}
             displayNameInput={displayNameInput}
             onDisplayNameChange={setDisplayNameInput}
             endpointInput={endpointInput}

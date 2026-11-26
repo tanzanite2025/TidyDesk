@@ -314,7 +314,7 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
       onModuleState: () => undefined
     },
     toolWindows: {
-      openTodo: () => unsupportedDesktop('toolWindows'),
+      openTodo: (_cardId?: string) => unsupportedDesktop('toolWindows'),
       closeTodo: () => unsupportedDesktop('toolWindows')
     },
     resident: {

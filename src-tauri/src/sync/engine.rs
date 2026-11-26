@@ -6,14 +6,16 @@ use super::outbox::{
 use crate::accounts::credentials::load_account_token;
 use crate::accounts::session::load_session;
 use crate::todos::{
-    apply_synced_todo_changes, card_attachments_dir, find_remote_attachment_blob,
+    apply_synced_card_comments, apply_synced_todo_changes, build_desktop_comment_notification,
+    card_attachments_dir, emit_unread_comment_summary, find_remote_attachment_blob,
     MissingThumbTarget,
 };
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 #[derive(Default)]
 pub struct SyncExecutionLockState(pub tauri::async_runtime::Mutex<()>);
@@ -200,11 +202,24 @@ pub async fn execute_account_sync(app: &AppHandle) -> Result<SyncExecutionReport
     let remaining_pending = remove_acked_outbox_entries(app, &acked_keys)?;
 
     let mut still_unsynced_cards = HashSet::new();
+    let mut still_unsynced_comments = HashSet::new();
     for remaining in read_outbox_entries(app)? {
-        if remaining.entity_kind == OutboxEntityKind::Card {
-            still_unsynced_cards.insert(remaining.entity_id);
+        match remaining.entity_kind {
+            OutboxEntityKind::Card => {
+                still_unsynced_cards.insert(remaining.entity_id);
+            }
+            OutboxEntityKind::CardComment => {
+                still_unsynced_comments.insert(remaining.entity_id);
+            }
+            _ => {}
         }
     }
+
+    let had_prior_cursor = session
+        .last_sync_cursor
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|v| !v.is_empty());
 
     let pull_res = client
         .pull_changes(session.last_sync_cursor.as_deref())
@@ -234,6 +249,13 @@ pub async fn execute_account_sync(app: &AppHandle) -> Result<SyncExecutionReport
 
     let fetched_thumbs = prefetch_missing_thumbnails(app, &client, missing_thumbs).await;
 
+    let comment_sync_res = apply_synced_card_comments(
+        app,
+        &pull_res.card_comments,
+        &pull_res.removed_card_comment_ids,
+        &still_unsynced_comments,
+    )?;
+
     crate::quick_notes::apply_pulled_quick_notes(
         app,
         &pull_res.quick_notes,
@@ -250,6 +272,34 @@ pub async fn execute_account_sync(app: &AppHandle) -> Result<SyncExecutionReport
 
     crate::accounts::update_sync_cursor_and_timestamp(app, next_cursor, crate::timestamp_string())?;
     crate::todos::commands::refresh_and_emit_active_todo_state(app)?;
+    let unread_summary = emit_unread_comment_summary(app)?;
+
+    if had_prior_cursor && !comment_sync_res.new_alerts.is_empty() {
+        if let Some(notif) = build_desktop_comment_notification(&comment_sync_res.new_alerts) {
+            if let Err(err) = app
+                .notification()
+                .builder()
+                .title(&notif.title)
+                .body(&notif.body)
+                .auto_cancel()
+                .show()
+            {
+                eprintln!("[TIDYDESK] Failed to show comment notification: {err}");
+            }
+            let _ = app.emit(
+                "todo-comment-notification",
+                json!({
+                    "title": notif.title,
+                    "body": notif.body,
+                    "cardId": notif.card_id,
+                    "mentionCount": notif.mention_count,
+                    "commentCount": notif.comment_count,
+                    "unreadTotal": unread_summary.unread_total,
+                    "mentionTotal": unread_summary.mention_total,
+                }),
+            );
+        }
+    }
 
     Ok(SyncExecutionReport {
         pushed_count: push_res.acked.len(),

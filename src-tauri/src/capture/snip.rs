@@ -1,12 +1,15 @@
 use super::monitor::{
-    active_monitor, initial_sticker_bounds, normalize_rect, snip_open_monitor, SnipRectPayload,
+    active_monitor, initial_sticker_bounds, normalize_rect, snip_open_monitor, MonitorSnapshot,
+    SnipRectPayload,
 };
+use super::output::{copy_png_bytes_to_clipboard, save_png_bytes_with_dialog, validate_png_bytes};
 use super::screen_gdi::{capture_monitor_region_png, encode_rgba_png_fast};
 use super::SNIP_WINDOW_LABEL;
 use crate::stickers::{
-    create_sticker_from_png, ensure_storage, notify_sticker_message, CapturedSticker,
-    StickerWindowBounds,
+    create_sticker_from_png, ensure_storage, notify_sticker_message, StickerWindowBounds,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,12 +36,53 @@ pub enum SnipTarget {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SnipOutputAction {
+    #[default]
+    Default,
+    Copy,
+    PinSticker,
+    SaveAs,
+    StashPending,
+    AttachTodo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnipCompletePayload {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub action: SnipOutputAction,
+    #[serde(default)]
+    pub has_annotations: bool,
+    #[serde(default)]
+    pub composited_png_base64: Option<String>,
+    #[serde(default)]
+    pub composited_png_bytes: Option<Vec<u8>>,
+    #[serde(default)]
+    pub session_id: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct SnipCompleteResult {
+    action: SnipOutputAction,
+    sticker_id: Option<String>,
+    pasted: bool,
+    saved_path: Option<String>,
+    canceled: bool,
+}
+
 #[derive(Default)]
 pub struct SnipCaptureState {
     pub capture_in_flight: AtomicBool,
     pub snip_session_active: AtomicBool,
     pub frozen_image_version: AtomicU64,
     pub frozen_image_bytes: Mutex<Option<(u64, Arc<Vec<u8>>)>>,
+    pub frozen_monitor: Mutex<Option<MonitorSnapshot>>,
     pub frozen_image_error: Mutex<Option<String>>,
     pub pending_sticker: Mutex<Option<PendingSticker>>,
     pub snip_target: Mutex<SnipTarget>,
@@ -85,7 +129,7 @@ pub fn open_snip_window_for_todo_card(
         return Err("截屏正在进行中，请先完成或取消当前截屏".to_string());
     }
     crate::tool_windows::hide_todo_window_for_snip(app)?;
-    std::thread::sleep(Duration::from_millis(90));
+    std::thread::sleep(Duration::from_millis(50));
     if let Err(err) = open_snip_window_with_target(
         app,
         SnipTarget::TodoCard {
@@ -134,11 +178,16 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
                 .frozen_image_bytes
                 .lock()
                 .map_err(|_| "failed to lock snip background image".to_string())?;
+            let mut frozen_monitor = state
+                .frozen_monitor
+                .lock()
+                .map_err(|_| "failed to lock snip monitor snapshot".to_string())?;
             let mut error = state
                 .frozen_image_error
                 .lock()
                 .map_err(|_| "failed to lock snip background error".to_string())?;
             *frozen = Some((version, Arc::new(png)));
+            *frozen_monitor = Some(monitor);
             *error = None;
         }
         Err(err) => {
@@ -146,11 +195,16 @@ fn open_snip_window_with_target(app: &AppHandle, target: SnipTarget) -> Result<(
                 .frozen_image_bytes
                 .lock()
                 .map_err(|_| "failed to lock snip background image".to_string())?;
+            let mut frozen_monitor = state
+                .frozen_monitor
+                .lock()
+                .map_err(|_| "failed to lock snip monitor snapshot".to_string())?;
             let mut error = state
                 .frozen_image_error
                 .lock()
                 .map_err(|_| "failed to lock snip background error".to_string())?;
             *frozen = None;
+            *frozen_monitor = Some(monitor);
             *error = Some(err);
         }
     }
@@ -171,6 +225,31 @@ fn require_snip_window(window: &WebviewWindow, command: &str) -> Result<(), Stri
 pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Result<Value, String> {
     require_snip_window(&window, "snip_get_background_image")?;
     let state = app.state::<SnipCaptureState>();
+    let target_kind = {
+        let guard = state
+            .snip_target
+            .lock()
+            .map_err(|_| "failed to lock snip target".to_string())?;
+        match &*guard {
+            SnipTarget::TodoCard { .. } => "todo_card",
+            SnipTarget::Sticker => "standard",
+        }
+    };
+    let monitor_json = {
+        let guard = state
+            .frozen_monitor
+            .lock()
+            .map_err(|_| "failed to lock snip monitor snapshot".to_string())?;
+        guard.as_ref().map(|m| {
+            json!({
+                "width": m.width,
+                "height": m.height,
+                "logicalWidth": m.width as f64 / m.scale_factor.max(0.1),
+                "logicalHeight": m.height as f64 / m.scale_factor.max(0.1),
+                "scaleFactor": m.scale_factor,
+            })
+        })
+    };
     let frozen = state
         .frozen_image_bytes
         .lock()
@@ -179,7 +258,11 @@ pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Resul
         let image_url = crate::asset_protocol::asset_url(&format!("snip/current?v={version}"));
         Ok(json!({
             "success": true,
-            "imageUrl": image_url
+            "sessionId": version,
+            "imageUrl": image_url,
+            "targetKind": target_kind,
+            "monitor": monitor_json,
+            "snapRects": [],
         }))
     } else {
         let error = state
@@ -188,7 +271,10 @@ pub fn snip_get_background_image(window: WebviewWindow, app: AppHandle) -> Resul
             .map_err(|_| "failed to lock snip background error".to_string())?;
         Ok(json!({
             "success": false,
+            "sessionId": Value::Null,
             "imageUrl": Value::Null,
+            "targetKind": target_kind,
+            "monitor": monitor_json,
             "error": error.as_deref().unwrap_or("No screenshot background is available")
         }))
     }
@@ -206,7 +292,7 @@ fn take_snip_target(app: &AppHandle) -> SnipTarget {
 pub async fn snip_complete_selection(
     window: WebviewWindow,
     app: AppHandle,
-    payload: SnipRectPayload,
+    payload: SnipCompletePayload,
 ) -> Result<Value, String> {
     require_snip_window(&window, "snip_complete_selection")?;
     begin_snip_capture(&app)?;
@@ -240,8 +326,11 @@ pub async fn snip_complete_selection(
     let result = result?;
     Ok(json!({
         "success": true,
+        "action": result.action,
         "stickerId": result.sticker_id,
         "pasted": result.pasted,
+        "savedPath": result.saved_path,
+        "canceled": result.canceled,
     }))
 }
 
@@ -373,21 +462,103 @@ fn save_pending_sticker(
     Ok(())
 }
 
+fn resolve_effective_action(
+    requested: SnipOutputAction,
+    target: &SnipTarget,
+    auto_stick_after_snip: bool,
+) -> SnipOutputAction {
+    match requested {
+        SnipOutputAction::Default => match target {
+            SnipTarget::TodoCard { .. } => SnipOutputAction::AttachTodo,
+            SnipTarget::Sticker => {
+                if auto_stick_after_snip {
+                    SnipOutputAction::PinSticker
+                } else {
+                    SnipOutputAction::StashPending
+                }
+            }
+        },
+        other => other,
+    }
+}
+
+fn resolve_composited_or_guard(
+    has_annotations: bool,
+    composited_png_base64: Option<String>,
+    composited_png_bytes: Option<Vec<u8>>,
+) -> Result<Option<Vec<u8>>, String> {
+    let decoded = if let Some(b64) = composited_png_base64 {
+        let bytes = BASE64_STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|err| format!("[CRITICAL] Failed to decode composited PNG base64: {err}"))?;
+        Some(bytes)
+    } else {
+        composited_png_bytes
+    };
+
+    match decoded {
+        Some(bytes) => {
+            validate_png_bytes(&bytes)?;
+            Ok(Some(bytes))
+        }
+        None if has_annotations => Err(
+            "[CRITICAL] Annotated screenshot requires valid composited PNG payload; refusing raw crop fallback"
+                .to_string(),
+        ),
+        None => Ok(None),
+    }
+}
+
 fn capture_selection(
     app: &AppHandle,
-    payload: SnipRectPayload,
+    payload: SnipCompletePayload,
     target: SnipTarget,
-) -> Result<CapturedSticker, String> {
-    let monitor = active_monitor(app)?;
-    let normalized = normalize_rect(payload, &monitor)?;
+) -> Result<SnipCompleteResult, String> {
+    // Validate annotated payload first before consuming monitor or frozen session state.
+    let composited = resolve_composited_or_guard(
+        payload.has_annotations,
+        payload.composited_png_base64,
+        payload.composited_png_bytes,
+    )?;
 
     let state = app.state::<SnipCaptureState>();
+    let monitor = {
+        let mut frozen_monitor = state
+            .frozen_monitor
+            .lock()
+            .map_err(|_| "failed to lock snip monitor snapshot".to_string())?;
+        match frozen_monitor.take() {
+            Some(snapshot) => snapshot,
+            None => active_monitor(app)?,
+        }
+    };
+    let rect_payload = SnipRectPayload {
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+    };
+    let normalized = normalize_rect(rect_payload, &monitor)?;
+
     let png = {
         let mut frozen = state
             .frozen_image_bytes
             .lock()
             .map_err(|_| "failed to lock snip background image".to_string())?;
-        if let Some((_, png_bytes)) = frozen.take() {
+        let frozen_entry = frozen.take();
+        if let (Some(req_session), Some((frozen_version, _))) =
+            (payload.session_id, frozen_entry.as_ref())
+        {
+            if req_session != *frozen_version {
+                return Err(
+                    "[CRITICAL] Screenshot session mismatch; please retry screenshot".to_string(),
+                );
+            }
+        }
+
+        if let Some(png_bytes) = composited {
+            png_bytes
+        } else if let Some((_, png_bytes)) = frozen_entry {
             let img = image::load_from_memory(&png_bytes)
                 .map_err(|err| format!("failed to load frozen image: {err}"))?;
 
@@ -414,46 +585,111 @@ fn capture_selection(
         }
     };
 
+    // Always close the topmost overlay and purge cached frozen buffer before any OS dialog or output sink runs.
     crate::tool_windows::close_snip_window(app)?;
     clear_frozen_background(app)?;
 
-    if let SnipTarget::TodoCard {
-        card_id,
-        subtask_id,
-    } = target
-    {
-        crate::todos::attach_png_to_todo_card(
-            app,
-            &card_id,
-            subtask_id.as_deref(),
-            "screenshot.png",
-            &png,
-        )?;
-        return Ok(CapturedSticker {
-            sticker_id: None,
-            pasted: false,
-        });
-    }
+    let auto_stick = crate::resident::read_resident_settings(app).auto_stick_after_snip;
+    let action = resolve_effective_action(payload.action, &target, auto_stick);
 
-    ensure_storage(app)?;
-    let bounds = initial_sticker_bounds(&monitor, &normalized);
-    if crate::resident::read_resident_settings(app).auto_stick_after_snip {
-        let sticker_id = create_sticker_from_png(app, &png, bounds)?;
-        Ok(CapturedSticker {
-            sticker_id: Some(sticker_id),
-            pasted: true,
-        })
-    } else {
-        save_pending_sticker(app, &png, bounds)?;
-        notify_sticker_message(
-            app,
-            "截图已保存为待贴",
-            "按 Ctrl+Alt+V 时才会把这张截图贴到桌面。",
-        );
-        Ok(CapturedSticker {
-            sticker_id: None,
-            pasted: false,
-        })
+    match action {
+        SnipOutputAction::AttachTodo => {
+            let SnipTarget::TodoCard {
+                card_id,
+                subtask_id,
+            } = target
+            else {
+                return Err(
+                    "[CRITICAL] attach_todo action requires active TodoCard snip target"
+                        .to_string(),
+                );
+            };
+            crate::todos::attach_png_to_todo_card(
+                app,
+                &card_id,
+                subtask_id.as_deref(),
+                "screenshot.png",
+                &png,
+            )?;
+            Ok(SnipCompleteResult {
+                action,
+                sticker_id: None,
+                pasted: false,
+                saved_path: None,
+                canceled: false,
+            })
+        }
+        SnipOutputAction::Copy => {
+            copy_png_bytes_to_clipboard(&png)?;
+            notify_sticker_message(
+                app,
+                "截图已复制到剪贴板",
+                "可以直接粘贴到聊天窗口或文档中。",
+            );
+            Ok(SnipCompleteResult {
+                action,
+                sticker_id: None,
+                pasted: false,
+                saved_path: None,
+                canceled: false,
+            })
+        }
+        SnipOutputAction::SaveAs => {
+            let suggested_name = format!("TidyDesk-{}.png", crate::timestamp_string());
+            match save_png_bytes_with_dialog(&png, "保存截图", &suggested_name)? {
+                Some(file_path) => {
+                    notify_sticker_message(
+                        app,
+                        "截图已保存",
+                        &format!("已保存到 {}", file_path.display()),
+                    );
+                    Ok(SnipCompleteResult {
+                        action,
+                        sticker_id: None,
+                        pasted: false,
+                        saved_path: Some(file_path.display().to_string()),
+                        canceled: false,
+                    })
+                }
+                None => Ok(SnipCompleteResult {
+                    action,
+                    sticker_id: None,
+                    pasted: false,
+                    saved_path: None,
+                    canceled: true,
+                }),
+            }
+        }
+        SnipOutputAction::PinSticker => {
+            ensure_storage(app)?;
+            let bounds = initial_sticker_bounds(&monitor, &normalized);
+            let sticker_id = create_sticker_from_png(app, &png, bounds)?;
+            Ok(SnipCompleteResult {
+                action,
+                sticker_id: Some(sticker_id),
+                pasted: true,
+                saved_path: None,
+                canceled: false,
+            })
+        }
+        SnipOutputAction::StashPending => {
+            ensure_storage(app)?;
+            let bounds = initial_sticker_bounds(&monitor, &normalized);
+            save_pending_sticker(app, &png, bounds)?;
+            notify_sticker_message(
+                app,
+                "截图已保存为待贴",
+                "按 Ctrl+Alt+V 时才会把这张截图贴到桌面。",
+            );
+            Ok(SnipCompleteResult {
+                action,
+                sticker_id: None,
+                pasted: false,
+                saved_path: None,
+                canceled: false,
+            })
+        }
+        SnipOutputAction::Default => unreachable!("Default must resolve before output dispatch"),
     }
 }
 
@@ -463,11 +699,16 @@ fn clear_frozen_background(app: &AppHandle) -> Result<(), String> {
         .frozen_image_bytes
         .lock()
         .map_err(|_| "failed to lock snip background image".to_string())?;
+    let mut frozen_monitor = state
+        .frozen_monitor
+        .lock()
+        .map_err(|_| "failed to lock snip monitor snapshot".to_string())?;
     let mut error = state
         .frozen_image_error
         .lock()
         .map_err(|_| "failed to lock snip background error".to_string())?;
     frozen.take();
+    frozen_monitor.take();
     *error = None;
     Ok(())
 }
@@ -513,4 +754,67 @@ pub fn is_snip_capture_in_flight(app: &AppHandle) -> bool {
     app.state::<SnipCaptureState>()
         .capture_in_flight
         .load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_effective_action_preserves_explicit_or_legacy_defaults() {
+        let todo_target = SnipTarget::TodoCard {
+            card_id: "c1".to_string(),
+            subtask_id: None,
+        };
+        assert_eq!(
+            resolve_effective_action(SnipOutputAction::Default, &todo_target, false),
+            SnipOutputAction::AttachTodo
+        );
+        assert_eq!(
+            resolve_effective_action(SnipOutputAction::Copy, &todo_target, false),
+            SnipOutputAction::Copy
+        );
+        assert_eq!(
+            resolve_effective_action(SnipOutputAction::Default, &SnipTarget::Sticker, true),
+            SnipOutputAction::PinSticker
+        );
+        assert_eq!(
+            resolve_effective_action(SnipOutputAction::Default, &SnipTarget::Sticker, false),
+            SnipOutputAction::StashPending
+        );
+        assert_eq!(
+            resolve_effective_action(SnipOutputAction::SaveAs, &SnipTarget::Sticker, false),
+            SnipOutputAction::SaveAs
+        );
+    }
+
+    #[test]
+    fn resolve_composited_or_guard_fails_loudly_when_annotated_bytes_missing_or_corrupt() {
+        let err = resolve_composited_or_guard(true, None, None)
+            .expect_err("annotated snip without bytes must fail loudly");
+        assert!(err.contains("[CRITICAL]"));
+
+        let corrupt = resolve_composited_or_guard(true, None, Some(b"bad-png".to_vec()))
+            .expect_err("corrupt PNG bytes must fail loudly");
+        assert!(corrupt.contains("[CRITICAL]"));
+
+        let corrupt_b64 =
+            resolve_composited_or_guard(true, Some("!!!not-base64!!!".to_string()), None)
+                .expect_err("corrupt base64 must fail loudly");
+        assert!(corrupt_b64.contains("[CRITICAL]"));
+
+        assert!(resolve_composited_or_guard(false, None, None)
+            .expect("raw fast path should succeed")
+            .is_none());
+
+        let png = encode_rgba_png_fast(&[255u8; 16], 2, 2).expect("valid rgba png");
+        let b64 = BASE64_STANDARD.encode(&png);
+        let resolved_b64 = resolve_composited_or_guard(true, Some(b64), None)
+            .expect("valid annotated base64 png should pass");
+        assert_eq!(resolved_b64.as_deref(), Some(png.as_slice()));
+
+        let resolved = resolve_composited_or_guard(true, None, Some(png.clone()))
+            .expect("valid annotated png should pass");
+        assert_eq!(resolved.as_deref(), Some(png.as_slice()));
+    }
 }

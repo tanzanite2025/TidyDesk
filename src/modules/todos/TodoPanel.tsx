@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Plus, RefreshCw, X } from 'lucide-react';
 import { TodoProvider, useTodos } from '../../context/TodoContext';
 import { nativeClient } from '../../native/native-client';
 import type { TodoColumn } from '../../types/todo';
+import { clearCommentDraftCache } from './TodoCommentsSection';
 import { TodoCardModal } from './TodoCardModal';
 import { TodoCardTile } from './TodoCardTile';
+import { TodoCommentNotificationBanner, TodoUnreadBell } from './TodoUnreadBell';
 
 const TodoPanelInner: React.FC = () => {
   const {
@@ -12,11 +14,18 @@ const TodoPanelInner: React.FC = () => {
     cards,
     cardsByColumn,
     counts,
+    unreadSummary,
+    latestCommentNotification,
     isLoading,
     error,
     refreshTodos,
     createCard,
     moveCard,
+    markCardCommentsRead,
+    markAllCommentsRead,
+    consumePendingFocusCard,
+    onFocusCardRequested,
+    dismissCommentNotification,
     clearError
   } = useTodos();
 
@@ -25,6 +34,23 @@ const TodoPanelInner: React.FC = () => {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [createModalColumnId, setCreateModalColumnId] = useState<string | null>(null);
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null);
+  const [boardNotice, setBoardNotice] = useState<string | null>(null);
+  const [pendingFocusCardId, setPendingFocusCardId] = useState<string | null>(null);
+
+  const openCardSafely = useCallback(
+    (cardId: string) => {
+      const target = cards.find(card => card.id === cardId && !card.deletedAt && !card.archived);
+      if (!target) {
+        setBoardNotice('该待办卡片已被删除或归档，已自动清理失效提醒。');
+        void markCardCommentsRead(cardId);
+        return;
+      }
+      setBoardNotice(null);
+      setCreateModalColumnId(null);
+      setSelectedCardId(cardId);
+    },
+    [cards, markCardCommentsRead]
+  );
 
   const selectedCardSummary = useMemo(() => {
     if (!selectedCardId || !board) return null;
@@ -37,11 +63,33 @@ const TodoPanelInner: React.FC = () => {
 
   useEffect(() => {
     if (!nativeClient.isAvailable()) return undefined;
-    return nativeClient.accounts.onSessionChanged(() => {
+    const unsubSession = nativeClient.accounts.onSessionChanged(() => {
+      clearCommentDraftCache();
       setSelectedCardId(null);
       setCreateModalColumnId(null);
+      setPendingFocusCardId(null);
     });
-  }, []);
+    const unsubFocus = onFocusCardRequested(cardId => {
+      void consumePendingFocusCard();
+      setPendingFocusCardId(cardId);
+    });
+    void consumePendingFocusCard().then(pendingCardId => {
+      if (pendingCardId) {
+        setPendingFocusCardId(pendingCardId);
+      }
+    });
+    return () => {
+      unsubSession?.();
+      unsubFocus();
+    };
+  }, [consumePendingFocusCard, onFocusCardRequested]);
+
+  useEffect(() => {
+    if (!pendingFocusCardId || isLoading || !board) return;
+    const targetId = pendingFocusCardId;
+    setPendingFocusCardId(null);
+    openCardSafely(targetId);
+  }, [board, isLoading, openCardSafely, pendingFocusCardId]);
 
   const submitQuickCard = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -96,6 +144,11 @@ const TodoPanelInner: React.FC = () => {
           className="flex items-center gap-1"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
+          <TodoUnreadBell
+            unreadSummary={unreadSummary}
+            onOpenCard={openCardSafely}
+            onMarkAllRead={() => void markAllCommentsRead()}
+          />
           <button
             type="button"
             onClick={refreshTodos}
@@ -150,11 +203,23 @@ const TodoPanelInner: React.FC = () => {
         </form>
       </div>
 
-      {error && (
+      <TodoCommentNotificationBanner
+        notification={latestCommentNotification}
+        onOpenCard={openCardSafely}
+        onDismiss={dismissCommentNotification}
+      />
+
+      {(boardNotice || error) && (
         <div className="mx-auto mt-3 flex w-full max-w-[1680px] items-center gap-2 px-5">
           <div className="flex flex-1 items-center gap-2 rounded-lg border border-rose-400/20 bg-rose-500/10 p-3 text-[11px] text-rose-100">
-            <span className="flex-1">{error}</span>
-            <button type="button" onClick={clearError}>
+            <span className="flex-1">{boardNotice || error}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setBoardNotice(null);
+                clearError();
+              }}
+            >
               <X size={13} />
             </button>
           </div>

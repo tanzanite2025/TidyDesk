@@ -2,21 +2,30 @@ import React, { createContext, ReactNode, useCallback, useContext, useEffect, us
 import type { NativeClient } from '../native/types';
 import { compareCardsByPosition } from '../native/web-http-helpers';
 import {
+  AccountSessionSnapshot,
   AddTodoAttachmentBytesInput,
+  AddTodoCommentInput,
   CreateTodoCardInput,
+  DeleteTodoCommentInput,
   MoveTodoCardInput,
   TodoBoard,
   TodoCard,
+  TodoCardComment,
+  TodoCommentNotificationPayload,
   TodoCounts,
   TodoState,
+  TodoUnreadCommentSummary,
   UpdateTodoAttachmentMetaInput,
-  UpdateTodoCardInput
+  UpdateTodoCardInput,
+  WorkspaceMemberInfo
 } from '../types/todo';
 
 interface TodoContextType {
   board: TodoBoard | null;
   cards: TodoCard[];
   counts: TodoCounts;
+  unreadSummary: TodoUnreadCommentSummary;
+  latestCommentNotification: TodoCommentNotificationPayload | null;
   isLoading: boolean;
   isUploadingAttachment: boolean;
   error: string | null;
@@ -33,12 +42,28 @@ interface TodoContextType {
   setCardCover: (cardId: string, attachmentId: string | null) => Promise<boolean>;
   updateAttachmentMeta: (payload: UpdateTodoAttachmentMetaInput) => Promise<boolean>;
   startSnipForCard: (cardId: string, subtaskId?: string | null) => Promise<void>;
+  listCardComments: (cardId: string) => Promise<TodoCardComment[]>;
+  addCardComment: (payload: AddTodoCommentInput) => Promise<TodoCardComment>;
+  deleteCardComment: (payload: DeleteTodoCommentInput) => Promise<TodoCardComment[]>;
+  markCardCommentsRead: (cardId: string) => Promise<void>;
+  markAllCommentsRead: () => Promise<void>;
+  consumePendingFocusCard: () => Promise<string | null>;
+  onFocusCardRequested: (callback: (cardId: string) => void) => () => void;
+  dismissCommentNotification: () => void;
+  listWorkspaceMembers: (workspaceId?: string) => Promise<WorkspaceMemberInfo[]>;
+  getAccountSession: () => Promise<AccountSessionSnapshot | null>;
+  onCommentsUpdated: (callback: (payload: { cardIds: string[] }) => void) => () => void;
   clearError: () => void;
 }
 
 const TodoContext = createContext<TodoContextType | undefined>(undefined);
 
 const emptyCounts: TodoCounts = { total: 0, open: 0, done: 0 };
+const emptyUnreadSummary: TodoUnreadCommentSummary = {
+  unreadTotal: 0,
+  mentionTotal: 0,
+  items: []
+};
 const simulatedTodoState: TodoState = {
   activeBoardId: 'sim-board',
   boards: [{
@@ -134,6 +159,9 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   const [board, setBoard] = useState<TodoBoard | null>(null);
   const [cards, setCards] = useState<TodoCard[]>([]);
   const [counts, setCounts] = useState<TodoCounts>(emptyCounts);
+  const [unreadSummary, setUnreadSummary] = useState<TodoUnreadCommentSummary>(emptyUnreadSummary);
+  const [latestCommentNotification, setLatestCommentNotification] =
+    useState<TodoCommentNotificationPayload | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,6 +169,7 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
   const refreshTodos = useCallback(async () => {
     if (!client.isAvailable()) {
       applyTodoState(simulatedTodoState, setBoard, setCards, setCounts);
+      setUnreadSummary(emptyUnreadSummary);
       return;
     }
 
@@ -149,6 +178,8 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     try {
       const state = await client.todos.readState();
       applyTodoState(state, setBoard, setCards, setCounts);
+      const unread = await client.todos.getUnreadCommentSummary();
+      setUnreadSummary(unread);
     } catch (err) {
       setError(`读取待办失败: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -179,16 +210,28 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
         setError(`截屏添加到待办失败: ${payload.error}`);
       }
     });
+    const unsubUnread = client.todos.onUnreadCommentsUpdated?.(summary => {
+      setUnreadSummary(summary || emptyUnreadSummary);
+    });
+    const unsubNotif = client.todos.onCommentNotification?.(payload => {
+      if (payload?.cardId) {
+        setLatestCommentNotification(payload);
+      }
+    });
     const unsubAccount = client.accounts.onSessionChanged(() => {
       setBoard(null);
       setCards([]);
       setCounts({ total: 0, open: 0, done: 0 });
+      setUnreadSummary(emptyUnreadSummary);
+      setLatestCommentNotification(null);
       void refreshTodos();
     });
     return () => {
       unsubCounts?.();
       unsubState?.();
       unsubSnipError?.();
+      unsubUnread?.();
+      unsubNotif?.();
       unsubAccount?.();
     };
   }, [client, refreshTodos]);
@@ -367,6 +410,89 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
     }
   }, [client]);
 
+  const listCardComments = useCallback(async (cardId: string): Promise<TodoCardComment[]> => {
+    if (!client.isAvailable()) return [];
+    return client.todos.listCardComments(cardId);
+  }, [client]);
+
+  const addCardComment = useCallback(async (payload: AddTodoCommentInput): Promise<TodoCardComment> => {
+    if (!client.isAvailable()) {
+      throw new Error('当前运行在预览模式，无法发表评论');
+    }
+    return client.todos.addCardComment(payload);
+  }, [client]);
+
+  const deleteCardComment = useCallback(async (
+    payload: DeleteTodoCommentInput
+  ): Promise<TodoCardComment[]> => {
+    if (!client.isAvailable()) {
+      throw new Error('当前运行在预览模式，无法删除评论');
+    }
+    return client.todos.deleteCardComment(payload);
+  }, [client]);
+
+  const listWorkspaceMembers = useCallback(async (
+    workspaceId?: string
+  ): Promise<WorkspaceMemberInfo[]> => {
+    if (!client.isAvailable() || !client.accounts.listWorkspaceMembers) return [];
+    return client.accounts.listWorkspaceMembers(workspaceId);
+  }, [client]);
+
+  const getAccountSession = useCallback(async (): Promise<AccountSessionSnapshot | null> => {
+    if (!client.isAvailable()) return null;
+    return client.accounts.getSession();
+  }, [client]);
+
+  const onCommentsUpdated = useCallback((callback: (payload: { cardIds: string[] }) => void) => {
+    if (!client.isAvailable() || !client.todos.onCommentsUpdated) {
+      return () => {};
+    }
+    return client.todos.onCommentsUpdated(callback) || (() => {});
+  }, [client]);
+
+  const markCardCommentsRead = useCallback(async (cardId: string) => {
+    if (!client.isAvailable()) return;
+    try {
+      const next = await client.todos.markCardCommentsRead(cardId);
+      setUnreadSummary(next);
+    } catch (err) {
+      setError(`标记评论已读失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [client]);
+
+  const markAllCommentsRead = useCallback(async () => {
+    if (!client.isAvailable()) return;
+    try {
+      const next = await client.todos.markAllCommentsRead();
+      setUnreadSummary(next);
+    } catch (err) {
+      setError(`全部标为已读失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [client]);
+
+  const consumePendingFocusCard = useCallback(async () => {
+    if (!client.isAvailable() || !client.todos.consumePendingFocusCard) return null;
+    try {
+      return await client.todos.consumePendingFocusCard();
+    } catch (err) {
+      console.error('[TIDYDESK] Failed to consume pending focus card:', err);
+      return null;
+    }
+  }, [client]);
+
+  const onFocusCardRequested = useCallback((callback: (cardId: string) => void) => {
+    if (!client.isAvailable() || !client.todos.onFocusCardRequested) {
+      return () => {};
+    }
+    return client.todos.onFocusCardRequested(payload => {
+      if (payload?.cardId) callback(payload.cardId);
+    }) || (() => {});
+  }, [client]);
+
+  const dismissCommentNotification = useCallback(() => {
+    setLatestCommentNotification(null);
+  }, []);
+
   const clearError = useCallback(() => setError(null), []);
 
   const contextValue = useMemo(
@@ -374,6 +500,8 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       board,
       cards,
       counts,
+      unreadSummary,
+      latestCommentNotification,
       isLoading,
       isUploadingAttachment,
       error,
@@ -390,12 +518,25 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       setCardCover,
       updateAttachmentMeta,
       startSnipForCard,
+      listCardComments,
+      addCardComment,
+      deleteCardComment,
+      markCardCommentsRead,
+      markAllCommentsRead,
+      consumePendingFocusCard,
+      onFocusCardRequested,
+      dismissCommentNotification,
+      listWorkspaceMembers,
+      getAccountSession,
+      onCommentsUpdated,
       clearError
     }),
     [
       board,
       cards,
       counts,
+      unreadSummary,
+      latestCommentNotification,
       isLoading,
       isUploadingAttachment,
       error,
@@ -412,6 +553,17 @@ export const TodoProvider: React.FC<{ children: ReactNode; client: NativeClient 
       setCardCover,
       updateAttachmentMeta,
       startSnipForCard,
+      listCardComments,
+      addCardComment,
+      deleteCardComment,
+      markCardCommentsRead,
+      markAllCommentsRead,
+      consumePendingFocusCard,
+      onFocusCardRequested,
+      dismissCommentNotification,
+      listWorkspaceMembers,
+      getAccountSession,
+      onCommentsUpdated,
       clearError
     ]
   );

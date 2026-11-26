@@ -6,13 +6,9 @@ use super::native_window::{
     close_native_sticker, ensure_native_sticker, update_native_sticker_pin,
 };
 use super::store::{
-    ensure_storage, images_root, mutate_sticker_state, pictures_dir, read_sticker_state,
-    upsert_sticker,
+    ensure_storage, images_root, mutate_sticker_state, read_sticker_state, upsert_sticker,
 };
-use arboard::{Clipboard, ImageData};
-use rfd::FileDialog;
 use serde_json::{json, Value};
-use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -125,22 +121,9 @@ pub fn copy_sticker_by_id(app: &AppHandle, sticker_id: &str) -> Result<(), Strin
     let Some(sticker) = state.stickers.iter().find(|item| item.id == sticker_id) else {
         return Err("Sticker not found".to_string());
     };
-    let rgba = image::open(&sticker.image_path)
-        .map_err(|err| format!("failed to load sticker image: {err}"))?
-        .to_rgba8();
-    let (width, height) = rgba.dimensions();
-    let bytes = rgba.into_raw();
-
-    let mut clipboard =
-        Clipboard::new().map_err(|err| format!("failed to access system clipboard: {err}"))?;
-    clipboard
-        .set_image(ImageData {
-            width: width as usize,
-            height: height as usize,
-            bytes: Cow::Owned(bytes),
-        })
-        .map_err(|err| format!("failed to copy sticker image: {err}"))?;
-    Ok(())
+    let png_bytes = fs::read(&sticker.image_path)
+        .map_err(|err| format!("failed to read sticker image: {err}"))?;
+    crate::capture::copy_png_bytes_to_clipboard(&png_bytes)
 }
 
 pub fn save_sticker_as_by_id(app: &AppHandle, sticker_id: &str) -> Result<Option<PathBuf>, String> {
@@ -153,25 +136,10 @@ pub fn save_sticker_as_by_id(app: &AppHandle, sticker_id: &str) -> Result<Option
     if !source_path.exists() {
         return Err("Sticker image does not exist".to_string());
     }
-
-    let default_path = pictures_dir().join(format!("TidyDesk-{}.png", sticker.id));
-    let Some(file_path) = FileDialog::new()
-        .set_title("保存截图贴纸")
-        .add_filter("PNG Image", &["png"])
-        .set_file_name(
-            default_path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("TidyDesk-sticker.png"),
-        )
-        .save_file()
-    else {
-        return Ok(None);
-    };
-
-    fs::copy(&source_path, &file_path)
-        .map_err(|err| format!("failed to save sticker image: {err}"))?;
-    Ok(Some(file_path))
+    let png_bytes =
+        fs::read(&source_path).map_err(|err| format!("failed to read sticker image: {err}"))?;
+    let default_name = format!("TidyDesk-{}.png", sticker.id);
+    crate::capture::save_png_bytes_with_dialog(&png_bytes, "保存截图贴纸", &default_name)
 }
 
 pub fn close_sticker_by_id(app: &AppHandle, sticker_id: &str) -> Result<(), String> {

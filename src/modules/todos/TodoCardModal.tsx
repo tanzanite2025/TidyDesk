@@ -28,6 +28,7 @@ import { getTodoPriorityMeta, normalizeTodoPriority, TODO_PRIORITY_OPTIONS } fro
 import { isAttachmentFileOversized, isImageFile } from './mediaUtils';
 import { TodoAttachmentsSection } from './TodoAttachmentsSection';
 import { TodoCameraModal } from './TodoCameraModal';
+import { clearCommentDraftCache, TodoCommentsSection } from './TodoCommentsSection';
 import { TodoSubtasksSection } from './TodoSubtasksSection';
 
 type EditorMode = 'write' | 'preview';
@@ -155,6 +156,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
     setCardCover,
     updateAttachmentMeta,
     startSnipForCard,
+    markCardCommentsRead,
     clearError
   } = useTodos();
 
@@ -170,6 +172,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
   const [subtasks, setSubtasks] = useState<TodoSubtask[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>('write');
   const [isDirty, setIsDirty] = useState(false);
+  const [hasUnsavedCommentDraft, setHasUnsavedCommentDraft] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [modalNotice, setModalNotice] = useState<string | null>(null);
   const [cameraTarget, setCameraTarget] = useState<{ subtaskId: string | null } | null>(null);
@@ -198,6 +201,18 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
     setActiveMediaSubtaskId(null);
   }, [defaultColumnId, mode]);
 
+  const saveDetailDraft = useCallback(
+    async (cardId: string, nextTitle: string, nextContent: string) => {
+      const saved = await updateCard({ id: cardId, title: nextTitle, content: nextContent });
+      const latest = draftRef.current;
+      if (saved && latest.cardId === cardId && latest.title === nextTitle && latest.content === nextContent) {
+        setIsDirty(false);
+      }
+      return saved;
+    },
+    [updateCard]
+  );
+
   // Hydrate Detail mode whenever cardId or card revision changes (Single Source of Truth)
   useEffect(() => {
     if (mode !== 'detail' || !selectedCardSummary) {
@@ -206,6 +221,9 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
 
     const isImmediateCardSwitch = detailCard !== null && detailCard.id !== selectedCardSummary.id;
     if (isImmediateCardSwitch) {
+      if (isDirtyRef.current && draftRef.current.cardId === detailCard.id) {
+        void saveDetailDraft(detailCard.id, draftRef.current.title, draftRef.current.content);
+      }
       setDetailCard(null);
       setTitle(selectedCardSummary.title);
       setColumnId(selectedCardSummary.columnId);
@@ -253,6 +271,7 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
     detailCard?.id,
     getCardDetail,
     mode,
+    saveDetailDraft,
     selectedCardSummary?.id,
     selectedCardSummary?.revision
   ]);
@@ -264,6 +283,19 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
       content
     };
   }, [content, mode, selectedCardSummary?.id, title]);
+
+  // Clear unread badge on open (and when new unread comments sync while modal stays open)
+  useEffect(() => {
+    if (mode !== 'detail' || !selectedCardSummary?.id) return;
+    if ((selectedCardSummary.unreadCommentCount ?? 0) > 0) {
+      void markCardCommentsRead(selectedCardSummary.id);
+    }
+  }, [
+    markCardCommentsRead,
+    mode,
+    selectedCardSummary?.id,
+    selectedCardSummary?.unreadCommentCount
+  ]);
 
   const activeCard = useMemo(() => {
     if (mode !== 'detail') return null;
@@ -278,18 +310,6 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
     }
     return selectedCardSummary;
   }, [detailCard, mode, selectedCardSummary]);
-
-  const saveDetailDraft = useCallback(
-    async (cardId: string, nextTitle: string, nextContent: string) => {
-      const saved = await updateCard({ id: cardId, title: nextTitle, content: nextContent });
-      const latest = draftRef.current;
-      if (saved && latest.cardId === cardId && latest.title === nextTitle && latest.content === nextContent) {
-        setIsDirty(false);
-      }
-      return saved;
-    },
-    [updateCard]
-  );
 
   useEffect(() => {
     if (mode !== 'detail' || !activeCard || !isDirty) return undefined;
@@ -328,6 +348,14 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
       if (!saved) {
         setModalNotice('保存任务修改失败，已保留当前编辑内容，请稍后重试。');
         return;
+      }
+    }
+    if (mode === 'detail' && hasUnsavedCommentDraft) {
+      if (!confirm('评论输入框中还有未发送的草稿，确定放弃并关闭吗？')) {
+        return;
+      }
+      if (activeCard) {
+        clearCommentDraftCache(activeCard.id);
       }
     }
     clearError();
@@ -758,8 +786,8 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
             />
           </div>
 
-          {/* Right Column: Layered Media Attachments & Preview Gallery */}
-          <div className="mt-4 lg:mt-0 lg:min-h-0 lg:overflow-y-auto lg:pl-1">
+          {/* Right Column: Layered Media Attachments & Card Comments */}
+          <div className="mt-4 space-y-4 lg:mt-0 lg:min-h-0 lg:overflow-y-auto lg:pl-1">
             <TodoAttachmentsSection
               attachments={attachments}
               coverAttachmentId={coverAttachmentId}
@@ -793,6 +821,12 @@ export const TodoCardModal: React.FC<TodoCardModalProps> = ({
                 activeCard && void deleteAttachment(activeCard.id, attachmentId, null)
               }
             />
+            {mode === 'detail' && activeCard && (
+              <TodoCommentsSection
+                cardId={activeCard.id}
+                onDraftDirtyChange={setHasUnsavedCommentDraft}
+              />
+            )}
           </div>
         </div>
 

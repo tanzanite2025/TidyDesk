@@ -33,6 +33,10 @@ pub struct StoredAccountSession {
     pub last_sync_cursor: Option<String>,
     #[serde(default)]
     pub last_sync_at: Option<String>,
+    #[serde(default)]
+    pub detached_user_id: Option<String>,
+    #[serde(default)]
+    pub detached_workspace_id: Option<String>,
 }
 
 impl Default for StoredAccountSession {
@@ -46,6 +50,8 @@ impl Default for StoredAccountSession {
             has_token: false,
             last_sync_cursor: None,
             last_sync_at: None,
+            detached_user_id: None,
+            detached_workspace_id: None,
         }
     }
 }
@@ -66,6 +72,8 @@ pub struct AccountSessionSnapshot {
     pub last_sync_cursor: Option<String>,
     pub last_sync_at: Option<String>,
     pub sync_enabled: bool,
+    pub detached_user_id: Option<String>,
+    pub detached_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -140,12 +148,22 @@ fn read_session_from_disk(app: &AppHandle) -> Result<StoredAccountSession, Strin
                     .active_user_id
                     .as_deref()
                     .and_then(|id| sanitize_account_user_id(id).ok());
+                parsed.detached_user_id = parsed
+                    .detached_user_id
+                    .as_deref()
+                    .and_then(|id| sanitize_account_user_id(id).ok());
+                parsed.detached_workspace_id = parsed
+                    .detached_workspace_id
+                    .as_deref()
+                    .and_then(|ws| sanitize_workspace_id(Some(ws)).ok());
                 if parsed.active_user_id.is_none() {
                     parsed.display_name = None;
                     parsed.server_endpoint = None;
                     parsed.workspace_id = default_workspace_id();
                     parsed.has_token = false;
                 } else {
+                    parsed.detached_user_id = None;
+                    parsed.detached_workspace_id = None;
                     parsed.server_endpoint =
                         validate_server_endpoint(parsed.server_endpoint.as_deref())
                             .ok()
@@ -207,6 +225,25 @@ pub(crate) fn set_cached_session(
     Ok(())
 }
 
+/// Resolve the active physical storage scope `(user_id, workspace_id)`, preserving access
+/// to the detached offline continuity workspace after logout when configured.
+pub fn effective_storage_scope(session: &StoredAccountSession) -> Option<(String, String)> {
+    if let Some(ref uid) = session.active_user_id {
+        let ws = sanitize_workspace_id(Some(&session.workspace_id))
+            .unwrap_or_else(|_| default_workspace_id());
+        return Some((uid.clone(), ws));
+    }
+    if let Some(ref uid) = session.detached_user_id {
+        let ws = session
+            .detached_workspace_id
+            .as_deref()
+            .and_then(|raw| sanitize_workspace_id(Some(raw)).ok())
+            .unwrap_or_else(default_workspace_id);
+        return Some((uid.clone(), ws));
+    }
+    None
+}
+
 pub fn snapshot_from_session(session: &StoredAccountSession) -> AccountSessionSnapshot {
     let is_account = session.active_user_id.is_some();
     AccountSessionSnapshot {
@@ -220,13 +257,15 @@ pub fn snapshot_from_session(session: &StoredAccountSession) -> AccountSessionSn
         last_sync_cursor: session.last_sync_cursor.clone(),
         last_sync_at: session.last_sync_at.clone(),
         sync_enabled: is_account && session.server_endpoint.is_some(),
+        detached_user_id: session.detached_user_id.clone(),
+        detached_workspace_id: session.detached_workspace_id.clone(),
     }
 }
 
 pub fn current_actor_id(app: &AppHandle) -> String {
     load_session(app)
         .ok()
-        .and_then(|session| session.active_user_id)
+        .and_then(|session| session.active_user_id.or(session.detached_user_id))
         .unwrap_or_else(|| "local".to_string())
 }
 
@@ -296,33 +335,33 @@ pub fn legacy_local_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn account_todos_root(app: &AppHandle) -> Result<PathBuf, String> {
     let session = load_session(app)?;
-    match session.active_user_id {
-        Some(uid) => Ok(workspace_data_dir(app, &uid, &session.workspace_id)?.join("todos")),
+    match effective_storage_scope(&session) {
+        Some((uid, ws)) => Ok(workspace_data_dir(app, &uid, &ws)?.join("todos")),
         None => legacy_local_todos_root(app),
     }
 }
 
 pub fn account_quick_notes_root(app: &AppHandle) -> Result<PathBuf, String> {
     let session = load_session(app)?;
-    match session.active_user_id {
-        Some(uid) => workspace_data_dir(app, &uid, &session.workspace_id),
+    match effective_storage_scope(&session) {
+        Some((uid, ws)) => workspace_data_dir(app, &uid, &ws),
         None => crate::files::file_storage_root(app),
     }
 }
 
 pub fn account_sync_root(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let session = load_session(app)?;
-    match session.active_user_id {
-        Some(uid) => Ok(Some(workspace_data_dir(app, &uid, &session.workspace_id)?)),
+    match effective_storage_scope(&session) {
+        Some((uid, ws)) => Ok(Some(workspace_data_dir(app, &uid, &ws)?)),
         None => Ok(None),
     }
 }
 
 pub(crate) fn sync_profile_backup_path(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     let session = load_session(app)?;
-    match session.active_user_id.as_deref() {
-        Some(uid) => Ok(Some(
-            account_workspace_dir(app, uid)?.join("sync-profile.json"),
+    match effective_storage_scope(&session) {
+        Some((uid, _)) => Ok(Some(
+            account_workspace_dir(app, &uid)?.join("sync-profile.json"),
         )),
         None => Ok(None),
     }
@@ -461,5 +500,41 @@ mod tests {
         assert_ne!(private_dir, hyphen_colon_dir);
         assert_ne!(private_dir, double_hyphen_dir);
         assert_ne!(hyphen_colon_dir, double_hyphen_dir);
+    }
+
+    #[test]
+    fn effective_storage_scope_preserves_detached_continuity_and_clean_local() {
+        let pure_local = StoredAccountSession::default();
+        assert!(effective_storage_scope(&pure_local).is_none());
+
+        let detached = StoredAccountSession {
+            detached_user_id: Some("alice".to_string()),
+            detached_workspace_id: Some("private:alice".to_string()),
+            ..StoredAccountSession::default()
+        };
+        assert_eq!(
+            effective_storage_scope(&detached),
+            Some(("alice".to_string(), "private:alice".to_string()))
+        );
+        let detached_snap = snapshot_from_session(&detached);
+        assert_eq!(detached_snap.auth_mode, "local");
+        assert!(!detached_snap.sync_enabled);
+        assert_eq!(detached_snap.detached_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            detached_snap.detached_workspace_id.as_deref(),
+            Some("private:alice")
+        );
+
+        let active = StoredAccountSession {
+            active_user_id: Some("alice".to_string()),
+            workspace_id: "ws_team1".to_string(),
+            server_endpoint: Some("https://sync.example.com".to_string()),
+            has_token: true,
+            ..StoredAccountSession::default()
+        };
+        assert_eq!(
+            effective_storage_scope(&active),
+            Some(("alice".to_string(), "ws_team1".to_string()))
+        );
     }
 }

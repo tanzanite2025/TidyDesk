@@ -102,6 +102,9 @@ export interface TodoCard {
   extraAttachmentCount?: number;
   attachments?: TodoAttachment[];
   attachmentCount?: number;
+  commentCount?: number;
+  unreadCommentCount?: number;
+  unreadMentionCount?: number;
   coverAttachmentId?: string | null;
   position?: string;
   revision?: number;
@@ -121,6 +124,8 @@ export interface AccountSessionSnapshot {
   lastSyncCursor: string | null;
   lastSyncAt: string | null;
   syncEnabled: boolean;
+  detachedUserId?: string | null;
+  detachedWorkspaceId?: string | null;
 }
 
 export interface SwitchAccountSessionInput {
@@ -137,6 +142,33 @@ export interface LoginWithPasswordInput {
   serverEndpoint: string;
   workspaceId?: string;
   deviceLabel?: string;
+}
+
+export interface RegisterWithPasswordInput {
+  userId: string;
+  password: string;
+  displayName?: string;
+  serverEndpoint: string;
+  deviceLabel?: string;
+}
+
+export interface WorkspaceInviteInfo {
+  inviteCode: string;
+  workspaceId: string;
+  role: 'admin' | 'member' | 'viewer' | string;
+  createdBy: string;
+  maxUses: number;
+  usedCount: number;
+  expiresAt?: string | null;
+  revokedAt?: string | null;
+  createdAt: string;
+}
+
+export interface CreateWorkspaceInviteInput {
+  workspaceId: string;
+  role?: 'admin' | 'member' | 'viewer';
+  maxUses?: number;
+  expiresInHours?: number;
 }
 
 export interface ChangePasswordInput {
@@ -245,4 +277,62 @@ export interface UpdateTodoAttachmentMetaInput {
 export interface PickTodoAttachmentResult {
   canceled: boolean;
   state?: TodoState;
+}
+
+export interface TodoCardComment {
+  id: string;
+  cardId: string;
+  parentId?: string | null;
+  authorId: string;
+  authorName: string;
+  body: string;
+  mentions: string[];
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+}
+
+export interface AddTodoCommentInput {
+  cardId: string;
+  body: string;
+  parentId?: string | null;
+}
+
+export interface DeleteTodoCommentInput {
+  cardId: string;
+  commentId: string;
+}
+
+export interface WorkspaceMemberInfo {
+  userId: string;
+  displayName: string;
+  role: string;
+}
+
+export interface TodoUnreadCommentItem {
+  cardId: string;
+  cardTitle: string;
+  unreadCount: number;
+  mentionCount: number;
+  latestCommentId: string;
+  latestAuthorId: string;
+  latestAuthorName: string;
+  latestBodyPreview: string;
+  latestCreatedAt: string;
+}
+
+export interface TodoUnreadCommentSummary {
+  unreadTotal: number;
+  mentionTotal: number;
+  items: TodoUnreadCommentItem[];
+}
+
+export interface TodoCommentNotificationPayload {
+  title: string;
+  body: string;
+  cardId: string;
+  mentionCount: number;
+  commentCount: number;
+  unreadTotal: number;
+  mentionTotal: number;
 }

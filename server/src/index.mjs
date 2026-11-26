@@ -241,6 +241,39 @@ export function createSyncServer({
         }
       }
 
+      if (method === 'POST' && pathname === '/api/v1/auth/register') {
+        if (String(process.env.TIDYDESK_ALLOW_REGISTER || 'true').toLowerCase() === 'false') {
+          sendJson(res, 403, { error: '当前服务端未开放自助注册，请联系运维创建账号' });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const created = await userRegistry.createUser({
+          userId: body.userId,
+          password: body.password,
+          displayName: typeof body.displayName === 'string' ? body.displayName : ''
+        });
+        const defaultWorkspaceId = `private:${created.userId}`;
+        await store.ensureWorkspaceAccess(created.userId, defaultWorkspaceId);
+        const rawLabel =
+          typeof body.deviceLabel === 'string' && body.deviceLabel.trim()
+            ? body.deviceLabel.trim()
+            : 'device';
+        const issued = await userRegistry.issueToken({
+          userId: created.userId,
+          label: rawLabel
+        });
+        sendJson(res, 200, {
+          ok: true,
+          userId: issued.userId,
+          displayName: issued.displayName,
+          token: issued.token,
+          tokenId: issued.tokenId,
+          label: issued.label,
+          defaultWorkspaceId
+        });
+        return;
+      }
+
       if (method === 'POST' && pathname === '/api/v1/auth/login') {
         const body = await readJsonBody(req);
         const resAuth = await userRegistry.verifyPassword(body.userId, body.password);
@@ -344,6 +377,79 @@ export function createSyncServer({
         return;
       }
 
+      if (method === 'POST' && pathname === '/api/v1/workspaces') {
+        const body = await readJsonBody(req);
+        const workspace = await store.createSharedWorkspace({
+          userId: authRes.userId,
+          title: body.title
+        });
+        sendJson(res, 200, { ok: true, workspace });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/v1/workspaces/join') {
+        const body = await readJsonBody(req);
+        const workspace = await store.joinWorkspaceByInvite({
+          userId: authRes.userId,
+          inviteCode: body.inviteCode
+        });
+        sendJson(res, 200, { ok: true, workspace });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/v1/workspaces/members') {
+        const wsId = sanitizeWorkspaceId(url.searchParams.get('workspaceId'), 'default');
+        const rawMembers = await store.listWorkspaceMembers({
+          userId: authRes.userId,
+          workspaceId: wsId
+        });
+        const members = [];
+        for (const item of rawMembers) {
+          const userInfo = await userRegistry.getUserPublic(item.userId);
+          members.push({
+            userId: item.userId,
+            displayName: userInfo?.displayName || item.userId,
+            role: item.role
+          });
+        }
+        sendJson(res, 200, { members });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/v1/workspaces/invites') {
+        const wsId = sanitizeWorkspaceId(url.searchParams.get('workspaceId'), 'default');
+        const invites = await store.listWorkspaceInvites({
+          userId: authRes.userId,
+          workspaceId: wsId
+        });
+        sendJson(res, 200, { invites });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/v1/workspaces/invites') {
+        const body = await readJsonBody(req);
+        const invite = await store.createWorkspaceInvite({
+          userId: authRes.userId,
+          workspaceId: body.workspaceId,
+          role: body.role,
+          maxUses: body.maxUses,
+          expiresInHours: body.expiresInHours
+        });
+        sendJson(res, 200, { ok: true, invite });
+        return;
+      }
+
+      if (method === 'POST' && pathname === '/api/v1/workspaces/invites/revoke') {
+        const body = await readJsonBody(req);
+        const invite = await store.revokeWorkspaceInvite({
+          userId: authRes.userId,
+          workspaceId: body.workspaceId,
+          inviteCode: body.inviteCode
+        });
+        sendJson(res, 200, { ok: true, invite });
+        return;
+      }
+
       const workspaceId = sanitizeWorkspaceId(url.searchParams.get('workspaceId'), 'default');
       const role = await store.ensureWorkspaceAccess(authRes.userId, workspaceId);
 
@@ -430,6 +536,8 @@ export function createSyncServer({
         const result = await store.pushEntries({
           workspaceId: targetWorkspaceId,
           actorId: authRes.userId,
+          authorName: authRes.displayName || authRes.userId,
+          role: targetRole,
           entries
         });
         if (result.acked.length > 0) {

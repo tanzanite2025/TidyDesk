@@ -1,9 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPrivateWorkspaceOwner, sanitizeWorkspaceId } from './fs_utils.mjs';
+import { getPrivateWorkspaceOwner, httpError, sanitizeWorkspaceId } from './fs_utils.mjs';
 import { mergeCardOnServer } from './merge.mjs';
-import { extractShaFromBlobKey, validateBlobKey } from './storage_shared.mjs';
+import {
+  assertCanDeleteCardComment,
+  assertInviteUsable,
+  canManageWorkspaceInvites,
+  computeInviteExpiryMs,
+  extractShaFromBlobKey,
+  generateInviteCode,
+  generateSharedWorkspaceId,
+  normalizeCardCommentRecord,
+  normalizeInviteMaxUses,
+  normalizeInviteRole,
+  normalizeWorkspaceTitle,
+  resolveJoinedRole,
+  validateBlobKey
+} from './storage_shared.mjs';
 
 const DEFAULT_SCHEMA_SQL_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -33,34 +47,234 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
     return pg.withTransaction(async tx => {
       const wsRes = await tx.query('SELECT id, title FROM workspaces WHERE id = $1', [safeWsId]);
       if (wsRes.rows.length === 0) {
-        const title = privateOwner ? `${privateOwner} 私人空间` : safeWsId;
-        await tx.query('INSERT INTO workspaces (id, title) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [
-          safeWsId,
-          title
-        ]);
-        await tx.query(
-          `INSERT INTO workspace_members (workspace_id, user_id, role)
-           VALUES ($1, $2, 'owner')
-           ON CONFLICT (workspace_id, user_id) DO NOTHING`,
-          [safeWsId, userId]
-        );
-        return 'owner';
+        if (privateOwner || safeWsId === 'default') {
+          const title = privateOwner ? `${privateOwner} 私人空间` : '默认协同工作区';
+          const initialRole = privateOwner ? 'owner' : 'member';
+          await tx.query('INSERT INTO workspaces (id, title) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [
+            safeWsId,
+            title
+          ]);
+          await tx.query(
+            `INSERT INTO workspace_members (workspace_id, user_id, role)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+            [safeWsId, userId, initialRole]
+          );
+          return initialRole;
+        }
+        throw httpError(403, `工作区 "${safeWsId}" 不存在或未获邀请加入`);
       }
       const memberRes = await tx.query(
         'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
         [safeWsId, userId]
       );
       if (memberRes.rows.length === 0) {
-        const role = privateOwner === userId ? 'owner' : 'member';
-        await tx.query(
-          `INSERT INTO workspace_members (workspace_id, user_id, role)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (workspace_id, user_id) DO NOTHING`,
-          [safeWsId, userId, role]
-        );
-        return role;
+        if (privateOwner === userId) {
+          await tx.query(
+            `INSERT INTO workspace_members (workspace_id, user_id, role)
+             VALUES ($1, $2, 'owner')
+             ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+            [safeWsId, userId]
+          );
+          return 'owner';
+        }
+        if (safeWsId === 'default') {
+          await tx.query(
+            `INSERT INTO workspace_members (workspace_id, user_id, role)
+             VALUES ($1, $2, 'member')
+             ON CONFLICT (workspace_id, user_id) DO NOTHING`,
+            [safeWsId, userId]
+          );
+          return 'member';
+        }
+        throw httpError(403, `您尚无权访问工作区 "${safeWsId}"，请通过邀请码加入`);
       }
       return memberRes.rows[0].role;
+    });
+  }
+
+  function toPgInviteDto(row) {
+    return {
+      inviteCode: row.invite_code,
+      workspaceId: row.workspace_id,
+      role: row.role,
+      createdBy: row.created_by,
+      maxUses: Number(row.max_uses),
+      usedCount: Number(row.used_count),
+      expiresAt: row.expires_at,
+      revokedAt: row.revoked_at,
+      createdAt: row.created_at
+    };
+  }
+
+  async function createSharedWorkspace({ userId, title }) {
+    await ensureSchema();
+    const cleanTitle = normalizeWorkspaceTitle(title);
+    const workspaceId = generateSharedWorkspaceId();
+    await pg.withTransaction(async tx => {
+      await tx.query('INSERT INTO workspaces (id, title) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [
+        workspaceId,
+        cleanTitle
+      ]);
+      await tx.query(
+        `INSERT INTO workspace_members (workspace_id, user_id, role)
+         VALUES ($1, $2, 'owner')
+         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = 'owner'`,
+        [workspaceId, userId]
+      );
+    });
+    return {
+      workspaceId,
+      title: cleanTitle,
+      role: 'owner',
+      isPrivate: false
+    };
+  }
+
+  async function createWorkspaceInvite({
+    userId,
+    workspaceId,
+    role = 'member',
+    maxUses = 1,
+    expiresInHours = 72
+  }) {
+    await ensureSchema();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) {
+      throw httpError(400, '私人空间不可生成共享邀请码，请先新建共享工作区');
+    }
+    const callerRole = await ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可生成邀请码');
+    }
+    const cleanRole = normalizeInviteRole(role);
+    const cleanMaxUses = normalizeInviteMaxUses(maxUses);
+    const expiresAt = computeInviteExpiryMs(expiresInHours);
+    const inviteCode = generateInviteCode();
+    const now = String(Date.now());
+    return pg.withTransaction(async tx => {
+      const inserted = await tx.query(
+        `INSERT INTO workspace_invites
+         (invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, 0, $6, NULL, $7)
+         RETURNING invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at`,
+        [inviteCode, safeWsId, cleanRole, userId, cleanMaxUses, expiresAt, now]
+      );
+      return toPgInviteDto(inserted.rows[0]);
+    });
+  }
+
+  async function listWorkspaceInvites({ userId, workspaceId }) {
+    await ensureSchema();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) {
+      return [];
+    }
+    const callerRole = await ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可查看邀请码');
+    }
+    const rows = (
+      await pg.query(
+        `SELECT invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at
+         FROM workspace_invites
+         WHERE workspace_id = $1
+         ORDER BY CAST(created_at AS BIGINT) DESC`,
+        [safeWsId]
+      )
+    ).rows;
+    return rows.map(toPgInviteDto);
+  }
+
+  async function revokeWorkspaceInvite({ userId, workspaceId, inviteCode }) {
+    await ensureSchema();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) {
+      throw httpError(400, '缺少邀请码');
+    }
+    const callerRole = await ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可撤回邀请码');
+    }
+    return pg.withTransaction(async tx => {
+      const existing = await tx.query(
+        `SELECT invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at
+         FROM workspace_invites
+         WHERE invite_code = $1 FOR UPDATE`,
+        [cleanCode]
+      );
+      if (existing.rows.length === 0 || existing.rows[0].workspace_id !== safeWsId) {
+        throw httpError(404, '未找到对应邀请码');
+      }
+      if (!existing.rows[0].revoked_at) {
+        const updated = await tx.query(
+          `UPDATE workspace_invites SET revoked_at = $1
+           WHERE invite_code = $2 AND workspace_id = $3
+           RETURNING invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at`,
+          [String(Date.now()), cleanCode, safeWsId]
+        );
+        return toPgInviteDto(updated.rows[0]);
+      }
+      return toPgInviteDto(existing.rows[0]);
+    });
+  }
+
+  async function listWorkspaceMembers({ userId, workspaceId }) {
+    await ensureSchema();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    await ensureWorkspaceAccess(userId, safeWsId);
+    const rows = (
+      await pg.query(
+        'SELECT user_id, role FROM workspace_members WHERE workspace_id = $1 ORDER BY user_id ASC',
+        [safeWsId]
+      )
+    ).rows;
+    return rows.map(r => ({ userId: r.user_id, role: r.role }));
+  }
+
+  async function joinWorkspaceByInvite({ userId, inviteCode }) {
+    await ensureSchema();
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) {
+      throw httpError(400, '请输入邀请码');
+    }
+    return pg.withTransaction(async tx => {
+      const resInv = await tx.query(
+        `SELECT invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at
+         FROM workspace_invites
+         WHERE invite_code = $1 FOR UPDATE`,
+        [cleanCode]
+      );
+      const dto = resInv.rows.length > 0 ? toPgInviteDto(resInv.rows[0]) : null;
+      assertInviteUsable(dto);
+      const wsRes = await tx.query('SELECT id, title FROM workspaces WHERE id = $1', [
+        dto.workspaceId
+      ]);
+      if (wsRes.rows.length === 0) {
+        throw httpError(404, '邀请对应的工作区已不存在');
+      }
+      await tx.query(
+        'UPDATE workspace_invites SET used_count = used_count + 1 WHERE invite_code = $1',
+        [cleanCode]
+      );
+      const memRes = await tx.query(
+        'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+        [dto.workspaceId, userId]
+      );
+      const nextRole = resolveJoinedRole(memRes.rows[0]?.role, dto.role);
+      await tx.query(
+        `INSERT INTO workspace_members (workspace_id, user_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+        [dto.workspaceId, userId, nextRole]
+      );
+      return {
+        workspaceId: dto.workspaceId,
+        title: wsRes.rows[0].title || dto.workspaceId,
+        role: nextRole,
+        isPrivate: false
+      };
     });
   }
 
@@ -241,7 +455,13 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
     return blobStore.readBlob(kind, key);
   }
 
-  async function pushEntries({ workspaceId = 'default', actorId, entries = [] }) {
+  async function pushEntries({
+    workspaceId = 'default',
+    actorId,
+    authorName = '',
+    role = 'member',
+    entries = []
+  }) {
     await ensureSchema();
     return pg.withTransaction(async tx => {
       const acked = [];
@@ -381,6 +601,49 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
             await appendEvent('quickNote', entityId, 'upsert');
           }
           acked.push({ entityKind: 'quickNote', entityId });
+        } else if (kind === 'cardComment') {
+          const existingRow = (
+            await tx.query(
+              'SELECT payload_json FROM card_comments WHERE workspace_id = $1 AND id = $2 FOR UPDATE',
+              [workspaceId, entityId]
+            )
+          ).rows[0];
+          const existing = existingRow
+            ? typeof existingRow.payload_json === 'string'
+              ? JSON.parse(existingRow.payload_json)
+              : existingRow.payload_json
+            : null;
+          if (op === 'delete') {
+            assertCanDeleteCardComment(existing, actorId, role);
+          }
+          const comment = normalizeCardCommentRecord({
+            id: entityId,
+            workspaceId,
+            actorId,
+            authorName,
+            payload,
+            existing,
+            operation: op
+          });
+          await tx.query(
+            `INSERT INTO card_comments (workspace_id, id, card_id, updated_at, deleted_at, payload_json)
+             VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+             ON CONFLICT (workspace_id, id) DO UPDATE SET
+               card_id = EXCLUDED.card_id,
+               updated_at = EXCLUDED.updated_at,
+               deleted_at = EXCLUDED.deleted_at,
+               payload_json = EXCLUDED.payload_json`,
+            [
+              workspaceId,
+              entityId,
+              comment.cardId,
+              comment.updatedAt,
+              comment.deletedAt,
+              JSON.stringify(comment)
+            ]
+          );
+          await appendEvent('cardComment', entityId, op === 'delete' ? 'delete' : 'upsert');
+          acked.push({ entityKind: 'cardComment', entityId });
         } else if (kind === 'board') {
           acked.push({ entityKind: 'board', entityId });
         }
@@ -427,6 +690,8 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
       const removedCardIds = [];
       const quickNotes = [];
       const removedQuickNoteIds = [];
+      const cardComments = [];
+      const removedCardCommentIds = [];
 
       for (const ev of evRows) {
         if (ev.entity_kind === 'card') {
@@ -459,6 +724,21 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
           } else {
             quickNotes.push(note);
           }
+        } else if (ev.entity_kind === 'cardComment') {
+          const row = (
+            await tx.query(
+              'SELECT payload_json FROM card_comments WHERE workspace_id = $1 AND id = $2',
+              [workspaceId, ev.entity_id]
+            )
+          ).rows[0];
+          if (!row) continue;
+          const comment =
+            typeof row.payload_json === 'string' ? JSON.parse(row.payload_json) : row.payload_json;
+          if (comment.deletedAt) {
+            removedCardCommentIds.push(comment.id);
+          } else {
+            cardComments.push(comment);
+          }
         }
       }
 
@@ -467,7 +747,9 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
         cards,
         removedCardIds,
         quickNotes,
-        removedQuickNoteIds
+        removedQuickNoteIds,
+        cardComments,
+        removedCardCommentIds
       };
     });
   }
@@ -478,6 +760,12 @@ export function createPostgresSyncStore({ pg, blobStore, ensureSchema, ownsPg = 
     ensureWorkspaceAccess,
     setWorkspaceRole,
     listWorkspacesForUser,
+    listWorkspaceMembers,
+    createSharedWorkspace,
+    createWorkspaceInvite,
+    listWorkspaceInvites,
+    revokeWorkspaceInvite,
+    joinWorkspaceByInvite,
     presignMedia,
     writeBlob,
     canReadBlob,

@@ -1,17 +1,23 @@
 import type {
   AddTodoAttachmentBytesInput,
+  AddTodoCommentInput,
   CreateTodoCardInput,
   DeleteTodoAttachmentInput,
+  DeleteTodoCommentInput,
   MoveTodoCardInput,
   SetTodoCardCoverInput,
   TodoAttachment,
   TodoCard,
+  TodoCardComment,
+  TodoCommentNotificationPayload,
   TodoState,
   TodoSubtask,
+  TodoUnreadCommentSummary,
   UpdateTodoAttachmentMetaInput,
   UpdateTodoCardInput
 } from '../types/todo';
 import { normalizeTodoPriority } from '../types/todo';
+import { computeUnreadCommentSummary, truncateCommentPreview } from '../modules/todos/commentUtils';
 import type { NativeTodosClient } from './types';
 import type { WebHttpContext } from './web-http-context';
 import {
@@ -28,7 +34,13 @@ import {
 
 export interface WebTodosModule {
   client: NativeTodosClient;
-  applyPulledCards: (cards: TodoCard[], removedCardIds: string[]) => Promise<TodoState>;
+  applyPulledSync: (params: {
+    cards?: TodoCard[];
+    removedCardIds?: string[];
+    cardComments?: TodoCardComment[];
+    removedCardCommentIds?: string[];
+  }) => Promise<TodoState>;
+  resetSessionFlags: () => void;
 }
 
 export function createWebTodosModule(
@@ -124,6 +136,23 @@ export function createWebTodosModule(
       if (!previews.some(p => p.id === att.id)) previews.push(att);
     }
 
+    const active = ctx.getSession();
+    const activeComments = (ctx.commentsByCardId.get(raw.id) || []).filter(c => !c.deletedAt);
+    const readMap = readCommentReadMap();
+    const readTs = Number(readMap[raw.id] || 0);
+    const actorId = active?.userId || '';
+    let unreadCommentCount = 0;
+    let unreadMentionCount = 0;
+    if (actorId && actorId !== 'local') {
+      for (const cmt of activeComments) {
+        if (cmt.authorId === 'local' || cmt.authorId === actorId) continue;
+        if (Number(cmt.createdAt || 0) > readTs) {
+          unreadCommentCount += 1;
+          if (cmt.mentions?.includes(actorId)) unreadMentionCount += 1;
+        }
+      }
+    }
+
     return {
       ...raw,
       boardId: DEFAULT_MOBILE_BOARD.id,
@@ -135,7 +164,10 @@ export function createWebTodosModule(
       attachments: cardAtts,
       previewAttachments: previews,
       attachmentCount: allAtts.length,
-      extraAttachmentCount: Math.max(0, allAtts.length - previews.length)
+      extraAttachmentCount: Math.max(0, allAtts.length - previews.length),
+      commentCount: activeComments.length,
+      unreadCommentCount,
+      unreadMentionCount
     };
   };
 
@@ -157,25 +189,201 @@ export function createWebTodosModule(
     };
   };
 
+  const readStorageKey = () => {
+    const active = ctx.getSession();
+    if (!active) return null;
+    return `tidydesk_comment_reads:${active.userId}:${ctx.resolveWorkspaceId(active)}`;
+  };
+
+  const readCommentReadMap = (): Record<string, number> => {
+    if (typeof window === 'undefined') return {};
+    const key = readStorageKey();
+    if (!key) return {};
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const writeCommentReadMap = (next: Record<string, number>) => {
+    if (typeof window === 'undefined') return;
+    const key = readStorageKey();
+    if (!key) return;
+    try {
+      window.localStorage.setItem(key, JSON.stringify(next));
+    } catch (err) {
+      console.warn('[TIDYDESK][MOBILE] Failed to persist comment read map:', err);
+    }
+  };
+
+  const computeCurrentUnreadSummary = (): TodoUnreadCommentSummary => {
+    const active = ctx.getSession();
+    return computeUnreadCommentSummary({
+      cardsById: ctx.cardsById,
+      commentsByCardId: ctx.commentsByCardId,
+      readTimestamps: readCommentReadMap(),
+      currentUserId: active?.userId ?? null
+    });
+  };
+
+  const emitUnreadSummary = (): TodoUnreadCommentSummary => {
+    const summary = computeCurrentUnreadSummary();
+    for (const cb of ctx.unreadListeners) cb(summary);
+    return summary;
+  };
+
   const emitState = (state: TodoState) => {
     for (const cb of ctx.countListeners) cb(state.counts);
     for (const cb of ctx.stateListeners) cb(state);
   };
 
-  const applyPulledCards = async (
-    cards: TodoCard[],
-    removedCardIds: string[]
-  ): Promise<TodoState> => {
+  const areCommentListsEqual = (
+    left: TodoCardComment[] = [],
+    right: TodoCardComment[] = []
+  ): boolean => {
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      const a = left[i];
+      const b = right[i];
+      if (
+        a.id !== b.id ||
+        a.updatedAt !== b.updatedAt ||
+        a.body !== b.body ||
+        (a.parentId ?? null) !== (b.parentId ?? null) ||
+        (a.deletedAt ?? null) !== (b.deletedAt ?? null) ||
+        JSON.stringify(a.mentions || []) !== JSON.stringify(b.mentions || [])
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  let hadPulledCommentsOnce = false;
+
+  const applyPulledComments = (
+    comments: TodoCardComment[] = [],
+    removedCommentIds: string[] = []
+  ) => {
+    const active = ctx.getSession();
+    const actorId = active?.userId || '';
+    const prevCommentIds = new Set<string>();
+    for (const list of ctx.commentsByCardId.values()) {
+      for (const c of list) prevCommentIds.add(c.id);
+    }
+    const readMap = readCommentReadMap();
+
+    const grouped = new Map<string, TodoCardComment[]>();
+    const removedSet = new Set(removedCommentIds || []);
+    const changedCards = new Set<string>();
+    const newlyArrivedAlerts: TodoCardComment[] = [];
+
+    for (const cmt of comments || []) {
+      if (!cmt?.cardId || cmt.deletedAt || removedSet.has(cmt.id)) continue;
+      const list = grouped.get(cmt.cardId) || [];
+      list.push(cmt);
+      grouped.set(cmt.cardId, list);
+
+      const targetCard = ctx.cardsById.get(cmt.cardId);
+      if (
+        hadPulledCommentsOnce &&
+        targetCard &&
+        !targetCard.deletedAt &&
+        !targetCard.archived &&
+        !prevCommentIds.has(cmt.id) &&
+        actorId &&
+        cmt.authorId !== 'local' &&
+        cmt.authorId !== actorId &&
+        Number(cmt.createdAt || 0) > Number(readMap[cmt.cardId] || 0)
+      ) {
+        newlyArrivedAlerts.push(cmt);
+      }
+    }
+    for (const [cid, list] of grouped.entries()) {
+      list.sort(
+        (a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0) || a.id.localeCompare(b.id)
+      );
+      const prevList = ctx.commentsByCardId.get(cid) || [];
+      if (!areCommentListsEqual(prevList, list)) {
+        changedCards.add(cid);
+      }
+      ctx.commentsByCardId.set(cid, list);
+    }
+    for (const oldCid of Array.from(ctx.commentsByCardId.keys())) {
+      if (!grouped.has(oldCid)) {
+        const prevList = ctx.commentsByCardId.get(oldCid) || [];
+        ctx.commentsByCardId.delete(oldCid);
+        if (prevList.length > 0) {
+          changedCards.add(oldCid);
+        }
+      }
+    }
+    hadPulledCommentsOnce = true;
+
+    const summary = emitUnreadSummary();
+    if (changedCards.size > 0) {
+      const cardIds = Array.from(changedCards);
+      for (const cb of ctx.commentListeners) cb({ cardIds });
+    }
+    if (newlyArrivedAlerts.length > 0) {
+      const mentionAlerts = newlyArrivedAlerts.filter(c => c.mentions?.includes(actorId));
+      const lead = mentionAlerts[0] || newlyArrivedAlerts[0];
+      const leadTitle = ctx.cardsById.get(lead.cardId)?.title?.trim() || '未命名待办';
+      const notif: TodoCommentNotificationPayload =
+        newlyArrivedAlerts.length === 1
+          ? {
+              title: mentionAlerts.length > 0
+                ? `${lead.authorName || lead.authorId} 在「${leadTitle}」@了你`
+                : `${lead.authorName || lead.authorId} 评论了「${leadTitle}」`,
+              body: truncateCommentPreview(lead.body, 72),
+              cardId: lead.cardId,
+              mentionCount: mentionAlerts.length,
+              commentCount: 1,
+              unreadTotal: summary.unreadTotal,
+              mentionTotal: summary.mentionTotal
+            }
+          : {
+              title:
+                mentionAlerts.length > 0
+                  ? `收到 ${newlyArrivedAlerts.length} 条新评论（含 ${mentionAlerts.length} 条 @提及）`
+                  : `收到 ${newlyArrivedAlerts.length} 条新待办评论`,
+              body: `${leadTitle}（${lead.authorName || lead.authorId}）: ${truncateCommentPreview(lead.body, 60)}`,
+              cardId: lead.cardId,
+              mentionCount: mentionAlerts.length,
+              commentCount: newlyArrivedAlerts.length,
+              unreadTotal: summary.unreadTotal,
+              mentionTotal: summary.mentionTotal
+            };
+      for (const cb of ctx.notificationListeners) cb(notif);
+    }
+  };
+
+  const applyPulledSync = async (params: {
+    cards?: TodoCard[];
+    removedCardIds?: string[];
+    cardComments?: TodoCardComment[];
+    removedCardCommentIds?: string[];
+  }): Promise<TodoState> => {
     ctx.cardsById.clear();
-    for (const card of cards || []) {
+    for (const card of params.cards || []) {
       ctx.cardsById.set(card.id, card);
     }
-    for (const rid of removedCardIds || []) {
+    for (const rid of params.removedCardIds || []) {
       ctx.cardsById.delete(rid);
     }
+    // Apply comments AFTER cardsById is updated so unread summary and notifications resolve exact card titles.
+    applyPulledComments(params.cardComments, params.removedCardCommentIds);
     const state = await buildTodoStateSnapshot();
     emitState(state);
     return state;
+  };
+
+  const resetSessionFlags = () => {
+    hadPulledCommentsOnce = false;
   };
 
   const pushCardMutation = async (
@@ -479,6 +687,112 @@ export function createWebTodosModule(
     startSnipForCard: async () => {
       throw new Error('移动端不支持桌面端屏幕区域截图，请直接拍照或从相册选择图片');
     },
+    listCardComments: async (cardId: string) => {
+      await pullLatest();
+      return (ctx.commentsByCardId.get(cardId) || []).filter(c => !c.deletedAt);
+    },
+    getUnreadCommentSummary: async () => computeCurrentUnreadSummary(),
+    markCardCommentsRead: async (cardId: string) => {
+      const readMap = readCommentReadMap();
+      const comments = ctx.commentsByCardId.get(cardId) || [];
+      const latestTs = comments.reduce(
+        (max, cmt) => Math.max(max, Number(cmt.createdAt || 0)),
+        0
+      );
+      readMap[cardId] = Math.max(Number(readMap[cardId] || 0), latestTs, Date.now());
+      writeCommentReadMap(readMap);
+      const summary = emitUnreadSummary();
+      const state = await buildTodoStateSnapshot();
+      emitState(state);
+      return summary;
+    },
+    markAllCommentsRead: async () => {
+      const readMap = readCommentReadMap();
+      const now = Date.now();
+      for (const [cid, comments] of ctx.commentsByCardId.entries()) {
+        const latestTs = comments.reduce(
+          (max, cmt) => Math.max(max, Number(cmt.createdAt || 0)),
+          0
+        );
+        readMap[cid] = Math.max(Number(readMap[cid] || 0), latestTs, now);
+      }
+      writeCommentReadMap(readMap);
+      const summary = emitUnreadSummary();
+      const state = await buildTodoStateSnapshot();
+      emitState(state);
+      return summary;
+    },
+    addCardComment: async (payload: AddTodoCommentInput) => {
+      const active = ctx.requireSession();
+      const body = payload.body.trim();
+      if (!body) throw new Error('评论内容不能为空');
+      const now = String(Date.now());
+      const id = createUuid();
+      const draft: TodoCardComment = {
+        id,
+        cardId: payload.cardId,
+        parentId: payload.parentId ?? null,
+        authorId: active.userId,
+        authorName: active.displayName || active.userId,
+        body,
+        mentions: [],
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null
+      };
+      const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: ctx.authHeaders(active, 'application/json'),
+        body: JSON.stringify({
+          workspaceId: ctx.resolveWorkspaceId(active),
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: id,
+              operation: 'upsert',
+              payload: draft
+            }
+          ]
+        })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`提交评论失败 (${res.status}): ${text}`);
+      }
+      await pullLatest();
+      const created = (ctx.commentsByCardId.get(payload.cardId) || []).find(c => c.id === id);
+      return created || draft;
+    },
+    deleteCardComment: async (payload: DeleteTodoCommentInput) => {
+      const active = ctx.requireSession();
+      const now = String(Date.now());
+      const res = await fetch(`${active.serverEndpoint}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: ctx.authHeaders(active, 'application/json'),
+        body: JSON.stringify({
+          workspaceId: ctx.resolveWorkspaceId(active),
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: payload.commentId,
+              operation: 'delete',
+              payload: {
+                id: payload.commentId,
+                cardId: payload.cardId,
+                deletedAt: now,
+                updatedAt: now
+              }
+            }
+          ]
+        })
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`删除评论失败 (${res.status}): ${text}`);
+      }
+      await pullLatest();
+      return (ctx.commentsByCardId.get(payload.cardId) || []).filter(c => !c.deletedAt);
+    },
     onCountsUpdated: cb => {
       ctx.countListeners.add(cb);
       return () => ctx.countListeners.delete(cb);
@@ -486,8 +800,20 @@ export function createWebTodosModule(
     onUpdated: cb => {
       ctx.stateListeners.add(cb);
       return () => ctx.stateListeners.delete(cb);
+    },
+    onCommentsUpdated: cb => {
+      ctx.commentListeners.add(cb);
+      return () => ctx.commentListeners.delete(cb);
+    },
+    onUnreadCommentsUpdated: cb => {
+      ctx.unreadListeners.add(cb);
+      return () => ctx.unreadListeners.delete(cb);
+    },
+    onCommentNotification: cb => {
+      ctx.notificationListeners.add(cb);
+      return () => ctx.notificationListeners.delete(cb);
     }
   };
 
-  return { client, applyPulledCards };
+  return { client, applyPulledSync, resetSessionFlags };
 }

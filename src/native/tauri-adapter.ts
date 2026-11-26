@@ -8,18 +8,27 @@ import type {
 } from '../types/quick-note';
 import type {
   AccountSessionSnapshot,
+  AddTodoCommentInput,
   ChangePasswordInput,
   CreateTodoCardInput,
+  CreateWorkspaceInviteInput,
+  DeleteTodoCommentInput,
   ImportLocalTodosResult,
   LoginWithPasswordInput,
   MoveTodoCardInput,
+  RegisterWithPasswordInput,
   RemoteAuthSessionInfo,
   RemoteWorkspaceInfo,
   SwitchAccountSessionInput,
   SyncStatusSnapshot,
+  TodoCardComment,
+  TodoCommentNotificationPayload,
   TodoCounts,
   TodoState,
-  UpdateTodoCardInput
+  TodoUnreadCommentSummary,
+  UpdateTodoCardInput,
+  WorkspaceInviteInfo,
+  WorkspaceMemberInfo
 } from '../types/todo';
 import type {
   CaptureOpenedPayload,
@@ -44,7 +53,8 @@ import type {
   ResidentSettings,
   ResidentSettingsUpdate,
   SnipBackgroundImageResult,
-  SnipRect,
+  SnipCompletePayload,
+  SnipCompleteResult,
   StickerData,
   StickerPinResult,
   StickerUpdatedPayload,
@@ -234,8 +244,30 @@ export function createTauriNativeClient(): NativeClient {
       updateAttachmentMeta: payload => invoke<TodoState>('todos_update_attachment_meta', { payload }),
       startSnipForCard: (cardId: string, subtaskId?: string | null) =>
         invoke('todos_start_snip_for_card', { cardId, subtaskId: subtaskId ?? null }),
+      listCardComments: (cardId: string) =>
+        invoke<TodoCardComment[]>('todos_list_card_comments', { cardId }),
+      addCardComment: (payload: AddTodoCommentInput) =>
+        invoke<TodoCardComment>('todos_add_card_comment', { payload }),
+      deleteCardComment: (payload: DeleteTodoCommentInput) =>
+        invoke<TodoCardComment[]>('todos_delete_card_comment', { payload }),
+      getUnreadCommentSummary: () =>
+        invoke<TodoUnreadCommentSummary>('todos_get_unread_comment_summary'),
+      markCardCommentsRead: (cardId: string) =>
+        invoke<TodoUnreadCommentSummary>('todos_mark_card_comments_read', { cardId }),
+      markAllCommentsRead: () =>
+        invoke<TodoUnreadCommentSummary>('todos_mark_all_comments_read'),
+      consumePendingFocusCard: () =>
+        invoke<string | null>('todos_consume_pending_focus_card'),
       onCountsUpdated: callback => onTauriEvent<TodoCounts>('todo-counts-updated', callback),
       onUpdated: callback => onTauriEvent<TodoState>('todos-updated', callback),
+      onCommentsUpdated: callback =>
+        onTauriEvent<{ cardIds: string[] }>('todo-comments-updated', callback),
+      onUnreadCommentsUpdated: callback =>
+        onTauriEvent<TodoUnreadCommentSummary>('todo-comment-unread-updated', callback),
+      onFocusCardRequested: callback =>
+        onTauriEvent<{ cardId: string }>('todo-focus-card', callback),
+      onCommentNotification: callback =>
+        onTauriEvent<TodoCommentNotificationPayload>('todo-comment-notification', callback),
       onSnipError: callback => onTauriEvent<{ error: string }>('todo-snip-error', callback)
     },
     accounts: {
@@ -244,13 +276,36 @@ export function createTauriNativeClient(): NativeClient {
         invoke<AccountSessionSnapshot>('accounts_switch_session', { payload }),
       loginWithPassword: (payload: LoginWithPasswordInput) =>
         invoke<AccountSessionSnapshot>('accounts_login_with_password', { payload }),
+      registerWithPassword: (payload: RegisterWithPasswordInput) =>
+        invoke<AccountSessionSnapshot>('accounts_register_with_password', { payload }),
       changePassword: (payload: ChangePasswordInput) =>
         invoke<void>('accounts_change_password', { payload }),
       listRemoteSessions: () => invoke<RemoteAuthSessionInfo[]>('accounts_list_remote_sessions'),
       revokeRemoteSession: (tokenId: string) =>
         invoke<void>('accounts_revoke_remote_session', { tokenId }),
       listWorkspaces: () => invoke<RemoteWorkspaceInfo[]>('accounts_list_workspaces'),
-      logoutToLocal: () => invoke<AccountSessionSnapshot>('accounts_logout_to_local'),
+      listWorkspaceMembers: (workspaceId?: string) =>
+        invoke<WorkspaceMemberInfo[]>('accounts_list_workspace_members', {
+          workspaceId: workspaceId ?? null
+        }),
+      createWorkspace: (title: string) =>
+        invoke<RemoteWorkspaceInfo>('accounts_create_workspace', { payload: { title } }),
+      createWorkspaceInvite: (payload: CreateWorkspaceInviteInput) =>
+        invoke<WorkspaceInviteInfo>('accounts_create_workspace_invite', { payload }),
+      listWorkspaceInvites: (workspaceId: string) =>
+        invoke<WorkspaceInviteInfo[]>('accounts_list_workspace_invites', { workspaceId }),
+      revokeWorkspaceInvite: (workspaceId: string, inviteCode: string) =>
+        invoke<WorkspaceInviteInfo>('accounts_revoke_workspace_invite', {
+          payload: { workspaceId, inviteCode }
+        }),
+      joinWorkspaceByInvite: (inviteCode: string) =>
+        invoke<RemoteWorkspaceInfo>('accounts_join_workspace_by_invite', {
+          payload: { inviteCode }
+        }),
+      logoutToLocal: (keepLocalContinuity = true) =>
+        invoke<AccountSessionSnapshot>('accounts_logout_to_local', {
+          payload: { keepLocalContinuity }
+        }),
       importLocalTodos: () => invoke<ImportLocalTodosResult>('accounts_import_local_todos'),
       onSessionChanged: callback =>
         onTauriEvent<AccountSessionSnapshot>('account-session-changed', callback)
@@ -322,7 +377,7 @@ export function createTauriNativeClient(): NativeClient {
       onModuleState: callback => onTauriEvent<ModuleStatePayload>('module-state', callback)
     },
     toolWindows: {
-      openTodo: () => invoke('open_todo_window'),
+      openTodo: (cardId?: string) => invoke('open_todo_window', { cardId: cardId ?? null }),
       closeTodo: () => invoke('close_todo_window')
     },
     resident: {
@@ -347,7 +402,8 @@ export function createTauriNativeClient(): NativeClient {
     },
     capture: {
       onOpened: callback => onTauriEvent<CaptureOpenedPayload>('capture-opened', callback),
-      completeSnipSelection: (rect: SnipRect) => invoke('snip_complete_selection', { payload: rect }),
+      completeSnipSelection: (payload: SnipCompletePayload) =>
+        invoke<SnipCompleteResult>('snip_complete_selection', { payload }),
       cancelSnip: () => invoke('snip_cancel'),
       getBackgroundImage: async () => {
         const result = await invoke<SnipBackgroundImageResult>('snip_get_background_image');

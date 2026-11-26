@@ -1,14 +1,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getPrivateWorkspaceOwner, sanitizeWorkspaceId } from './fs_utils.mjs';
+import { getPrivateWorkspaceOwner, httpError, sanitizeWorkspaceId } from './fs_utils.mjs';
 import { mergeCardOnServer } from './merge.mjs';
 import { openSyncSqliteDatabase, withImmediateTransaction, withReadTransaction } from './sqlite_db.mjs';
 import {
   archiveLegacyJsonFile,
+  assertCanDeleteCardComment,
+  assertInviteUsable,
+  canManageWorkspaceInvites,
+  computeInviteExpiryMs,
   extractLegacyScopedRecords,
   extractShaFromBlobKey,
+  generateInviteCode,
+  generateSharedWorkspaceId,
+  normalizeCardCommentRecord,
+  normalizeInviteMaxUses,
+  normalizeInviteRole,
+  normalizeWorkspaceTitle,
   readBlobFromDisk,
+  resolveJoinedRole,
   safeBlobPath,
+  validateBlobKey,
   writeBlobFileAtomic
 } from './storage_shared.mjs';
 
@@ -148,6 +160,28 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
   const stmtGetMemberRole = db.prepare(
     'SELECT workspace_id, role FROM workspace_members WHERE user_id = ?'
   );
+  const stmtInsertInvite = db.prepare(
+    `INSERT INTO workspace_invites
+     (invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, NULL, ?)`
+  );
+  const stmtGetInvite = db.prepare(
+    `SELECT invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at
+     FROM workspace_invites
+     WHERE invite_code = ?`
+  );
+  const stmtListInvitesByWorkspace = db.prepare(
+    `SELECT invite_code, workspace_id, role, created_by, max_uses, used_count, expires_at, revoked_at, created_at
+     FROM workspace_invites
+     WHERE workspace_id = ?
+     ORDER BY CAST(created_at AS INTEGER) DESC`
+  );
+  const stmtIncrementInviteUses = db.prepare(
+    'UPDATE workspace_invites SET used_count = used_count + 1 WHERE invite_code = ?'
+  );
+  const stmtRevokeInvite = db.prepare(
+    'UPDATE workspace_invites SET revoked_at = ? WHERE invite_code = ? AND workspace_id = ?'
+  );
   const stmtGetMedia = db.prepare(
     'SELECT sha256, original_key, thumb_key, size_bytes, uploaded_at, workspaces_json FROM media_meta WHERE sha256 = ?'
   );
@@ -174,6 +208,15 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
   const stmtUpsertQuickNote = db.prepare(
     'INSERT OR REPLACE INTO quick_notes (workspace_id, id, updated_at, deleted_at, payload_json) VALUES (?, ?, ?, ?, ?)'
   );
+  const stmtGetCardComment = db.prepare(
+    'SELECT payload_json FROM card_comments WHERE workspace_id = ? AND id = ?'
+  );
+  const stmtUpsertCardComment = db.prepare(
+    'INSERT OR REPLACE INTO card_comments (workspace_id, id, card_id, updated_at, deleted_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)'
+  );
+  const stmtListWorkspaceMemberRows = db.prepare(
+    'SELECT user_id, role FROM workspace_members WHERE workspace_id = ? ORDER BY user_id ASC'
+  );
   const stmtPullEvents = db.prepare(
     `SELECT entity_kind, entity_id, MAX(seq) AS max_seq
      FROM sync_events
@@ -194,18 +237,150 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
     return withImmediateTransaction(db, () => {
       const ws = stmtGetWorkspace.get(safeWsId);
       if (!ws) {
-        const title = privateOwner ? `${privateOwner} 私人空间` : safeWsId;
-        stmtInsertWorkspaceIgnore.run(safeWsId, title);
-        stmtUpsertWorkspaceMember.run(safeWsId, userId, 'owner');
-        return 'owner';
+        if (privateOwner || safeWsId === 'default') {
+          const title = privateOwner ? `${privateOwner} 私人空间` : '默认协同工作区';
+          const initialRole = privateOwner ? 'owner' : 'member';
+          stmtInsertWorkspaceIgnore.run(safeWsId, title);
+          stmtUpsertWorkspaceMember.run(safeWsId, userId, initialRole);
+          return initialRole;
+        }
+        throw httpError(403, `工作区 "${safeWsId}" 不存在或未获邀请加入`);
       }
       const member = stmtGetWorkspaceMember.get(safeWsId, userId);
       if (!member) {
-        const role = privateOwner === userId ? 'owner' : 'member';
-        stmtUpsertWorkspaceMember.run(safeWsId, userId, role);
-        return role;
+        if (privateOwner === userId) {
+          stmtUpsertWorkspaceMember.run(safeWsId, userId, 'owner');
+          return 'owner';
+        }
+        if (safeWsId === 'default') {
+          stmtUpsertWorkspaceMember.run(safeWsId, userId, 'member');
+          return 'member';
+        }
+        throw httpError(403, `您尚无权访问工作区 "${safeWsId}"，请通过邀请码加入`);
       }
       return member.role;
+    });
+  }
+
+  function toInviteDto(row) {
+    return {
+      inviteCode: row.invite_code,
+      workspaceId: row.workspace_id,
+      role: row.role,
+      createdBy: row.created_by,
+      maxUses: Number(row.max_uses),
+      usedCount: Number(row.used_count),
+      expiresAt: row.expires_at,
+      revokedAt: row.revoked_at,
+      createdAt: row.created_at
+    };
+  }
+
+  function createSharedWorkspace({ userId, title }) {
+    const cleanTitle = normalizeWorkspaceTitle(title);
+    const workspaceId = generateSharedWorkspaceId();
+    withImmediateTransaction(db, () => {
+      stmtInsertWorkspaceIgnore.run(workspaceId, cleanTitle);
+      stmtUpsertWorkspaceMember.run(workspaceId, userId, 'owner');
+    });
+    return {
+      workspaceId,
+      title: cleanTitle,
+      role: 'owner',
+      isPrivate: false
+    };
+  }
+
+  function createWorkspaceInvite({ userId, workspaceId, role = 'member', maxUses = 1, expiresInHours = 72 }) {
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) {
+      throw httpError(400, '私人空间不可生成共享邀请码，请先新建共享工作区');
+    }
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可生成邀请码');
+    }
+    const cleanRole = normalizeInviteRole(role);
+    const cleanMaxUses = normalizeInviteMaxUses(maxUses);
+    const expiresAt = computeInviteExpiryMs(expiresInHours);
+    const inviteCode = generateInviteCode();
+    const now = String(Date.now());
+    withImmediateTransaction(db, () => {
+      stmtInsertInvite.run(inviteCode, safeWsId, cleanRole, userId, cleanMaxUses, expiresAt, now);
+    });
+    return toInviteDto(stmtGetInvite.get(inviteCode));
+  }
+
+  function listWorkspaceInvites({ userId, workspaceId }) {
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) {
+      return [];
+    }
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可查看邀请码');
+    }
+    return withReadTransaction(db, () =>
+      stmtListInvitesByWorkspace.all(safeWsId).map(toInviteDto)
+    );
+  }
+
+  function revokeWorkspaceInvite({ userId, workspaceId, inviteCode }) {
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) {
+      throw httpError(400, '缺少邀请码');
+    }
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可撤回邀请码');
+    }
+    return withImmediateTransaction(db, () => {
+      const existing = stmtGetInvite.get(cleanCode);
+      if (!existing || existing.workspace_id !== safeWsId) {
+        throw httpError(404, '未找到对应邀请码');
+      }
+      if (!existing.revoked_at) {
+        stmtRevokeInvite.run(String(Date.now()), cleanCode, safeWsId);
+      }
+      return toInviteDto(stmtGetInvite.get(cleanCode));
+    });
+  }
+
+  function listWorkspaceMembers({ userId, workspaceId }) {
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    ensureWorkspaceAccess(userId, safeWsId);
+    return withReadTransaction(db, () =>
+      stmtListWorkspaceMemberRows.all(safeWsId).map(row => ({
+        userId: row.user_id,
+        role: row.role
+      }))
+    );
+  }
+
+  function joinWorkspaceByInvite({ userId, inviteCode }) {
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) {
+      throw httpError(400, '请输入邀请码');
+    }
+    return withImmediateTransaction(db, () => {
+      const row = stmtGetInvite.get(cleanCode);
+      const dto = row ? toInviteDto(row) : null;
+      assertInviteUsable(dto);
+      const ws = stmtGetWorkspace.get(dto.workspaceId);
+      if (!ws) {
+        throw httpError(404, '邀请对应的工作区已不存在');
+      }
+      stmtIncrementInviteUses.run(cleanCode);
+      const existingMember = stmtGetWorkspaceMember.get(dto.workspaceId, userId);
+      const nextRole = resolveJoinedRole(existingMember?.role, dto.role);
+      stmtUpsertWorkspaceMember.run(dto.workspaceId, userId, nextRole);
+      return {
+        workspaceId: dto.workspaceId,
+        title: ws.title || dto.workspaceId,
+        role: nextRole,
+        isPrivate: false
+      };
     });
   }
 
@@ -350,7 +525,13 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
     return readBlobFromDisk(blobsDir, kind, key);
   }
 
-  function pushEntries({ workspaceId = 'default', actorId, entries = [] }) {
+  function pushEntries({
+    workspaceId = 'default',
+    actorId,
+    authorName = '',
+    role = 'member',
+    entries = []
+  }) {
     return withImmediateTransaction(db, () => {
       let cursor = Number(stmtGetCursor.get()?.value || 0);
       const acked = [];
@@ -443,6 +624,31 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
             appendEvent('quickNote', entityId, 'upsert');
           }
           acked.push({ entityKind: 'quickNote', entityId });
+        } else if (kind === 'cardComment') {
+          const existingRow = stmtGetCardComment.get(workspaceId, entityId);
+          const existing = existingRow ? JSON.parse(existingRow.payload_json) : null;
+          if (op === 'delete') {
+            assertCanDeleteCardComment(existing, actorId, role);
+          }
+          const comment = normalizeCardCommentRecord({
+            id: entityId,
+            workspaceId,
+            actorId,
+            authorName,
+            payload,
+            existing,
+            operation: op
+          });
+          stmtUpsertCardComment.run(
+            workspaceId,
+            entityId,
+            comment.cardId,
+            comment.updatedAt,
+            comment.deletedAt,
+            JSON.stringify(comment)
+          );
+          appendEvent('cardComment', entityId, op === 'delete' ? 'delete' : 'upsert');
+          acked.push({ entityKind: 'cardComment', entityId });
         } else if (kind === 'board') {
           acked.push({ entityKind: 'board', entityId });
         }
@@ -468,6 +674,8 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
       const removedCardIds = [];
       const quickNotes = [];
       const removedQuickNoteIds = [];
+      const cardComments = [];
+      const removedCardCommentIds = [];
 
       for (const ev of rows) {
         if (ev.entity_kind === 'card') {
@@ -488,6 +696,15 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
           } else {
             quickNotes.push(note);
           }
+        } else if (ev.entity_kind === 'cardComment') {
+          const row = stmtGetCardComment.get(workspaceId, ev.entity_id);
+          if (!row) continue;
+          const comment = JSON.parse(row.payload_json);
+          if (comment.deletedAt) {
+            removedCardCommentIds.push(comment.id);
+          } else {
+            cardComments.push(comment);
+          }
         }
       }
 
@@ -496,7 +713,9 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
         cards,
         removedCardIds,
         quickNotes,
-        removedQuickNoteIds
+        removedQuickNoteIds,
+        cardComments,
+        removedCardCommentIds
       };
     });
   }
@@ -507,6 +726,12 @@ export function createSqliteSyncStore(dataDir, { dbHandle = null } = {}) {
     ensureWorkspaceAccess,
     setWorkspaceRole,
     listWorkspacesForUser,
+    listWorkspaceMembers,
+    createSharedWorkspace,
+    createWorkspaceInvite,
+    listWorkspaceInvites,
+    revokeWorkspaceInvite,
+    joinWorkspaceByInvite,
     presignMedia,
     writeBlob,
     canReadBlob,

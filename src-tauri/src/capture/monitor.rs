@@ -1,6 +1,6 @@
 use super::SNIP_WINDOW_LABEL;
 use crate::stickers::StickerWindowBounds;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "windows")]
@@ -12,7 +12,8 @@ use windows::Win32::Graphics::Gdi::{
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MonitorSnapshot {
     pub x: i32,
     pub y: i32,

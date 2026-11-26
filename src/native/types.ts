@@ -32,7 +32,8 @@ import type {
   ShortcutValidationStats,
   SnapshotVerificationReport,
   SnipBackgroundImageResult,
-  SnipRect,
+  SnipCompletePayload,
+  SnipCompleteResult,
   StickerData,
   StickerPinResult,
   StickerUpdatedPayload,
@@ -51,23 +52,32 @@ import type {
 import type {
   AccountSessionSnapshot,
   AddTodoAttachmentBytesInput,
+  AddTodoCommentInput,
   ChangePasswordInput,
   CreateTodoCardInput,
+  CreateWorkspaceInviteInput,
   DeleteTodoAttachmentInput,
+  DeleteTodoCommentInput,
   ImportLocalTodosResult,
   LoginWithPasswordInput,
   MoveTodoCardInput,
   PickTodoAttachmentResult,
+  RegisterWithPasswordInput,
   RemoteAuthSessionInfo,
   RemoteWorkspaceInfo,
   SetTodoCardCoverInput,
   SwitchAccountSessionInput,
   SyncStatusSnapshot,
   TodoCard,
+  TodoCardComment,
+  TodoCommentNotificationPayload,
   TodoCounts,
   TodoState,
+  TodoUnreadCommentSummary,
   UpdateTodoAttachmentMetaInput,
-  UpdateTodoCardInput
+  UpdateTodoCardInput,
+  WorkspaceInviteInfo,
+  WorkspaceMemberInfo
 } from '../types/todo';
 
 export interface NativeFilesClient {
@@ -107,8 +117,25 @@ export interface NativeTodosClient {
   setCardCover: (payload: SetTodoCardCoverInput) => Promise<TodoState>;
   updateAttachmentMeta: (payload: UpdateTodoAttachmentMetaInput) => Promise<TodoState>;
   startSnipForCard: (cardId: string, subtaskId?: string | null) => Promise<unknown>;
+  listCardComments: (cardId: string) => Promise<TodoCardComment[]>;
+  addCardComment: (payload: AddTodoCommentInput) => Promise<TodoCardComment>;
+  deleteCardComment: (payload: DeleteTodoCommentInput) => Promise<TodoCardComment[]>;
+  getUnreadCommentSummary: () => Promise<TodoUnreadCommentSummary>;
+  markCardCommentsRead: (cardId: string) => Promise<TodoUnreadCommentSummary>;
+  markAllCommentsRead: () => Promise<TodoUnreadCommentSummary>;
+  consumePendingFocusCard?: () => Promise<string | null>;
   onCountsUpdated: (callback: (payload: TodoCounts) => void) => (() => void) | undefined;
   onUpdated: (callback: (payload: TodoState) => void) => (() => void) | undefined;
+  onCommentsUpdated?: (callback: (payload: { cardIds: string[] }) => void) => (() => void) | undefined;
+  onUnreadCommentsUpdated?: (
+    callback: (payload: TodoUnreadCommentSummary) => void
+  ) => (() => void) | undefined;
+  onFocusCardRequested?: (
+    callback: (payload: { cardId: string }) => void
+  ) => (() => void) | undefined;
+  onCommentNotification?: (
+    callback: (payload: TodoCommentNotificationPayload) => void
+  ) => (() => void) | undefined;
   onSnipError?: (callback: (payload: { error: string }) => void) => (() => void) | undefined;
 }
 
@@ -150,7 +177,7 @@ export interface NativeWindowsClient {
 }
 
 export interface NativeToolWindowsClient {
-  openTodo: () => Promise<unknown>;
+  openTodo: (cardId?: string) => Promise<unknown>;
   closeTodo: () => Promise<unknown>;
 }
 
@@ -176,7 +203,7 @@ export interface NativeClipboardClient {
 
 export interface NativeCaptureClient {
   onOpened: (callback: (payload: CaptureOpenedPayload) => void) => (() => void) | undefined;
-  completeSnipSelection: (rect: SnipRect) => Promise<unknown>;
+  completeSnipSelection: (payload: SnipCompletePayload) => Promise<SnipCompleteResult>;
   cancelSnip: () => Promise<unknown>;
   getBackgroundImage: () => Promise<SnipBackgroundImageResult>;
 }
@@ -215,11 +242,18 @@ export interface NativeAccountsClient {
   getSession: () => Promise<AccountSessionSnapshot>;
   switchSession: (payload: SwitchAccountSessionInput) => Promise<AccountSessionSnapshot>;
   loginWithPassword?: (payload: LoginWithPasswordInput) => Promise<AccountSessionSnapshot>;
+  registerWithPassword?: (payload: RegisterWithPasswordInput) => Promise<AccountSessionSnapshot>;
   changePassword?: (payload: ChangePasswordInput) => Promise<void>;
   listRemoteSessions?: () => Promise<RemoteAuthSessionInfo[]>;
   revokeRemoteSession?: (tokenId: string) => Promise<void>;
   listWorkspaces?: () => Promise<RemoteWorkspaceInfo[]>;
-  logoutToLocal: () => Promise<AccountSessionSnapshot>;
+  listWorkspaceMembers?: (workspaceId?: string) => Promise<WorkspaceMemberInfo[]>;
+  createWorkspace?: (title: string) => Promise<RemoteWorkspaceInfo>;
+  createWorkspaceInvite?: (payload: CreateWorkspaceInviteInput) => Promise<WorkspaceInviteInfo>;
+  listWorkspaceInvites?: (workspaceId: string) => Promise<WorkspaceInviteInfo[]>;
+  revokeWorkspaceInvite?: (workspaceId: string, inviteCode: string) => Promise<WorkspaceInviteInfo>;
+  joinWorkspaceByInvite?: (inviteCode: string) => Promise<RemoteWorkspaceInfo>;
+  logoutToLocal: (keepLocalContinuity?: boolean) => Promise<AccountSessionSnapshot>;
   importLocalTodos: () => Promise<ImportLocalTodosResult>;
   onSessionChanged: (callback: (payload: AccountSessionSnapshot) => void) => (() => void) | undefined;
 }

@@ -4,13 +4,49 @@ use crate::shell::{
     todo_window_bounds, update_active_module, webview_url_for_mode, ShellState,
 };
 use serde_json::{json, Value};
+use std::sync::Mutex;
 use tauri::{
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 
 const TODO_WINDOW_LABEL: &str = "todos";
 const TODO_MODULE_ID: &str = "todos";
+
+#[derive(Default)]
+pub struct TodoFocusCardState(pub Mutex<Option<String>>);
+
+#[cfg(target_os = "windows")]
+fn set_window_dwm_transitions_disabled(
+    window: &WebviewWindow,
+    disabled: bool,
+) -> Result<(), String> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED};
+
+    let raw = window.hwnd().map_err(|err| err.to_string())?;
+    let hwnd = HWND(raw.0);
+    let value = BOOL::from(disabled);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            (&value as *const BOOL).cast::<std::ffi::c_void>(),
+            std::mem::size_of::<BOOL>() as u32,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn flush_dwm_compositor() {
+    use windows::Win32::Graphics::Dwm::DwmFlush;
+    unsafe {
+        let _ = DwmFlush();
+        let _ = DwmFlush();
+    }
+}
 
 fn sync_todo_window_closed(app: &AppHandle) -> Result<(), String> {
     sync_floating_module_closed(app, TODO_MODULE_ID)
@@ -56,10 +92,15 @@ fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn show_todo_window(app: &AppHandle) -> Result<(), String> {
+fn show_todo_window(app: &AppHandle, target_card_id: Option<&str>) -> Result<(), String> {
     let shell = app.state::<ShellState>();
     let current = shell_snapshot(&shell)?;
-    if current.active_module.as_deref() == Some(TODO_MODULE_ID) {
+    let normalized_card_id = target_card_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    if normalized_card_id.is_none() && current.active_module.as_deref() == Some(TODO_MODULE_ID) {
         let should_restore = app
             .get_webview_window(TODO_WINDOW_LABEL)
             .map(|window| {
@@ -69,6 +110,12 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
         if !should_restore {
             close_todo_window_internal(app)?;
             return Ok(());
+        }
+    }
+
+    if let Some(ref card_id) = normalized_card_id {
+        if let Ok(mut pending) = app.state::<TodoFocusCardState>().0.lock() {
+            *pending = Some(card_id.clone());
         }
     }
 
@@ -87,7 +134,13 @@ fn show_todo_window(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
         bring_todo_window_to_front(&window)?;
     }
-    update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))
+    update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))?;
+
+    if let Some(card_id) = normalized_card_id {
+        app.emit("todo-focus-card", json!({ "cardId": card_id }))
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn close_todo_window_internal(app: &AppHandle) -> Result<(), String> {
@@ -99,7 +152,11 @@ fn close_todo_window_internal(app: &AppHandle) -> Result<(), String> {
 
 pub fn hide_todo_window_for_snip(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
+        #[cfg(target_os = "windows")]
+        set_window_dwm_transitions_disabled(&window, true)?;
         window.hide().map_err(|err| err.to_string())?;
+        #[cfg(target_os = "windows")]
+        flush_dwm_compositor();
     }
     Ok(())
 }
@@ -116,17 +173,29 @@ pub fn show_todo_window_after_snip(app: &AppHandle) -> Result<(), String> {
     )?;
     if let Some(window) = app.get_webview_window(TODO_WINDOW_LABEL) {
         bring_todo_window_to_front(&window)?;
+        #[cfg(target_os = "windows")]
+        let _ = set_window_dwm_transitions_disabled(&window, false);
     }
     update_active_module(app, &shell, Some(TODO_MODULE_ID.to_string()))
 }
 
 #[tauri::command]
-pub async fn open_todo_window(app: AppHandle) -> Result<Value, String> {
+pub async fn open_todo_window(app: AppHandle, card_id: Option<String>) -> Result<Value, String> {
     let app_handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || show_todo_window(&app_handle))
+    tauri::async_runtime::spawn_blocking(move || show_todo_window(&app_handle, card_id.as_deref()))
         .await
         .map_err(|err| err.to_string())??;
     Ok(json!({ "success": true }))
+}
+
+#[tauri::command]
+pub fn todos_consume_pending_focus_card(app: AppHandle) -> Result<Option<String>, String> {
+    let state = app.state::<TodoFocusCardState>();
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| "failed to lock todo focus card state".to_string())?;
+    Ok(guard.take())
 }
 
 #[tauri::command]

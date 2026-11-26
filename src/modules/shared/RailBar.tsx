@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ListTodo, PackageOpen, PencilLine, Scissors } from 'lucide-react';
 import { nativeClient } from '../../native/native-client';
-import type { TodoCounts } from '../../types/todo';
+import type { TodoCounts, TodoUnreadCommentSummary } from '../../types/todo';
 import type { RailModule, WindowAction } from '../../types/tidydesk-api';
 
 function formatBadge(count: number) {
@@ -9,12 +9,19 @@ function formatBadge(count: number) {
   return count > 99 ? '99+' : String(count);
 }
 
+const EMPTY_UNREAD: TodoUnreadCommentSummary = {
+  unreadTotal: 0,
+  mentionTotal: 0,
+  items: []
+};
+
 /**
- * Floating docked edge handle rendering module triggers and open todo badge.
+ * Floating docked edge handle rendering module triggers, open todo badge, and unread comment/@mention indicator.
  */
 export const RailBar: React.FC = () => {
   const [activeModule, setActiveModule] = useState<RailModule>(null);
   const [todoCounts, setTodoCounts] = useState<TodoCounts>({ total: 0, open: 0, done: 0 });
+  const [unreadSummary, setUnreadSummary] = useState<TodoUnreadCommentSummary>(EMPTY_UNREAD);
 
   useEffect(() => {
     let disposed = false;
@@ -22,6 +29,7 @@ export const RailBar: React.FC = () => {
     const syncCounts = () => {
       if (!nativeClient.isAvailable()) {
         setTodoCounts({ total: 0, open: 0, done: 0 });
+        setUnreadSummary(EMPTY_UNREAD);
         return;
       }
       nativeClient.todos
@@ -32,6 +40,14 @@ export const RailBar: React.FC = () => {
         .catch(err => {
           console.error('[TIDYDESK] Failed to load todo counts for handle badge:', err);
         });
+      nativeClient.todos
+        .getUnreadCommentSummary()
+        .then(next => {
+          if (!disposed) setUnreadSummary(next);
+        })
+        .catch(err => {
+          console.error('[TIDYDESK] Failed to load comment unread summary for handle badge:', err);
+        });
     };
 
     syncCounts();
@@ -41,6 +57,9 @@ export const RailBar: React.FC = () => {
     });
     const unsubscribeTodos = nativeClient.todos.onUpdated(state => {
       if (!disposed && state?.counts) setTodoCounts(state.counts);
+    });
+    const unsubscribeUnread = nativeClient.todos.onUnreadCommentsUpdated?.(summary => {
+      if (!disposed) setUnreadSummary(summary || EMPTY_UNREAD);
     });
     const unsubscribeSession = nativeClient.accounts.onSessionChanged(() => {
       syncCounts();
@@ -58,6 +77,7 @@ export const RailBar: React.FC = () => {
       disposed = true;
       unsubscribeCounts?.();
       unsubscribeTodos?.();
+      unsubscribeUnread?.();
       unsubscribeSession?.();
       unsubscribeModule?.();
       window.removeEventListener('focus', handleVisibilityOrFocus);
@@ -67,12 +87,24 @@ export const RailBar: React.FC = () => {
 
   const openModule = (action: WindowAction) => {
     if (action === 'open-todos') {
-      void nativeClient.toolWindows.openTodo();
+      const leadUnreadCardId =
+        activeModule !== 'todos' && unreadSummary.unreadTotal > 0
+          ? unreadSummary.items[0]?.cardId
+          : undefined;
+      void nativeClient.toolWindows.openTodo(leadUnreadCardId);
       return;
     }
 
     nativeClient.windows.control(action);
   };
+
+  const unreadCommentBadge = formatBadge(unreadSummary.unreadTotal);
+  const hasUnreadMentions = unreadSummary.mentionTotal > 0;
+  const todoTitle = unreadSummary.unreadTotal > 0
+    ? hasUnreadMentions
+      ? `待办 ${todoCounts.open} 个未完成 · ${unreadSummary.unreadTotal} 条新评论（${unreadSummary.mentionTotal} 条 @你，点击直达）`
+      : `待办 ${todoCounts.open} 个未完成 · ${unreadSummary.unreadTotal} 条新评论（点击查看）`
+    : `待办 ${todoCounts.open} 个未完成`;
 
   const items: Array<{
     id: Exclude<RailModule, null> | 'screenshot';
@@ -80,6 +112,8 @@ export const RailBar: React.FC = () => {
     action: WindowAction;
     icon: React.ReactNode;
     badge?: string;
+    commentBadge?: string;
+    hasMention?: boolean;
   }> = [
     {
       id: 'files',
@@ -89,10 +123,12 @@ export const RailBar: React.FC = () => {
     },
     {
       id: 'todos',
-      title: `待办 ${todoCounts.open} 个未完成`,
+      title: todoTitle,
       action: 'open-todos',
       icon: <ListTodo size={21} strokeWidth={1.9} />,
-      badge: formatBadge(todoCounts.open)
+      badge: formatBadge(todoCounts.open),
+      commentBadge: unreadCommentBadge,
+      hasMention: hasUnreadMentions
     },
     {
       id: 'capture',
@@ -141,6 +177,26 @@ export const RailBar: React.FC = () => {
             {item.badge && (
               <span className="absolute -right-0.5 -top-0.5 grid min-h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-black leading-4 text-white shadow">
                 {item.badge}
+              </span>
+            )}
+            {item.commentBadge && (
+              <span
+                role="button"
+                tabIndex={-1}
+                onClick={event => {
+                  event.stopPropagation();
+                  const targetCardId = unreadSummary.items[0]?.cardId;
+                  if (targetCardId) {
+                    void nativeClient.toolWindows.openTodo(targetCardId);
+                  }
+                }}
+                className={`absolute -bottom-0.5 -left-0.5 grid min-h-4 min-w-4 place-items-center rounded-full px-1 text-[9px] font-black leading-4 shadow ${
+                  item.hasMention
+                    ? 'animate-pulse bg-amber-400 text-slate-950'
+                    : 'bg-sky-500 text-white'
+                }`}
+              >
+                {item.hasMention ? '@' : item.commentBadge}
               </span>
             )}
           </button>

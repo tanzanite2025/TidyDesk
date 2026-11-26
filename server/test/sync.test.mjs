@@ -928,3 +928,399 @@ test('unsupported store driver fails loudly and json rollback mode passes contra
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('self-service registration, shared workspace creation, invite join/revoke, and 403 isolation', async () => {
+  for (const storeDriver of ['sqlite', 'json']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `tidydesk-register-${storeDriver}-`));
+    const srv = createSyncServer({ dataDir: dir, storeDriver, allowAnyDevToken: false });
+    await new Promise(resolve => srv.server.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${srv.server.address().port}`;
+
+    try {
+      const regA = await fetch(`${baseUrl}/api/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: 'u_alpha',
+          password: 'pass_alpha',
+          displayName: 'Alpha',
+          deviceLabel: 'Win-A'
+        })
+      });
+      assert.equal(regA.status, 200);
+      const dataA = await regA.json();
+      assert.equal(dataA.userId, 'u_alpha');
+      assert.equal(dataA.defaultWorkspaceId, 'private:u_alpha');
+      assert.ok(dataA.token);
+
+      // Duplicate registration rejected loudly
+      const dupA = await fetch(`${baseUrl}/api/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'u_alpha', password: 'other' })
+      });
+      assert.equal(dupA.status, 409);
+
+      const regB = await fetch(`${baseUrl}/api/v1/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'u_beta', password: 'pass_beta', displayName: 'Beta' })
+      });
+      assert.equal(regB.status, 200);
+      const dataB = await regB.json();
+
+      // User A creates a shared workspace
+      const createWs = await fetch(`${baseUrl}/api/v1/workspaces`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataA.token}`,
+          'X-TidyDesk-User': 'u_alpha',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title: '研发协同板' })
+      });
+      assert.equal(createWs.status, 200);
+      const wsPayload = await createWs.json();
+      const wsId = wsPayload.workspace.workspaceId;
+      assert.equal(wsPayload.workspace.role, 'owner');
+
+      // User B cannot access custom shared workspace without invite
+      const blockedPull = await fetch(
+        `${baseUrl}/api/v1/sync/pull?workspaceId=${encodeURIComponent(wsId)}`,
+        {
+          headers: { Authorization: `Bearer ${dataB.token}`, 'X-TidyDesk-User': 'u_beta' }
+        }
+      );
+      assert.equal(blockedPull.status, 403);
+
+      // User A issues 1-use member invite
+      const invRes = await fetch(`${baseUrl}/api/v1/workspaces/invites`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataA.token}`,
+          'X-TidyDesk-User': 'u_alpha',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ workspaceId: wsId, role: 'member', maxUses: 1 })
+      });
+      assert.equal(invRes.status, 200);
+      const inviteCode = (await invRes.json()).invite.inviteCode;
+      assert.ok(inviteCode.startsWith('td_inv_'));
+
+      // User B cannot issue invites before joining or without admin/owner role
+      const joinRes = await fetch(`${baseUrl}/api/v1/workspaces/join`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataB.token}`,
+          'X-TidyDesk-User': 'u_beta',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ inviteCode })
+      });
+      assert.equal(joinRes.status, 200);
+      const joinData = await joinRes.json();
+      assert.equal(joinData.workspace.workspaceId, wsId);
+      assert.equal(joinData.workspace.role, 'member');
+
+      // Exhausted 1-use invite rejects reuse with 410
+      const reuseRes = await fetch(`${baseUrl}/api/v1/workspaces/join`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataB.token}`,
+          'X-TidyDesk-User': 'u_beta',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ inviteCode })
+      });
+      assert.equal(reuseRes.status, 410);
+
+      // User B can now read/write shared workspace, while still forbidden from creating invites as member
+      const allowedPull = await fetch(
+        `${baseUrl}/api/v1/sync/pull?workspaceId=${encodeURIComponent(wsId)}`,
+        {
+          headers: { Authorization: `Bearer ${dataB.token}`, 'X-TidyDesk-User': 'u_beta' }
+        }
+      );
+      assert.equal(allowedPull.status, 200);
+
+      const memberInviteAttempt = await fetch(`${baseUrl}/api/v1/workspaces/invites`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataB.token}`,
+          'X-TidyDesk-User': 'u_beta',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ workspaceId: wsId, role: 'viewer' })
+      });
+      assert.equal(memberInviteAttempt.status, 403);
+
+      // User A creates another invite and revokes it
+      const inv2 = await (
+        await fetch(`${baseUrl}/api/v1/workspaces/invites`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${dataA.token}`,
+            'X-TidyDesk-User': 'u_alpha',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ workspaceId: wsId, role: 'viewer', maxUses: 5 })
+        })
+      ).json();
+      const revokeRes = await fetch(`${baseUrl}/api/v1/workspaces/invites/revoke`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${dataA.token}`,
+          'X-TidyDesk-User': 'u_alpha',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ workspaceId: wsId, inviteCode: inv2.invite.inviteCode })
+      });
+      assert.equal(revokeRes.status, 200);
+      assert.ok((await revokeRes.json()).invite.revokedAt);
+
+      const listInv = await (
+        await fetch(`${baseUrl}/api/v1/workspaces/invites?workspaceId=${encodeURIComponent(wsId)}`, {
+          headers: { Authorization: `Bearer ${dataA.token}`, 'X-TidyDesk-User': 'u_alpha' }
+        })
+      ).json();
+      assert.equal(listInv.invites.length, 2);
+    } finally {
+      await new Promise(resolve => srv.server.close(resolve));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('cardComment incremental sync enforces anti-spoofing, mentions extraction, workspace members, and delete permissions', async () => {
+  for (const storeDriver of ['sqlite', 'json']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `tidydesk-comments-${storeDriver}-`));
+    const srv = createSyncServer({ dataDir: dir, storeDriver, allowAnyDevToken: false });
+    await new Promise(resolve => srv.server.listen(0, '127.0.0.1', resolve));
+    const baseUrl = `http://127.0.0.1:${srv.server.address().port}`;
+
+    try {
+      const regA = await (
+        await fetch(`${baseUrl}/api/v1/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'alice', password: 'pw_a', displayName: 'Alice' })
+        })
+      ).json();
+      const regB = await (
+        await fetch(`${baseUrl}/api/v1/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'bob', password: 'pw_b', displayName: 'Bob' })
+        })
+      ).json();
+      const regV = await (
+        await fetch(`${baseUrl}/api/v1/auth/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'viewer_u', password: 'pw_v', displayName: 'Viewer' })
+        })
+      ).json();
+
+      const wsId = (
+        await (
+          await fetch(`${baseUrl}/api/v1/workspaces`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${regA.token}`,
+              'X-TidyDesk-User': 'alice',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ title: '评论测试看板' })
+          })
+        ).json()
+      ).workspace.workspaceId;
+
+      const invMember = (
+        await (
+          await fetch(`${baseUrl}/api/v1/workspaces/invites`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${regA.token}`,
+              'X-TidyDesk-User': 'alice',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ workspaceId: wsId, role: 'member', maxUses: 1 })
+          })
+        ).json()
+      ).invite.inviteCode;
+
+      const invViewer = (
+        await (
+          await fetch(`${baseUrl}/api/v1/workspaces/invites`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${regA.token}`,
+              'X-TidyDesk-User': 'alice',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ workspaceId: wsId, role: 'viewer', maxUses: 1 })
+          })
+        ).json()
+      ).invite.inviteCode;
+
+      await fetch(`${baseUrl}/api/v1/workspaces/join`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regB.token}`,
+          'X-TidyDesk-User': 'bob',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ inviteCode: invMember })
+      });
+      await fetch(`${baseUrl}/api/v1/workspaces/join`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regV.token}`,
+          'X-TidyDesk-User': 'viewer_u',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ inviteCode: invViewer })
+      });
+
+      const membersRes = await (
+        await fetch(`${baseUrl}/api/v1/workspaces/members?workspaceId=${encodeURIComponent(wsId)}`, {
+          headers: { Authorization: `Bearer ${regB.token}`, 'X-TidyDesk-User': 'bob' }
+        })
+      ).json();
+      assert.equal(membersRes.members.length, 3);
+      assert.ok(membersRes.members.some(m => m.userId === 'alice' && m.displayName === 'Alice'));
+
+      // Bob pushes a comment spoofing authorId='alice'; server overwrites authorId to 'bob' & extracts mentions
+      const pushBob = await fetch(`${baseUrl}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regB.token}`,
+          'X-TidyDesk-User': 'bob',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          workspaceId: wsId,
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: 'cmt-1',
+              operation: 'upsert',
+              payload: {
+                cardId: 'card-1',
+                parentId: 'cmt-parent-0',
+                authorId: 'alice',
+                body: '请 @alice 和 @viewer_u 看下进度'
+              }
+            }
+          ]
+        })
+      });
+      assert.equal(pushBob.status, 200);
+
+      // Viewer cannot push comments
+      const viewerPush = await fetch(`${baseUrl}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regV.token}`,
+          'X-TidyDesk-User': 'viewer_u',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          workspaceId: wsId,
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: 'cmt-v',
+              operation: 'upsert',
+              payload: { cardId: 'card-1', body: 'viewer test' }
+            }
+          ]
+        })
+      });
+      assert.equal(viewerPush.status, 403);
+
+      // Alice (even as owner) cannot overwrite Bob's comment content via upsert spoofing
+      const overwriteBob = await fetch(`${baseUrl}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regA.token}`,
+          'X-TidyDesk-User': 'alice',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          workspaceId: wsId,
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: 'cmt-1',
+              operation: 'upsert',
+              payload: { cardId: 'card-1', body: '恶意篡改内容' }
+            }
+          ]
+        })
+      });
+      assert.equal(overwriteBob.status, 403);
+
+      const pulled = await (
+        await fetch(`${baseUrl}/api/v1/sync/pull?workspaceId=${encodeURIComponent(wsId)}&cursor=0`, {
+          headers: { Authorization: `Bearer ${regA.token}`, 'X-TidyDesk-User': 'alice' }
+        })
+      ).json();
+      assert.equal(pulled.cardComments.length, 1);
+      assert.equal(pulled.cardComments[0].authorId, 'bob');
+      assert.equal(pulled.cardComments[0].authorName, 'Bob');
+      assert.equal(pulled.cardComments[0].parentId, 'cmt-parent-0');
+      assert.deepEqual(pulled.cardComments[0].mentions, ['alice', 'viewer_u']);
+
+      // Alice (owner) deletes Bob's comment -> allowed; emits tombstone in removedCardCommentIds
+      const aliceDel = await fetch(`${baseUrl}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regA.token}`,
+          'X-TidyDesk-User': 'alice',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          workspaceId: wsId,
+          entries: [
+            { entityKind: 'cardComment', entityId: 'cmt-1', operation: 'delete', payload: { cardId: 'card-1' } }
+          ]
+        })
+      });
+      assert.equal(aliceDel.status, 200);
+
+      const pulledAfterDel = await (
+        await fetch(
+          `${baseUrl}/api/v1/sync/pull?workspaceId=${encodeURIComponent(wsId)}&cursor=${pulled.nextCursor}`,
+          { headers: { Authorization: `Bearer ${regB.token}`, 'X-TidyDesk-User': 'bob' } }
+        )
+      ).json();
+      assert.deepEqual(pulledAfterDel.removedCardCommentIds, ['cmt-1']);
+
+      // Deleted comment cannot be resurrected by upsert
+      const resurrectBob = await fetch(`${baseUrl}/api/v1/sync/push`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${regB.token}`,
+          'X-TidyDesk-User': 'bob',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          workspaceId: wsId,
+          entries: [
+            {
+              entityKind: 'cardComment',
+              entityId: 'cmt-1',
+              operation: 'upsert',
+              payload: { cardId: 'card-1', body: '尝试复活已删评论' }
+            }
+          ]
+        })
+      });
+      assert.equal(resurrectBob.status, 409);
+    } finally {
+      await new Promise(resolve => srv.server.close(resolve));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});

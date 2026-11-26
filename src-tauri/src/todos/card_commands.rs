@@ -179,7 +179,9 @@ pub async fn todos_get_card_detail(app: AppHandle, card_id: String) -> Result<Va
             let card_index = find_todo_card_index(&index, &card_id)?;
             let card = &index["cards"][card_index];
             let content = read_cached_card_content(&app, store, &card_id)?;
-            Ok(enrich_card_detail_view(card, content))
+            let metrics =
+                super::comment_commands::read_single_card_comment_metrics_unlocked(&app, &card_id)?;
+            Ok(enrich_card_detail_view(card, content, &metrics))
         })
     })
     .await
@@ -269,6 +271,7 @@ pub async fn todos_create_card(
         })?;
         emit_todo_counts(&app, &counts)?;
         emit_todos_updated(&app, &state)?;
+        let _ = super::comment_commands::emit_unread_comment_summary(&app);
         Ok(state)
     })
     .await
@@ -412,6 +415,7 @@ pub async fn todos_update_card(
         })?;
         emit_todo_counts(&app, &counts)?;
         emit_todos_updated(&app, &state)?;
+        let _ = super::comment_commands::emit_unread_comment_summary(&app);
         Ok(state)
     })
     .await
@@ -496,6 +500,7 @@ pub async fn todos_delete_card(app: AppHandle, card_id: String) -> Result<Value,
         })?;
         emit_todo_counts(&app, &counts)?;
         emit_todos_updated(&app, &state)?;
+        let _ = super::comment_commands::emit_unread_comment_summary(&app);
         Ok(state)
     })
     .await
@@ -559,6 +564,7 @@ pub async fn todos_move_card(
         })?;
         emit_todo_counts(&app, &counts)?;
         emit_todos_updated(&app, &state)?;
+        let _ = super::comment_commands::emit_unread_comment_summary(&app);
         Ok(state)
     })
     .await

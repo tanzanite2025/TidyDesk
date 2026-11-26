@@ -41,10 +41,12 @@ pub use crate::paths::{
 };
 
 use accounts::{
-    accounts_change_password, accounts_get_session, accounts_import_local_todos,
-    accounts_list_remote_sessions, accounts_list_workspaces, accounts_login_with_password,
-    accounts_logout_to_local, accounts_revoke_remote_session, accounts_switch_session,
-    AccountSessionState,
+    accounts_change_password, accounts_create_workspace, accounts_create_workspace_invite,
+    accounts_get_session, accounts_import_local_todos, accounts_join_workspace_by_invite,
+    accounts_list_remote_sessions, accounts_list_workspace_invites,
+    accounts_list_workspace_members, accounts_list_workspaces, accounts_login_with_password,
+    accounts_logout_to_local, accounts_register_with_password, accounts_revoke_remote_session,
+    accounts_revoke_workspace_invite, accounts_switch_session, AccountSessionState,
 };
 use apps::{
     apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
@@ -97,12 +99,16 @@ use sync::{
     SyncExecutionLockState, SyncOutboxState, SyncRealtimeState,
 };
 use todos::{
-    todos_add_attachment_bytes, todos_create_card, todos_delete_attachment, todos_delete_card,
-    todos_get_card_detail, todos_get_counts, todos_move_card, todos_pick_and_add_attachment,
+    todos_add_attachment_bytes, todos_add_card_comment, todos_create_card, todos_delete_attachment,
+    todos_delete_card, todos_delete_card_comment, todos_get_card_detail, todos_get_counts,
+    todos_get_unread_comment_summary, todos_list_card_comments, todos_mark_all_comments_read,
+    todos_mark_card_comments_read, todos_move_card, todos_pick_and_add_attachment,
     todos_read_state, todos_set_card_cover, todos_start_snip_for_card,
     todos_update_attachment_meta, todos_update_card, TodoStoreState,
 };
-use tool_windows::{close_todo_window, open_todo_window};
+use tool_windows::{
+    close_todo_window, open_todo_window, todos_consume_pending_focus_card, TodoFocusCardState,
+};
 use updates::{
     updates_cancel_download, updates_check, updates_download, updates_get_metadata,
     updates_get_state, updates_install, UpdaterSessionState,
@@ -164,13 +170,27 @@ macro_rules! tidydesk_generate_handler {
             todos_set_card_cover,
             todos_update_attachment_meta,
             todos_start_snip_for_card,
+            todos_list_card_comments,
+            todos_add_card_comment,
+            todos_delete_card_comment,
+            todos_get_unread_comment_summary,
+            todos_mark_card_comments_read,
+            todos_mark_all_comments_read,
+            todos_consume_pending_focus_card,
             accounts_get_session,
             accounts_switch_session,
             accounts_login_with_password,
+            accounts_register_with_password,
             accounts_change_password,
             accounts_list_remote_sessions,
             accounts_revoke_remote_session,
             accounts_list_workspaces,
+            accounts_list_workspace_members,
+            accounts_create_workspace,
+            accounts_create_workspace_invite,
+            accounts_list_workspace_invites,
+            accounts_revoke_workspace_invite,
+            accounts_join_workspace_by_invite,
             accounts_logout_to_local,
             accounts_import_local_todos,
             sync_get_status,
@@ -258,13 +278,27 @@ macro_rules! tidydesk_generate_handler {
             todos_set_card_cover,
             todos_update_attachment_meta,
             todos_start_snip_for_card,
+            todos_list_card_comments,
+            todos_add_card_comment,
+            todos_delete_card_comment,
+            todos_get_unread_comment_summary,
+            todos_mark_card_comments_read,
+            todos_mark_all_comments_read,
+            todos_consume_pending_focus_card,
             accounts_get_session,
             accounts_switch_session,
             accounts_login_with_password,
+            accounts_register_with_password,
             accounts_change_password,
             accounts_list_remote_sessions,
             accounts_revoke_remote_session,
             accounts_list_workspaces,
+            accounts_list_workspace_members,
+            accounts_create_workspace,
+            accounts_create_workspace_invite,
+            accounts_list_workspace_invites,
+            accounts_revoke_workspace_invite,
+            accounts_join_workspace_by_invite,
             accounts_logout_to_local,
             accounts_import_local_todos,
             sync_get_status,
@@ -325,6 +359,7 @@ fn main() {
         .manage(StickerStoreState::default())
         .manage(SnipCaptureState::default())
         .manage(TodoStoreState::default())
+        .manage(TodoFocusCardState::default())
         .manage(AccountSessionState::default())
         .manage(SyncOutboxState::default())
         .manage(SyncExecutionLockState::default())

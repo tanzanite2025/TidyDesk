@@ -1,6 +1,6 @@
 use crate::accounts::session::{
-    load_session, reload_active_profile_into_session, set_cached_session, sync_profile_backup_path,
-    workspace_data_dir, AccountSessionSnapshot, StoredAccountSession,
+    effective_storage_scope, load_session, reload_active_profile_into_session, set_cached_session,
+    sync_profile_backup_path, workspace_data_dir, AccountSessionSnapshot, StoredAccountSession,
 };
 use crate::todos::store::{
     clear_todo_content_cache, clear_todos_tables_in_db, todo_backup_root, with_todo_store_lock,
@@ -12,8 +12,8 @@ use tauri::{AppHandle, Emitter};
 /// Compute stable backup scope identifier for the active local or account workspace.
 pub(crate) fn active_workspace_scope_id(app: &AppHandle) -> Result<String, String> {
     let session = load_session(app)?;
-    Ok(match session.active_user_id {
-        Some(uid) => format!("{uid}:{}", session.workspace_id),
+    Ok(match effective_storage_scope(&session) {
+        Some((uid, ws)) => format!("{uid}:{ws}"),
         None => "local".to_string(),
     })
 }
@@ -129,6 +129,9 @@ pub(crate) fn refresh_all_workspace_modules(
     }
 
     crate::todos::commands::refresh_and_emit_active_todo_state(app)?;
+    if let Err(err) = crate::todos::emit_unread_comment_summary(app) {
+        eprintln!("[TIDYDESK] Failed to emit comment unread summary after workspace switch: {err}");
+    }
     if let Err(err) = crate::quick_notes::refresh_and_emit_active_quick_notes_state(app) {
         eprintln!("[TIDYDESK] Failed to refresh quick notes after workspace switch: {err}");
     }

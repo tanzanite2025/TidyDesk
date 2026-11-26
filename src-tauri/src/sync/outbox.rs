@@ -28,6 +28,7 @@ pub(crate) fn with_outbox_lock<T>(
 #[serde(rename_all = "camelCase")]
 pub enum OutboxEntityKind {
     Card,
+    CardComment,
     Attachment,
     QuickNote,
     Board,
@@ -69,6 +70,7 @@ struct StoredOutboxFile {
 fn outbox_kind_key(kind: &OutboxEntityKind) -> &'static str {
     match kind {
         OutboxEntityKind::Card => "card",
+        OutboxEntityKind::CardComment => "cardComment",
         OutboxEntityKind::Attachment => "attachment",
         OutboxEntityKind::QuickNote => "quickNote",
         OutboxEntityKind::Board => "board",
@@ -78,6 +80,7 @@ fn outbox_kind_key(kind: &OutboxEntityKind) -> &'static str {
 fn parse_outbox_kind(raw: &str) -> Result<OutboxEntityKind, String> {
     match raw {
         "card" => Ok(OutboxEntityKind::Card),
+        "cardComment" => Ok(OutboxEntityKind::CardComment),
         "attachment" => Ok(OutboxEntityKind::Attachment),
         "quickNote" => Ok(OutboxEntityKind::QuickNote),
         "board" => Ok(OutboxEntityKind::Board),

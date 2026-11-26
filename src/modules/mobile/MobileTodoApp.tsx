@@ -5,7 +5,9 @@ import { nativeClient } from '../../native/native-client';
 import type { AccountSessionSnapshot } from '../../types/todo';
 import { isAttachmentFileOversized, isImageFile } from '../todos/mediaUtils';
 import { TodoCardModal } from '../todos/TodoCardModal';
+import { clearCommentDraftCache } from '../todos/TodoCommentsSection';
 import { TodoCardTile } from '../todos/TodoCardTile';
+import { TodoCommentNotificationBanner, TodoUnreadBell } from '../todos/TodoUnreadBell';
 import { MobileAuthGate } from './MobileAuthGate';
 import { MobileQuickNotesView } from './MobileQuickNotesView';
 
@@ -15,14 +17,20 @@ const MobileBoardContent: React.FC<{
 }> = ({ session, onLogout }) => {
   const {
     board,
+    cards,
     cardsByColumn,
     counts,
+    unreadSummary,
+    latestCommentNotification,
     isLoading,
     isUploadingAttachment,
     error,
     refreshTodos,
     createCard,
     addAttachmentBytes,
+    markCardCommentsRead,
+    markAllCommentsRead,
+    dismissCommentNotification,
     clearError
   } = useTodos();
 
@@ -34,6 +42,20 @@ const MobileBoardContent: React.FC<{
   const [createModalColumnId, setCreateModalColumnId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const quickPhotoInputRef = useRef<HTMLInputElement | null>(null);
+
+  const openCardSafely = (cardId: string) => {
+    const target = cards.find(card => card.id === cardId && !card.deletedAt && !card.archived);
+    if (!target) {
+      setLocalError('该待办卡片已被删除或归档，已自动清理失效提醒。');
+      void markCardCommentsRead(cardId);
+      return;
+    }
+    setLocalError(null);
+    setMobileView('todos');
+    if (target.columnId) setActiveColumnId(target.columnId);
+    setCreateModalColumnId(null);
+    setSelectedCardId(cardId);
+  };
 
   const selectedCardSummary = useMemo(() => {
     if (!selectedCardId || !board) return null;
@@ -138,6 +160,11 @@ const MobileBoardContent: React.FC<{
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <TodoUnreadBell
+              unreadSummary={unreadSummary}
+              onOpenCard={openCardSafely}
+              onMarkAllRead={() => void markAllCommentsRead()}
+            />
             <button
               type="button"
               onClick={() => void refreshTodos()}
@@ -214,6 +241,12 @@ const MobileBoardContent: React.FC<{
         <MobileQuickNotesView />
       ) : (
         <>
+
+      <TodoCommentNotificationBanner
+        notification={latestCommentNotification}
+        onOpenCard={openCardSafely}
+        onDismiss={dismissCommentNotification}
+      />
 
       {/* Quick Create + Mobile Instant Camera Card */}
       <form
@@ -377,6 +410,7 @@ export const MobileTodoApp: React.FC = () => {
       <MobileBoardContent
         session={session}
         onLogout={async () => {
+          clearCommentDraftCache();
           await nativeClient.accounts.logoutToLocal();
         }}
       />

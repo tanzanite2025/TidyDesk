@@ -1,7 +1,8 @@
 import type {
   AccountSessionSnapshot,
   RemoteAuthSessionInfo,
-  RemoteWorkspaceInfo
+  RemoteWorkspaceInfo,
+  WorkspaceMemberInfo
 } from '../types/todo';
 import type { NativeAccountsClient } from './types';
 import type { WebHttpContext } from './web-http-context';
@@ -170,6 +171,19 @@ export function createWebAccountsClient(
       }
       const data = (await res.json()) as { workspaces?: RemoteWorkspaceInfo[] };
       return data.workspaces || [];
+    },
+    listWorkspaceMembers: async (workspaceId?: string): Promise<WorkspaceMemberInfo[]> => {
+      const active = ctx.requireSession();
+      const wsId = (workspaceId || '').trim() || ctx.resolveWorkspaceId(active);
+      const res = await fetch(
+        `${active.serverEndpoint}/api/v1/workspaces/members?workspaceId=${encodeURIComponent(wsId)}`,
+        { headers: ctx.authHeaders(active) }
+      );
+      if (!res.ok) {
+        throw new Error(`获取工作区成员失败 (${res.status})`);
+      }
+      const data = (await res.json()) as { members?: WorkspaceMemberInfo[] };
+      return data.members || [];
     },
     logoutToLocal: async () => {
       const prev = ctx.getSession();

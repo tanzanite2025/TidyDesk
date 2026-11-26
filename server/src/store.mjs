@@ -1,10 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { atomicWriteJson, getPrivateWorkspaceOwner, sanitizeWorkspaceId } from './fs_utils.mjs';
+import { atomicWriteJson, getPrivateWorkspaceOwner, httpError, sanitizeWorkspaceId } from './fs_utils.mjs';
 import { mergeCardOnServer } from './merge.mjs';
 import {
+  assertCanDeleteCardComment,
+  assertInviteUsable,
+  canManageWorkspaceInvites,
+  computeInviteExpiryMs,
   extractShaFromBlobKey,
+  generateInviteCode,
+  generateSharedWorkspaceId,
+  normalizeCardCommentRecord,
+  normalizeInviteMaxUses,
+  normalizeInviteRole,
+  normalizeWorkspaceTitle,
   readBlobFromDisk,
+  resolveJoinedRole,
   safeBlobPath,
   writeBlobFileAtomic
 } from './storage_shared.mjs';
@@ -47,7 +58,9 @@ function createInitialDb() {
     },
     cards: {},
     quickNotes: {},
+    cardComments: {},
     mediaBySha256: {},
+    workspaceInvites: {},
     events: []
   };
 }
@@ -101,21 +114,151 @@ export function createSyncStore(dataDir) {
     }
 
     if (!db.workspaces[safeWsId]) {
-      db.workspaces[safeWsId] = {
-        id: safeWsId,
-        title: privateOwner ? `${privateOwner} 私人空间` : safeWsId,
-        members: { [userId]: 'owner' }
-      };
-      save();
-      return 'owner';
+      if (privateOwner || safeWsId === 'default') {
+        const initialRole = privateOwner ? 'owner' : 'member';
+        db.workspaces[safeWsId] = {
+          id: safeWsId,
+          title: privateOwner ? `${privateOwner} 私人空间` : '默认协同工作区',
+          members: { [userId]: initialRole }
+        };
+        save();
+        return initialRole;
+      }
+      throw httpError(403, `工作区 "${safeWsId}" 不存在或未获邀请加入`);
     }
     const ws = db.workspaces[safeWsId];
     if (!ws.members[userId]) {
-      // First visit to shared workspace in MVP defaults to 'member' unless explicitly set (e.g. viewer in tests)
-      ws.members[userId] = privateOwner === userId ? 'owner' : 'member';
-      save();
+      if (privateOwner === userId) {
+        ws.members[userId] = 'owner';
+        save();
+        return 'owner';
+      }
+      if (safeWsId === 'default') {
+        ws.members[userId] = 'member';
+        save();
+        return 'member';
+      }
+      throw httpError(403, `您尚无权访问工作区 "${safeWsId}"，请通过邀请码加入`);
     }
     return ws.members[userId];
+  }
+
+  function createSharedWorkspace({ userId, title }) {
+    reloadIfChanged();
+    const cleanTitle = normalizeWorkspaceTitle(title);
+    const workspaceId = generateSharedWorkspaceId();
+    db.workspaces[workspaceId] = {
+      id: workspaceId,
+      title: cleanTitle,
+      members: { [userId]: 'owner' }
+    };
+    save();
+    return {
+      workspaceId,
+      title: cleanTitle,
+      role: 'owner',
+      isPrivate: false
+    };
+  }
+
+  function createWorkspaceInvite({
+    userId,
+    workspaceId,
+    role = 'member',
+    maxUses = 1,
+    expiresInHours = 72
+  }) {
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) {
+      throw httpError(400, '私人空间不可生成共享邀请码，请先新建共享工作区');
+    }
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可生成邀请码');
+    }
+    if (!db.workspaceInvites) db.workspaceInvites = {};
+    const cleanRole = normalizeInviteRole(role);
+    const cleanMaxUses = normalizeInviteMaxUses(maxUses);
+    const expiresAt = computeInviteExpiryMs(expiresInHours);
+    const inviteCode = generateInviteCode();
+    const invite = {
+      inviteCode,
+      workspaceId: safeWsId,
+      role: cleanRole,
+      createdBy: userId,
+      maxUses: cleanMaxUses,
+      usedCount: 0,
+      expiresAt,
+      revokedAt: null,
+      createdAt: String(Date.now())
+    };
+    db.workspaceInvites[inviteCode] = invite;
+    save();
+    return { ...invite };
+  }
+
+  function listWorkspaceInvites({ userId, workspaceId }) {
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    if (getPrivateWorkspaceOwner(safeWsId)) return [];
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可查看邀请码');
+    }
+    return Object.values(db.workspaceInvites || {})
+      .filter(item => item.workspaceId === safeWsId)
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  }
+
+  function revokeWorkspaceInvite({ userId, workspaceId, inviteCode }) {
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) throw httpError(400, '缺少邀请码');
+    const callerRole = ensureWorkspaceAccess(userId, safeWsId);
+    if (!canManageWorkspaceInvites(callerRole)) {
+      throw httpError(403, '仅工作区创建者或管理员可撤回邀请码');
+    }
+    const invite = db.workspaceInvites?.[cleanCode];
+    if (!invite || invite.workspaceId !== safeWsId) {
+      throw httpError(404, '未找到对应邀请码');
+    }
+    if (!invite.revokedAt) {
+      invite.revokedAt = String(Date.now());
+      save();
+    }
+    return { ...invite };
+  }
+
+  function listWorkspaceMembers({ userId, workspaceId }) {
+    reloadIfChanged();
+    const safeWsId = sanitizeWorkspaceId(workspaceId, 'default');
+    ensureWorkspaceAccess(userId, safeWsId);
+    const membersObj = db.workspaces[safeWsId]?.members || {};
+    return Object.entries(membersObj)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([uid, memberRole]) => ({ userId: uid, role: memberRole }));
+  }
+
+  function joinWorkspaceByInvite({ userId, inviteCode }) {
+    reloadIfChanged();
+    const cleanCode = String(inviteCode || '').trim();
+    if (!cleanCode) throw httpError(400, '请输入邀请码');
+    const invite = db.workspaceInvites?.[cleanCode];
+    assertInviteUsable(invite);
+    const ws = db.workspaces[invite.workspaceId];
+    if (!ws) throw httpError(404, '邀请对应的工作区已不存在');
+    invite.usedCount = Number(invite.usedCount || 0) + 1;
+    const nextRole = resolveJoinedRole(ws.members?.[userId], invite.role);
+    ws.members[userId] = nextRole;
+    save();
+    return {
+      workspaceId: invite.workspaceId,
+      title: ws.title || invite.workspaceId,
+      role: nextRole,
+      isPrivate: false
+    };
   }
 
   function setWorkspaceRole(workspaceId, userId, role) {
@@ -265,7 +408,13 @@ export function createSyncStore(dataDir) {
     return db.cursor;
   }
 
-  function pushEntries({ workspaceId = 'default', actorId, entries = [] }) {
+  function pushEntries({
+    workspaceId = 'default',
+    actorId,
+    authorName = '',
+    role = 'member',
+    entries = []
+  }) {
     const acked = [];
     const conflicts = [];
     const mergedCards = [];
@@ -324,6 +473,24 @@ export function createSyncStore(dataDir) {
           appendEvent('quickNote', entityId, 'upsert', workspaceId);
         }
         acked.push({ entityKind: 'quickNote', entityId });
+      } else if (kind === 'cardComment') {
+        if (!db.cardComments) db.cardComments = {};
+        const existing = readScopedEntity(db.cardComments, workspaceId, entityId);
+        if (op === 'delete') {
+          assertCanDeleteCardComment(existing, actorId, role);
+        }
+        const comment = normalizeCardCommentRecord({
+          id: entityId,
+          workspaceId,
+          actorId,
+          authorName,
+          payload,
+          existing,
+          operation: op
+        });
+        writeScopedEntity(db.cardComments, workspaceId, entityId, comment);
+        appendEvent('cardComment', entityId, op === 'delete' ? 'delete' : 'upsert', workspaceId);
+        acked.push({ entityKind: 'cardComment', entityId });
       } else if (kind === 'board') {
         acked.push({ entityKind: 'board', entityId });
       }
@@ -351,6 +518,8 @@ export function createSyncStore(dataDir) {
     const removedCardIds = [];
     const quickNotes = [];
     const removedQuickNoteIds = [];
+    const cardComments = [];
+    const removedCardCommentIds = [];
 
     for (const ev of latestSeqByEntity.values()) {
       if (ev.entityKind === 'card') {
@@ -369,6 +538,14 @@ export function createSyncStore(dataDir) {
         } else {
           quickNotes.push(note);
         }
+      } else if (ev.entityKind === 'cardComment') {
+        const comment = readScopedEntity(db.cardComments || {}, workspaceId, ev.entityId);
+        if (!comment) continue;
+        if (comment.deletedAt) {
+          removedCardCommentIds.push(comment.id);
+        } else {
+          cardComments.push(comment);
+        }
       }
     }
 
@@ -377,7 +554,9 @@ export function createSyncStore(dataDir) {
       cards,
       removedCardIds,
       quickNotes,
-      removedQuickNoteIds
+      removedQuickNoteIds,
+      cardComments,
+      removedCardCommentIds
     };
   }
 
@@ -386,6 +565,12 @@ export function createSyncStore(dataDir) {
     ensureWorkspaceAccess,
     setWorkspaceRole,
     listWorkspacesForUser,
+    listWorkspaceMembers,
+    createSharedWorkspace,
+    createWorkspaceInvite,
+    listWorkspaceInvites,
+    revokeWorkspaceInvite,
+    joinWorkspaceByInvite,
     presignMedia,
     writeBlob,
     canReadBlob,

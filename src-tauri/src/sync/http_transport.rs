@@ -46,6 +46,24 @@ pub struct HttpPullResponse {
     pub quick_notes: Vec<Value>,
     #[serde(default)]
     pub removed_quick_note_ids: Vec<String>,
+    #[serde(default)]
+    pub card_comments: Vec<Value>,
+    #[serde(default)]
+    pub removed_card_comment_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMemberInfo {
+    pub user_id: String,
+    pub display_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceMembersResponse {
+    pub members: Vec<WorkspaceMemberInfo>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +72,40 @@ pub struct LoginResponse {
     pub user_id: String,
     pub display_name: String,
     pub token: String,
+    #[serde(default)]
+    pub default_workspace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInviteInfo {
+    pub invite_code: String,
+    pub workspace_id: String,
+    pub role: String,
+    pub created_by: String,
+    pub max_uses: i64,
+    pub used_count: i64,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub revoked_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoteWorkspaceResponse {
+    workspace: RemoteWorkspaceInfo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoteWorkspaceInviteResponse {
+    invite: WorkspaceInviteInfo,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RemoteWorkspaceInvitesResponse {
+    #[serde(default)]
+    invites: Vec<WorkspaceInviteInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +211,40 @@ impl HttpSyncClient {
         resp.json::<LoginResponse>()
             .await
             .map_err(|err| format!("解析登录响应失败: {err}"))
+    }
+
+    pub async fn register_with_password(
+        endpoint: &str,
+        user_id: &str,
+        password: &str,
+        display_name: Option<&str>,
+        device_label: &str,
+    ) -> Result<LoginResponse, String> {
+        let base = validate_server_endpoint(Some(endpoint))?
+            .ok_or_else(|| "服务端地址不能为空".to_string())?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|err| format!("failed to build register HTTP client: {err}"))?;
+        let resp = client
+            .post(format!("{base}/api/v1/auth/register"))
+            .json(&json!({
+                "userId": user_id.trim(),
+                "password": password,
+                "displayName": display_name.unwrap_or("").trim(),
+                "deviceLabel": device_label,
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("连接同步服务端注册失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("注册失败 ({status}): {text}"));
+        }
+        resp.json::<LoginResponse>()
+            .await
+            .map_err(|err| format!("解析注册响应失败: {err}"))
     }
 
     pub async fn verify_credentials(&self) -> Result<(), String> {
@@ -272,6 +358,164 @@ impl HttpSyncClient {
             .await
             .map_err(|err| format!("解析工作区列表失败: {err}"))?;
         Ok(parsed.workspaces)
+    }
+
+    pub async fn create_shared_workspace(
+        &self,
+        title: &str,
+    ) -> Result<RemoteWorkspaceInfo, String> {
+        let url = self.resolve_url("/api/v1/workspaces");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({ "title": title.trim() }))
+            .send()
+            .await
+            .map_err(|err| format!("创建共享工作区失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("创建共享工作区被拒绝 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspaceResponse>()
+            .await
+            .map_err(|err| format!("解析新建工作区响应失败: {err}"))?;
+        Ok(parsed.workspace)
+    }
+
+    pub async fn join_workspace_by_invite(
+        &self,
+        invite_code: &str,
+    ) -> Result<RemoteWorkspaceInfo, String> {
+        let url = self.resolve_url("/api/v1/workspaces/join");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({ "inviteCode": invite_code.trim() }))
+            .send()
+            .await
+            .map_err(|err| format!("加入共享工作区失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("邀请码无效或加入被拒绝 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspaceResponse>()
+            .await
+            .map_err(|err| format!("解析加入工作区响应失败: {err}"))?;
+        Ok(parsed.workspace)
+    }
+
+    pub async fn list_workspace_invites(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceInviteInfo>, String> {
+        let query = {
+            let mut ser = form_urlencoded::Serializer::new(String::new());
+            ser.append_pair("workspaceId", workspace_id.trim());
+            ser.finish()
+        };
+        let url = self.resolve_url(&format!("/api/v1/workspaces/invites?{query}"));
+        let resp = self
+            .apply_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|err| format!("查询工作区邀请码失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("读取邀请码被拒绝 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspaceInvitesResponse>()
+            .await
+            .map_err(|err| format!("解析邀请码列表失败: {err}"))?;
+        Ok(parsed.invites)
+    }
+
+    pub async fn create_workspace_invite(
+        &self,
+        workspace_id: &str,
+        role: &str,
+        max_uses: i64,
+        expires_in_hours: i64,
+    ) -> Result<WorkspaceInviteInfo, String> {
+        let url = self.resolve_url("/api/v1/workspaces/invites");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({
+                "workspaceId": workspace_id.trim(),
+                "role": role.trim(),
+                "maxUses": max_uses,
+                "expiresInHours": expires_in_hours,
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("生成工作区邀请码失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("生成邀请码被拒绝 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspaceInviteResponse>()
+            .await
+            .map_err(|err| format!("解析邀请码响应失败: {err}"))?;
+        Ok(parsed.invite)
+    }
+
+    pub async fn revoke_workspace_invite(
+        &self,
+        workspace_id: &str,
+        invite_code: &str,
+    ) -> Result<WorkspaceInviteInfo, String> {
+        let url = self.resolve_url("/api/v1/workspaces/invites/revoke");
+        let resp = self
+            .apply_auth(self.client.post(&url))
+            .json(&json!({
+                "workspaceId": workspace_id.trim(),
+                "inviteCode": invite_code.trim(),
+            }))
+            .send()
+            .await
+            .map_err(|err| format!("撤回工作区邀请码失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("撤回邀请码失败 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<RemoteWorkspaceInviteResponse>()
+            .await
+            .map_err(|err| format!("解析撤回响应失败: {err}"))?;
+        Ok(parsed.invite)
+    }
+
+    pub async fn list_workspace_members(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<WorkspaceMemberInfo>, String> {
+        let query = {
+            let mut ser = form_urlencoded::Serializer::new(String::new());
+            ser.append_pair("workspaceId", workspace_id.trim());
+            ser.finish()
+        };
+        let url = self.resolve_url(&format!("/api/v1/workspaces/members?{query}"));
+        let resp = self
+            .apply_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|err| format!("查询工作区成员失败: {err}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("读取工作区成员失败 ({status}): {text}"));
+        }
+        let parsed = resp
+            .json::<WorkspaceMembersResponse>()
+            .await
+            .map_err(|err| format!("解析工作区成员列表失败: {err}"))?;
+        Ok(parsed.members)
     }
 
     fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
