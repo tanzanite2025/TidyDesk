@@ -23,21 +23,23 @@ pub fn open_snip_window(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(
-        app,
-        crate::capture::SNIP_WINDOW_LABEL,
-        crate::shell::webview_url_for_mode("snip")?,
-    )
-    .title("TidyDesk Snip")
-    .inner_size(monitor.width as f64, monitor.height as f64)
-    .resizable(false)
-    .decorations(false)
-    .transparent(false)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|err| err.to_string())?;
+    let window = crate::shell::with_window_build_lock(app, || {
+        WebviewWindowBuilder::new(
+            app,
+            crate::capture::SNIP_WINDOW_LABEL,
+            crate::shell::webview_url_for_mode("snip")?,
+        )
+        .title("TidyDesk Snip")
+        .inner_size(monitor.width as f64, monitor.height as f64)
+        .resizable(false)
+        .decorations(false)
+        .transparent(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|err| err.to_string())
+    })?;
     let app_handle = app.clone();
     window.on_window_event(move |event| {
         if matches!(

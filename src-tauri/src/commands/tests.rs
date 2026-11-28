@@ -1,36 +1,15 @@
-use crate::apps::close_app_picker;
 use crate::capture::{open_snip_window, snip_cancel};
-use crate::shell::{
-    apply_drawer_state, recover_shell_windows, shell_snapshot, update_active_module,
-    update_shell_state, ShellState,
+use crate::shell::{recover_shell_windows, shell_snapshot, update_shell_state, ShellState};
+use crate::tool_windows::{
+    close_capture_window, close_settings_window, close_todo_window, open_or_toggle_settings_window,
 };
-use crate::tool_windows::{close_todo_window, APP_PICKER_WINDOW_LABEL};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 #[tauri::command]
-pub async fn tests_open_files_drawer(app: AppHandle) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let shell = app.state::<ShellState>();
-        if !shell_snapshot(&shell)?.expanded {
-            apply_drawer_state(&app, &shell, true)?;
-        }
-        update_active_module(&app, &shell, Some("files".to_string()))?;
-        Ok::<Value, String>(json!({ "success": true }))
-    })
-    .await
-    .map_err(|err| format!("test open files drawer failed: {err}"))?
-}
-
-#[tauri::command]
-pub async fn tests_collapse_drawer(app: AppHandle) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let shell = app.state::<ShellState>();
-        apply_drawer_state(&app, &shell, false)?;
-        Ok::<Value, String>(json!({ "success": true }))
-    })
-    .await
-    .map_err(|err| format!("test collapse drawer failed: {err}"))?
+pub async fn tests_open_settings_window(app: AppHandle) -> Result<Value, String> {
+    open_or_toggle_settings_window(&app, false).await?;
+    Ok(json!({ "success": true }))
 }
 
 #[tauri::command]
@@ -44,12 +23,14 @@ pub async fn tests_start_snip(app: AppHandle) -> Result<Value, String> {
 fn window_debug_snapshot(app: &AppHandle, label: &str) -> Value {
     if let Some(window) = app.get_webview_window(label) {
         let visible = window.is_visible().unwrap_or(false);
+        let always_on_top = window.is_always_on_top().unwrap_or(false);
         let url = window.url().ok().map(|value| value.to_string());
         let title = window.title().ok();
         json!({
             "label": label,
             "exists": true,
             "visible": visible,
+            "alwaysOnTop": always_on_top,
             "url": url,
             "title": title,
         })
@@ -58,6 +39,7 @@ fn window_debug_snapshot(app: &AppHandle, label: &str) -> Value {
             "label": label,
             "exists": false,
             "visible": false,
+            "alwaysOnTop": false,
             "url": Value::Null,
             "title": Value::Null,
         })
@@ -78,25 +60,23 @@ pub fn tests_get_window_snapshot(
         },
         "windows": {
             "handle": window_debug_snapshot(&app, "handle"),
-            "main": window_debug_snapshot(&app, "main"),
             "todos": window_debug_snapshot(&app, "todos"),
+            "capture": window_debug_snapshot(&app, "capture"),
+            "settings": window_debug_snapshot(&app, "settings"),
             "snip": window_debug_snapshot(&app, "snip"),
-            "appPicker": window_debug_snapshot(&app, APP_PICKER_WINDOW_LABEL),
         }
     }))
 }
 
 #[tauri::command]
 pub async fn tests_reset_window_state(app: AppHandle) -> Result<Value, String> {
-    let _ = close_app_picker(app.clone()).await;
     let _ = snip_cancel(app.clone()).await;
     let _ = close_todo_window(app.clone()).await;
 
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Some(window) = app_handle.get_webview_window("main") {
-            let _ = window.hide();
-        }
+        let _ = close_capture_window(&app_handle);
+        let _ = close_settings_window(&app_handle);
         let shell = app_handle.state::<ShellState>();
         update_shell_state(&app_handle, &shell, false, None)?;
         recover_shell_windows(&app_handle)?;

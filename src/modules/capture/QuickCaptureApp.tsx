@@ -4,8 +4,7 @@ import { nativeClient } from '../../native/native-client';
 import { QuickNotesPanel } from '../notes/QuickNotesPanel';
 
 /**
- * Standalone floating tool window hosting the Quick Notes editor and card list
- * separately from the file organizer drawer.
+ * Standalone floating tool window hosting the Quick Notes editor and card list.
  */
 export const QuickCaptureApp: React.FC = () => {
   const close = () => {

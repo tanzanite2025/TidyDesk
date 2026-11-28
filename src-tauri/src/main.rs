@@ -3,29 +3,22 @@
     windows_subsystem = "windows"
 )]
 
-use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 mod accounts;
-mod apps;
-mod apps_classifier;
 mod asset_protocol;
 mod backup;
 mod capture;
 mod commands;
-mod files;
-mod files_rules;
 mod hotkeys;
-mod icons;
 mod local_db;
 mod paths;
 mod persistence;
 mod quick_notes;
 mod resident;
 mod shell;
-mod shortcuts;
 mod stickers;
 mod sticky_notes;
 mod sync;
@@ -34,10 +27,8 @@ mod tool_windows;
 mod updates;
 mod workspace_runtime;
 
-pub use crate::files_rules::{resolve_shortcut_target, write_shortcut_link, ShortcutResolver};
 pub use crate::paths::{
-    drawer_root, is_path_inside, is_path_inside_resolved, prepare_drawer_storage,
-    resolve_path_for_comparison, timestamp_string,
+    is_path_inside, is_path_inside_resolved, resolve_path_for_comparison, timestamp_string,
 };
 
 use accounts::{
@@ -48,11 +39,6 @@ use accounts::{
     accounts_logout_to_local, accounts_register_with_password, accounts_revoke_remote_session,
     accounts_revoke_workspace_invite, accounts_switch_session, AccountSessionState,
 };
-use apps::{
-    apps_add_to_drawer, apps_cache_info, apps_get_picker_target, apps_refresh_installed,
-    apps_scan_installed, close_app_picker, open_app_picker, AppPickerTargetState,
-    TrustedShortcutState,
-};
 use backup::{
     backup_create_snapshot, backup_list_snapshots, backup_restore_snapshot, backup_verify_snapshot,
 };
@@ -61,14 +47,10 @@ use commands::clipboard::clipboard_read_text;
 use commands::events::{events_send, UserInteractionState};
 #[cfg(any(debug_assertions, feature = "e2e-tests"))]
 use commands::tests::{
-    tests_collapse_drawer, tests_get_window_snapshot, tests_open_files_drawer,
-    tests_reset_window_state, tests_start_snip,
+    tests_get_window_snapshot, tests_open_settings_window, tests_reset_window_state,
+    tests_start_snip,
 };
-use commands::windows::{windows_control, windows_drawer_ready, windows_get_shell_state};
-use files::{
-    drawers_create, drawers_delete_item, drawers_rename_item, files_import_external_files,
-    files_open, files_read_desktop_files, files_read_icons, files_restore_to_desktop,
-};
+use commands::windows::{windows_control, windows_get_shell_state};
 use hotkeys::{
     hotkeys_get_settings, hotkeys_reset_defaults, hotkeys_update_binding, hotkeys_validate_binding,
     HotkeyRuntimeState,
@@ -82,10 +64,6 @@ use resident::{
     resident_update_settings,
 };
 use shell::{apply_window_bounds, ensure_handle_window, handle_window_bounds, ShellState};
-use shortcuts::{
-    shortcuts_repair, shortcuts_validate_all, start_shortcut_background_services,
-    ShortcutWatcherState,
-};
 use stickers::{
     schedule_restore_stickers, sticker_close, sticker_copy, sticker_get, sticker_save_as,
     sticker_toggle_pin, StickerStoreState,
@@ -118,26 +96,9 @@ use updates::{
 macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
-            apps_cache_info,
-            apps_scan_installed,
-            apps_refresh_installed,
-            apps_add_to_drawer,
-            files_read_desktop_files,
-            files_read_icons,
-            files_open,
-            files_import_external_files,
-            files_restore_to_desktop,
-            shortcuts_validate_all,
-            shortcuts_repair,
-            drawers_create,
-            drawers_rename_item,
-            drawers_delete_item,
-            apps_get_picker_target,
             windows_control,
             windows_get_shell_state,
-            windows_drawer_ready,
-            tests_open_files_drawer,
-            tests_collapse_drawer,
+            tests_open_settings_window,
             tests_start_snip,
             tests_get_window_snapshot,
             tests_reset_window_state,
@@ -217,8 +178,6 @@ macro_rules! tidydesk_generate_handler {
             hotkeys_reset_defaults,
             open_todo_window,
             close_todo_window,
-            open_app_picker,
-            close_app_picker,
             backup_list_snapshots,
             backup_create_snapshot,
             backup_verify_snapshot,
@@ -231,24 +190,8 @@ macro_rules! tidydesk_generate_handler {
 macro_rules! tidydesk_generate_handler {
     () => {
         tauri::generate_handler![
-            apps_cache_info,
-            apps_scan_installed,
-            apps_refresh_installed,
-            apps_add_to_drawer,
-            files_read_desktop_files,
-            files_read_icons,
-            files_open,
-            files_import_external_files,
-            files_restore_to_desktop,
-            shortcuts_validate_all,
-            shortcuts_repair,
-            drawers_create,
-            drawers_rename_item,
-            drawers_delete_item,
-            apps_get_picker_target,
             windows_control,
             windows_get_shell_state,
-            windows_drawer_ready,
             clipboard_read_text,
             events_send,
             snip_complete_selection,
@@ -325,8 +268,6 @@ macro_rules! tidydesk_generate_handler {
             hotkeys_reset_defaults,
             open_todo_window,
             close_todo_window,
-            open_app_picker,
-            close_app_picker,
             backup_list_snapshots,
             backup_create_snapshot,
             backup_verify_snapshot,
@@ -341,7 +282,10 @@ fn main() {
             asset_protocol::handle_asset_request(ctx.app_handle(), request.uri().path())
         })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            let _ = crate::resident::show_handle_window(app);
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let _ = crate::resident::show_handle_window(&app_handle);
+            });
         }))
         .plugin(
             tauri_plugin_autostart::Builder::new()
@@ -351,9 +295,6 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(AppPickerTargetState(Mutex::new("收纳抽屉".to_string())))
-        .manage(TrustedShortcutState::default())
-        .manage(ShortcutWatcherState::default())
         .manage(ShellState::default())
         .manage(UserInteractionState::default())
         .manage(StickerStoreState::default())
@@ -421,10 +362,6 @@ fn main() {
                 .build(app)?;
             let handle = app.handle().clone();
             let resident_settings = resident::read_resident_settings(&handle);
-            shortcuts::set_shortcut_background_monitoring(
-                &handle,
-                resident_settings.background_monitor_enabled,
-            );
             if resident_settings.auto_update_check_enabled {
                 updates::start_update_auto_check(
                     handle.clone(),
@@ -433,7 +370,7 @@ fn main() {
             }
             hotkeys::register_configured_hotkeys(&handle);
             let _ = ensure_handle_window(&handle);
-            if let Ok(bounds) = handle_window_bounds(&handle, false) {
+            if let Ok(bounds) = handle_window_bounds(&handle) {
                 let _ = apply_window_bounds(&handle, "handle", bounds);
             }
             if !resident_settings.launch_minimized {
@@ -444,7 +381,6 @@ fn main() {
             }
             schedule_restore_stickers(handle.clone());
             schedule_restore_sticky_notes(handle.clone());
-            start_shortcut_background_services(handle.clone());
             sync::schedule_restore_realtime_sync(handle.clone());
             Ok(())
         })

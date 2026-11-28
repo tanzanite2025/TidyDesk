@@ -391,10 +391,6 @@ export function findFallbackCoverId(card: TodoCard): string | null {
 type DesktopOnlyNamespaces = Pick<
   NativeClient,
   | 'stickyNotes'
-  | 'files'
-  | 'drawers'
-  | 'shortcuts'
-  | 'apps'
   | 'windows'
   | 'toolWindows'
   | 'resident'
@@ -420,42 +416,10 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
       updateOptions: () => unsupportedDesktop('stickyNotes'),
       onUpdated: () => undefined
     },
-    files: {
-      readDesktopFiles: () => unsupportedDesktop('files'),
-      readIcons: () => unsupportedDesktop('files'),
-      importExternalFiles: () => unsupportedDesktop('files'),
-      open: () => unsupportedDesktop('files'),
-      restoreToDesktop: () => unsupportedDesktop('files')
-    },
-    drawers: {
-      create: () => unsupportedDesktop('drawers'),
-      renameItem: () => unsupportedDesktop('drawers'),
-      deleteItem: () => unsupportedDesktop('drawers')
-    },
-    shortcuts: {
-      validateAll: () => unsupportedDesktop('shortcuts'),
-      repair: () => unsupportedDesktop('shortcuts'),
-      onTargetFileDeleted: () => undefined,
-      onTargetFileRestored: () => undefined,
-      onValidated: () => undefined
-    },
-    apps: {
-      scanInstalled: () => unsupportedDesktop('apps'),
-      refresh: () => unsupportedDesktop('apps'),
-      getCacheInfo: () => unsupportedDesktop('apps'),
-      openPicker: () => unsupportedDesktop('apps'),
-      closePicker: () => unsupportedDesktop('apps'),
-      getPickerTarget: () => unsupportedDesktop('apps'),
-      onSetTargetFolder: () => undefined,
-      onIconsUpdated: () => undefined,
-      addToDrawer: () => unsupportedDesktop('apps')
-    },
     windows: {
       control: () => undefined,
       getShellState: async () => ({ expanded: false, activeModule: null }),
-      notifyDrawerReady: () => undefined,
       getPathForFile: () => '',
-      onDrawerState: () => undefined,
       onModuleState: () => undefined
     },
     toolWindows: {
@@ -467,8 +431,7 @@ export function createDesktopUnsupportedStubs(): DesktopOnlyNamespaces {
       updateSettings: () => unsupportedDesktop('resident'),
       showHandle: () => unsupportedDesktop('resident'),
       hideHandle: () => unsupportedDesktop('resident'),
-      openSettings: () => unsupportedDesktop('resident'),
-      onOpenSettings: () => undefined
+      openSettings: () => unsupportedDesktop('resident')
     },
     hotkeys: {
       getSettings: () => unsupportedDesktop('hotkeys'),

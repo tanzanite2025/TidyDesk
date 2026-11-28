@@ -18,7 +18,7 @@ pub fn events_send(
     payload: SendEventPayload,
 ) -> Result<Value, String> {
     match payload.channel.as_str() {
-        "user-first-interaction" | "drawer-opened" | "file-dropped" => {}
+        "user-first-interaction" => {}
         _ => return Err(format!("Unsupported send channel: {}", payload.channel)),
     }
 

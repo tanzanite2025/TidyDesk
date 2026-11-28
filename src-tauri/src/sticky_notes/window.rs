@@ -23,8 +23,8 @@ use tauri::{
 use url::form_urlencoded;
 
 const BOUNDS_PERSIST_DEBOUNCE_MS: u64 = 350;
-const STARTUP_RESTORE_DELAY_MS: u64 = 400;
-const STARTUP_RESTORE_STEP_MS: u64 = 60;
+const STARTUP_RESTORE_DELAY_MS: u64 = 900;
+const STARTUP_RESTORE_STEP_MS: u64 = 120;
 
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -251,24 +251,44 @@ fn ensure_sticky_window(
     let bounds = clamp_sticky_bounds_for_monitors(record.bounds, &monitors, primary);
 
     let title_preview: String = note_title.chars().take(24).collect();
-    let window = WebviewWindowBuilder::new(app, &label, sticky_webview_url(&record.note_id)?)
-        .title(format!("便签 - {title_preview}"))
-        .decorations(false)
-        .transparent(true)
-        .resizable(true)
-        .skip_taskbar(true)
-        .always_on_top(record.always_on_top)
-        .min_inner_size(MIN_STICKY_WIDTH as f64, MIN_STICKY_HEIGHT as f64)
-        .visible(false)
-        .build()
-        .map_err(|err| format!("failed to build sticky note window: {err}"))?;
-
-    window
-        .set_size(PhysicalSize::new(bounds.width, bounds.height))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(bounds.x, bounds.y))
-        .map_err(|err| err.to_string())?;
+    let window = crate::shell::with_window_build_lock(app, || {
+        if let Some(existing) = app.get_webview_window(&label) {
+            let _ = existing.set_always_on_top(record.always_on_top);
+            if focus {
+                bring_sticky_window_to_front(&existing, record.always_on_top)?;
+            } else {
+                existing.show().map_err(|err| err.to_string())?;
+            }
+            return Ok(existing);
+        }
+        let created = WebviewWindowBuilder::new(app, &label, sticky_webview_url(&record.note_id)?)
+            .title(format!("便签 - {title_preview}"))
+            .decorations(false)
+            .transparent(true)
+            .resizable(true)
+            .skip_taskbar(true)
+            .always_on_top(record.always_on_top)
+            .min_inner_size(MIN_STICKY_WIDTH as f64, MIN_STICKY_HEIGHT as f64)
+            .visible(false)
+            .build()
+            .map_err(|err| format!("failed to build sticky note window: {err}"))?;
+        created
+            .set_size(PhysicalSize::new(bounds.width, bounds.height))
+            .map_err(|err| err.to_string())?;
+        created
+            .set_position(PhysicalPosition::new(bounds.x, bounds.y))
+            .map_err(|err| err.to_string())?;
+        Ok(created)
+    })?;
+    if app
+        .state::<StickyRuntimeState>()
+        .0
+        .lock()
+        .map(|guard| guard.active_instances.contains_key(&record.note_id))
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
 
     let instance_id = {
         let runtime = app.state::<StickyRuntimeState>();
@@ -364,7 +384,7 @@ pub fn restore_active_account_sticky_notes(app: &AppHandle, stagger: bool) {
 }
 
 pub fn schedule_restore_sticky_notes(app: AppHandle) {
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(STARTUP_RESTORE_DELAY_MS));
         restore_active_account_sticky_notes(&app, true);
     });

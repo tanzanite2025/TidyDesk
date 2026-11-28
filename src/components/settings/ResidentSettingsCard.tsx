@@ -56,25 +56,6 @@ export const ResidentSettingsCard: React.FC<ResidentSettingsCardProps> = ({
         </button>
       </div>
 
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <div className="text-[12px] font-semibold text-slate-100">后台快捷方式监控</div>
-          <div className="mt-0.5 text-[11px] text-slate-500">监控抽屉快捷方式目标是否被删除或恢复</div>
-        </div>
-        <button
-          type="button"
-          disabled={!residentSettings || isSavingResident}
-          onClick={() => onUpdateResident({ backgroundMonitorEnabled: !residentSettings?.backgroundMonitorEnabled })}
-          className={`min-w-16 rounded-full px-3 py-1.5 text-[11px] font-semibold transition-all disabled:opacity-50 ${
-            residentSettings?.backgroundMonitorEnabled
-              ? 'bg-emerald-500/20 text-emerald-100'
-              : 'bg-white/[0.08] text-slate-400'
-          }`}
-        >
-          {residentSettings?.backgroundMonitorEnabled ? '已开启' : '已暂停'}
-        </button>
-      </div>
-
       <div className="flex gap-2 pt-1">
         <button
           type="button"

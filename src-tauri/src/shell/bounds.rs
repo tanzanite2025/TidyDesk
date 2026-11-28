@@ -1,9 +1,17 @@
-use super::{DRAWER_WINDOW_LABEL, HANDLE_WINDOW_LABEL};
+use super::{
+    state::{read_cached_handle_bounds, set_cached_handle_bounds},
+    HANDLE_WINDOW_LABEL,
+};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Monitor, PhysicalPosition, PhysicalSize};
 
 const MINIMIZED_COORDINATE_THRESHOLD: i32 = -30_000;
+const HANDLE_BOUNDS_FILE: &str = "handle-bounds.json";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShellBounds {
     pub x: i32,
     pub y: i32,
@@ -130,11 +138,7 @@ pub fn ensure_window_in_available_monitors(
 }
 
 fn active_monitor(app: &AppHandle) -> Result<Monitor, String> {
-    for label in [
-        HANDLE_WINDOW_LABEL,
-        DRAWER_WINDOW_LABEL,
-        crate::tool_windows::APP_PICKER_WINDOW_LABEL,
-    ] {
+    for label in [HANDLE_WINDOW_LABEL, "todos", "capture", "settings"] {
         if let Some(window) = app.get_webview_window(label) {
             if let Some(monitor) = window.current_monitor().map_err(|err| err.to_string())? {
                 return Ok(monitor);
@@ -358,59 +362,121 @@ pub fn capture_window_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
     ))
 }
 
-const HANDLE_LOGICAL_WIDTH: u32 = 56;
-const HANDLE_LOGICAL_HEIGHT: u32 = 228;
-const HANDLE_RESERVE_WIDTH: u32 = 64;
-
-pub fn compute_drawer_width_for_work_area(work_area: WorkAreaMonitor) -> u32 {
-    let handle_reserve = scaled_px(HANDLE_RESERVE_WIDTH, work_area.scale_factor);
-    let max_available = work_area.bounds.width.saturating_sub(handle_reserve).max(1);
-    let min_w = scaled_px(360, work_area.scale_factor).min(max_available);
-    let max_w = scaled_px(560, work_area.scale_factor).clamp(min_w, max_available);
-    let target = ((work_area.bounds.width as f64) * 0.30).round() as u32;
-    target.clamp(min_w, max_w)
+pub fn settings_window_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
+    let work = active_work_area(app)?;
+    Ok(compute_centered_bounds_for_work_area(
+        work.bounds,
+        work.scale_factor,
+        CenteredBoundsSpec {
+            width_ratio: 0.32,
+            height_ratio: 0.80,
+            min_logical_width: 520.0,
+            min_logical_height: 640.0,
+        },
+    ))
 }
 
-pub fn compute_drawer_bounds_for_work_area(work_area: WorkAreaMonitor) -> ShellBounds {
-    let width = compute_drawer_width_for_work_area(work_area);
-    ShellBounds {
-        x: work_area.bounds.x + work_area.bounds.width as i32 - width as i32,
-        y: work_area.bounds.y,
-        width,
-        height: work_area.bounds.height,
-    }
-}
+const HANDLE_LOGICAL_WIDTH: u32 = 102;
+const HANDLE_LOGICAL_HEIGHT: u32 = 126;
+const HANDLE_DEFAULT_RIGHT_MARGIN: u32 = 16;
 
-pub fn compute_handle_bounds_for_work_area(
-    work_area: WorkAreaMonitor,
-    expanded: bool,
-) -> ShellBounds {
-    let drawer_width = if expanded {
-        compute_drawer_width_for_work_area(work_area)
-    } else {
-        0
-    };
+pub fn compute_handle_bounds_for_work_area(work_area: WorkAreaMonitor) -> ShellBounds {
     let width =
         scaled_px(HANDLE_LOGICAL_WIDTH, work_area.scale_factor).min(work_area.bounds.width.max(1));
     let height = scaled_px(HANDLE_LOGICAL_HEIGHT, work_area.scale_factor)
         .min(work_area.bounds.height.max(1));
+    let right_margin = scaled_px(HANDLE_DEFAULT_RIGHT_MARGIN, work_area.scale_factor)
+        .min(work_area.bounds.width.saturating_sub(width));
     ShellBounds {
-        x: work_area.bounds.x + work_area.bounds.width as i32 - drawer_width as i32 - width as i32,
+        x: work_area.bounds.x + work_area.bounds.width as i32 - width as i32 - right_margin as i32,
         y: work_area.bounds.y + ((work_area.bounds.height.saturating_sub(height)) / 2) as i32,
         width,
         height,
     }
 }
 
-pub fn drawer_window_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
-    Ok(compute_drawer_bounds_for_work_area(active_work_area(app)?))
+pub fn clamp_handle_position_to_monitors(
+    saved: Option<ShellBounds>,
+    monitors: &[WorkAreaMonitor],
+    primary: Option<WorkAreaMonitor>,
+) -> Option<ShellBounds> {
+    let fallback_monitor = primary.or_else(|| monitors.first().copied())?;
+    let Some(prev) = saved.filter(|item| {
+        item.x > MINIMIZED_COORDINATE_THRESHOLD && item.y > MINIMIZED_COORDINATE_THRESHOLD
+    }) else {
+        return Some(compute_handle_bounds_for_work_area(fallback_monitor));
+    };
+
+    let center_x = prev.x.saturating_add((prev.width.max(1) / 2) as i32);
+    let center_y = prev.y.saturating_add((prev.height.max(1) / 2) as i32);
+    let target_mon = monitors
+        .iter()
+        .find(|mon| {
+            let right = mon.bounds.x + mon.bounds.width as i32;
+            let bottom = mon.bounds.y + mon.bounds.height as i32;
+            center_x >= mon.bounds.x
+                && center_x < right
+                && center_y >= mon.bounds.y
+                && center_y < bottom
+        })
+        .copied()
+        .unwrap_or(fallback_monitor);
+
+    let width = scaled_px(HANDLE_LOGICAL_WIDTH, target_mon.scale_factor)
+        .min(target_mon.bounds.width.max(1));
+    let height = scaled_px(HANDLE_LOGICAL_HEIGHT, target_mon.scale_factor)
+        .min(target_mon.bounds.height.max(1));
+    let min_x = target_mon.bounds.x;
+    let max_x = target_mon.bounds.x + target_mon.bounds.width.saturating_sub(width) as i32;
+    let min_y = target_mon.bounds.y;
+    let max_y = target_mon.bounds.y + target_mon.bounds.height.saturating_sub(height) as i32;
+
+    Some(ShellBounds {
+        x: prev.x.clamp(min_x, max_x.max(min_x)),
+        y: prev.y.clamp(min_y, max_y.max(min_y)),
+        width,
+        height,
+    })
 }
 
-pub fn handle_window_bounds(app: &AppHandle, expanded: bool) -> Result<ShellBounds, String> {
-    Ok(compute_handle_bounds_for_work_area(
-        active_work_area(app)?,
-        expanded,
-    ))
+fn handle_bounds_path(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("shell").join(HANDLE_BOUNDS_FILE))
+        .map_err(|err| format!("failed to resolve handle bounds path: {err}"))
+}
+
+fn read_saved_handle_bounds(app: &AppHandle) -> Option<ShellBounds> {
+    if let Some(cached) = read_cached_handle_bounds(app) {
+        return Some(cached);
+    }
+    let path = handle_bounds_path(app).ok()?;
+    let raw = fs::read_to_string(&path).ok()?;
+    let parsed = serde_json::from_str::<ShellBounds>(&raw).ok()?;
+    set_cached_handle_bounds(app, parsed);
+    Some(parsed)
+}
+
+pub fn save_handle_bounds(app: &AppHandle, bounds: ShellBounds) -> Result<(), String> {
+    if bounds.x <= MINIMIZED_COORDINATE_THRESHOLD || bounds.y <= MINIMIZED_COORDINATE_THRESHOLD {
+        return Ok(());
+    }
+    set_cached_handle_bounds(app, bounds);
+    let path = handle_bounds_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create handle bounds dir: {err}"))?;
+    }
+    crate::persistence::atomic_write_json(&path, &bounds, "handle bounds")
+}
+
+pub fn handle_window_bounds(app: &AppHandle) -> Result<ShellBounds, String> {
+    let saved = read_saved_handle_bounds(app);
+    let (monitors, primary) = available_work_areas(app);
+    if let Some(clamped) = clamp_handle_position_to_monitors(saved, &monitors, primary) {
+        return Ok(clamped);
+    }
+    Ok(compute_handle_bounds_for_work_area(active_work_area(app)?))
 }
 
 #[cfg(test)]
@@ -430,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn drawer_and_handle_respect_work_area_and_scale_factor() {
+    fn handle_bounds_respect_work_area_and_scale_factor() {
         let fhd = WorkAreaMonitor {
             bounds: ShellBounds {
                 x: 0,
@@ -440,12 +506,9 @@ mod tests {
             },
             scale_factor: 1.0,
         };
-        let d_fhd = compute_drawer_bounds_for_work_area(fhd);
-        assert_eq!(d_fhd.height, 1032);
-        assert_eq!(d_fhd.width, 560);
-        let h_fhd = compute_handle_bounds_for_work_area(fhd, true);
-        assert_eq!((h_fhd.width, h_fhd.height), (56, 228));
-        assert_eq!(h_fhd.x + h_fhd.width as i32, d_fhd.x);
+        let h_fhd = compute_handle_bounds_for_work_area(fhd);
+        assert_eq!((h_fhd.width, h_fhd.height), (102, 126));
+        assert_eq!(h_fhd.x + h_fhd.width as i32, 1920 - 16);
 
         let uhd_200 = WorkAreaMonitor {
             bounds: ShellBounds {
@@ -456,10 +519,76 @@ mod tests {
             },
             scale_factor: 2.0,
         };
-        let d_uhd = compute_drawer_bounds_for_work_area(uhd_200);
-        assert_eq!(d_uhd.height, 2064);
-        assert_eq!(d_uhd.width, 1120);
-        let h_uhd = compute_handle_bounds_for_work_area(uhd_200, false);
-        assert_eq!((h_uhd.width, h_uhd.height), (112, 456));
+        let h_uhd = compute_handle_bounds_for_work_area(uhd_200);
+        assert_eq!((h_uhd.width, h_uhd.height), (204, 252));
+        assert_eq!(h_uhd.x + h_uhd.width as i32, 3840 - 32);
+    }
+
+    #[test]
+    fn persisted_handle_position_is_preserved_and_clamped_after_monitor_disconnect() {
+        let primary = WorkAreaMonitor {
+            bounds: ShellBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1040,
+            },
+            scale_factor: 1.0,
+        };
+        let secondary = WorkAreaMonitor {
+            bounds: ShellBounds {
+                x: 1920,
+                y: 0,
+                width: 1920,
+                height: 1040,
+            },
+            scale_factor: 1.0,
+        };
+
+        let dragged = ShellBounds {
+            x: 320,
+            y: 140,
+            width: 102,
+            height: 126,
+        };
+        let kept =
+            clamp_handle_position_to_monitors(Some(dragged), &[primary, secondary], Some(primary))
+                .expect("clamped handle bounds");
+        assert_eq!(kept, dragged);
+
+        let offscreen = ShellBounds {
+            x: 3600,
+            y: 980,
+            width: 102,
+            height: 126,
+        };
+        let recovered =
+            clamp_handle_position_to_monitors(Some(offscreen), &[primary], Some(primary))
+                .expect("recovered handle bounds");
+        assert!(recovered.x >= 0 && recovered.x + recovered.width as i32 <= 1920);
+        assert!(recovered.y >= 0 && recovered.y + recovered.height as i32 <= 1040);
+    }
+
+    #[test]
+    fn settings_window_bounds_stays_centered_within_work_area() {
+        let s = compute_centered_bounds_for_work_area(
+            ShellBounds {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1032,
+            },
+            1.0,
+            CenteredBoundsSpec {
+                width_ratio: 0.32,
+                height_ratio: 0.80,
+                min_logical_width: 520.0,
+                min_logical_height: 640.0,
+            },
+        );
+        assert!(s.width >= 520 && s.height >= 640);
+        assert!(s.x > 0 && s.y > 0);
+        assert!(s.x + s.width as i32 <= 1920);
+        assert!(s.y + s.height as i32 <= 1032);
     }
 }

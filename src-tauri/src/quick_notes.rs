@@ -529,7 +529,7 @@ fn read_local_quick_notes_snapshot(app: &AppHandle) -> Result<Vec<QuickNote>, St
         let conn = crate::local_db::open_workspace_db_at(&local_db)?;
         return read_quick_notes_from_conn(&conn);
     }
-    let legacy_path = crate::files::file_storage_root(app)?.join(QUICK_NOTES_FILE_NAME);
+    let legacy_path = crate::paths::legacy_local_storage_root(app)?.join(QUICK_NOTES_FILE_NAME);
     if !legacy_path.is_file() {
         return Ok(Vec::new());
     }

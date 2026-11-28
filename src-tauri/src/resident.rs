@@ -1,21 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 const RESIDENT_SETTINGS_FILE: &str = "resident.json";
-const OPEN_SETTINGS_EVENT: &str = "open-settings-panel";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResidentSettings {
     #[serde(default)]
     pub launch_minimized: bool,
-    #[serde(default = "default_background_monitor_enabled")]
-    pub background_monitor_enabled: bool,
     #[serde(default = "default_auto_update_check_enabled")]
     pub auto_update_check_enabled: bool,
     #[serde(default)]
@@ -29,7 +25,6 @@ pub struct ResidentSettings {
 pub struct ResidentSettingsSnapshot {
     pub autostart_enabled: bool,
     pub launch_minimized: bool,
-    pub background_monitor_enabled: bool,
     pub auto_update_check_enabled: bool,
     pub auto_stick_after_snip: bool,
     pub realtime_sync_enabled: bool,
@@ -43,8 +38,6 @@ pub struct ResidentSettingsUpdate {
     #[serde(default)]
     pub launch_minimized: Option<bool>,
     #[serde(default)]
-    pub background_monitor_enabled: Option<bool>,
-    #[serde(default)]
     pub auto_update_check_enabled: Option<bool>,
     #[serde(default)]
     pub auto_stick_after_snip: Option<bool>,
@@ -56,16 +49,11 @@ impl Default for ResidentSettings {
     fn default() -> Self {
         Self {
             launch_minimized: false,
-            background_monitor_enabled: true,
             auto_update_check_enabled: true,
             auto_stick_after_snip: false,
             realtime_sync_enabled: false,
         }
     }
-}
-
-fn default_background_monitor_enabled() -> bool {
-    true
 }
 
 fn default_auto_update_check_enabled() -> bool {
@@ -112,10 +100,6 @@ pub fn resident_update_settings(
     if let Some(launch_minimized) = payload.launch_minimized {
         settings.launch_minimized = launch_minimized;
     }
-    if let Some(background_monitor_enabled) = payload.background_monitor_enabled {
-        settings.background_monitor_enabled = background_monitor_enabled;
-        crate::shortcuts::set_shortcut_background_monitoring(&app, background_monitor_enabled);
-    }
     if let Some(auto_update_check_enabled) = payload.auto_update_check_enabled {
         settings.auto_update_check_enabled = auto_update_check_enabled;
         if auto_update_check_enabled {
@@ -129,7 +113,6 @@ pub fn resident_update_settings(
         settings.realtime_sync_enabled = realtime_sync_enabled;
     }
     if payload.launch_minimized.is_some()
-        || payload.background_monitor_enabled.is_some()
         || payload.auto_update_check_enabled.is_some()
         || payload.auto_stick_after_snip.is_some()
         || payload.realtime_sync_enabled.is_some()
@@ -162,28 +145,19 @@ pub async fn resident_open_settings(app: AppHandle) -> Result<(), String> {
 }
 
 pub fn show_handle_window(app: &AppHandle) -> Result<(), String> {
-    if let Some(drawer) = app.get_webview_window("main") {
-        let _ = drawer.hide();
-    }
     crate::shell::ensure_handle_window(app)?;
-    crate::shell::apply_window_bounds(
-        app,
-        "handle",
-        crate::shell::handle_window_bounds(app, false)?,
-    )?;
+    crate::shell::apply_window_bounds(app, "handle", crate::shell::handle_window_bounds(app)?)?;
     if let Some(window) = app.get_webview_window("handle") {
         window.show().map_err(|err| err.to_string())?;
-        window.set_focus().map_err(|err| err.to_string())?;
         window
             .set_always_on_top(true)
             .map_err(|err| err.to_string())?;
     }
-    let shell = app.state::<crate::shell::ShellState>();
-    crate::shell::update_shell_state(app, &shell, false, None)
+    Ok(())
 }
 
 pub fn hide_handle_window(app: &AppHandle) -> Result<(), String> {
-    for label in ["main", "handle", "todos", "app-picker", "capture"] {
+    for label in ["handle", "todos", "capture", "settings"] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
@@ -193,39 +167,8 @@ pub fn hide_handle_window(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn open_resident_settings(app: &AppHandle) -> Result<(), String> {
-    crate::shell::ensure_handle_window(app)?;
-    crate::shell::ensure_drawer_window(app)?;
-    crate::shell::apply_window_bounds(app, "main", crate::shell::drawer_window_bounds(app)?)?;
-    crate::shell::apply_window_bounds(
-        app,
-        "handle",
-        crate::shell::handle_window_bounds(app, true)?,
-    )?;
-
-    let shell = app.state::<crate::shell::ShellState>();
-    crate::shell::update_shell_state(app, &shell, true, Some("files".to_string()))?;
-
-    if let Some(window) = app.get_webview_window("main") {
-        window.show().map_err(|err| err.to_string())?;
-        window.set_focus().map_err(|err| err.to_string())?;
-    }
-    if let Some(window) = app.get_webview_window("handle") {
-        window.show().map_err(|err| err.to_string())?;
-    }
-    crate::shell::sync_expanded_shell_z_order(app)?;
-
-    let handle = app.clone();
-    thread::spawn(move || {
-        let started_at = std::time::Instant::now();
-        while !crate::shell::is_drawer_ready(&handle) {
-            if started_at.elapsed() >= Duration::from_millis(1500) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        thread::sleep(Duration::from_millis(80));
-        let _ = handle.emit(OPEN_SETTINGS_EVENT, ());
-    });
+    show_handle_window(app)?;
+    crate::tool_windows::show_or_toggle_settings_window_sync(app, false)?;
     Ok(())
 }
 
@@ -239,7 +182,6 @@ fn resident_settings_snapshot(app: &AppHandle) -> Result<ResidentSettingsSnapsho
     Ok(ResidentSettingsSnapshot {
         autostart_enabled,
         launch_minimized: settings.launch_minimized,
-        background_monitor_enabled: settings.background_monitor_enabled,
         auto_update_check_enabled: settings.auto_update_check_enabled,
         auto_stick_after_snip: settings.auto_stick_after_snip,
         realtime_sync_enabled: settings.realtime_sync_enabled,
@@ -292,7 +234,6 @@ mod tests {
         let parsed: ResidentSettings =
             serde_json::from_str(legacy_json).expect("legacy json parses");
         assert!(parsed.launch_minimized);
-        assert!(!parsed.background_monitor_enabled);
         assert!(parsed.auto_update_check_enabled);
         assert!(parsed.auto_stick_after_snip);
         assert!(!parsed.realtime_sync_enabled);

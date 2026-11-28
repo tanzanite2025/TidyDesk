@@ -1,7 +1,6 @@
 import { createTauriNativeClient } from './tauri-adapter';
 import { createWebHttpNativeClient } from './web-http-adapter';
 import type { NativeCapabilities, NativeClient } from './types';
-import type { OpenAppPickerPayload } from '../types/tidydesk-api';
 
 function isMobileWebMode(): boolean {
   if (typeof window === 'undefined') return false;
@@ -31,15 +30,12 @@ export function getNativeCapabilities(): NativeCapabilities {
 
 interface TidyDeskTestBridge {
   isTauriAvailable: () => boolean;
-  openFilesDrawer: () => Promise<void>;
-  collapseDrawer: () => Promise<void>;
+  openSettingsWindow: () => Promise<void>;
   startScreenshot: () => Promise<void>;
   getWindowSnapshot: () => Promise<unknown>;
   resetWindowState: () => Promise<unknown>;
   openTodoWindow: () => Promise<void>;
   closeTodoWindow: () => Promise<void>;
-  openAppPicker: (payload?: OpenAppPickerPayload) => Promise<void>;
-  closeAppPicker: () => Promise<void>;
   cancelSnip: () => Promise<void>;
 }
 
@@ -66,15 +62,12 @@ function dispatchCommand(command: string, args?: Record<string, unknown>) {
 if (typeof window !== 'undefined' && shouldExposeTestBridge) {
   window.__TIDYDESK_TEST__ = {
     isTauriAvailable: () => nativeClient.isAvailable(),
-    openFilesDrawer: () => invokeCommand('tests_open_files_drawer'),
-    collapseDrawer: () => invokeCommand('tests_collapse_drawer'),
+    openSettingsWindow: () => invokeCommand('tests_open_settings_window'),
     startScreenshot: () => dispatchCommand('tests_start_snip'),
     getWindowSnapshot: () => invokeCommand('tests_get_window_snapshot'),
     resetWindowState: () => invokeCommand('tests_reset_window_state'),
     openTodoWindow: () => invokeCommand('open_todo_window'),
     closeTodoWindow: () => invokeCommand('close_todo_window'),
-    openAppPicker: payload => dispatchCommand('open_app_picker', { payload }),
-    closeAppPicker: () => dispatchCommand('close_app_picker'),
     cancelSnip: () => dispatchCommand('snip_cancel')
   };
 }

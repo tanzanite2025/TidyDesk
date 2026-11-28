@@ -90,7 +90,7 @@ async function switchToWindowWithTestBridge() {
 
 async function ensureHandleWindow() {
   try {
-    await switchToWindowBySelector('[data-testid="rail-files"]', 5000);
+    await switchToWindowBySelector('[data-testid="rail-todos"]', 5000);
     return;
   } catch {}
 
@@ -99,7 +99,7 @@ async function ensureHandleWindow() {
     snapshot => snapshot.windows.handle.exists,
     'Timed out waiting for the handle window to become available',
   );
-  await switchToWindowBySelector('[data-testid="rail-files"]');
+  await switchToWindowBySelector('[data-testid="rail-todos"]');
 }
 
 async function resetWindowState() {
@@ -110,43 +110,14 @@ async function resetWindowState() {
       snapshot.shell.expanded === false &&
       snapshot.shell.activeModule == null &&
       snapshot.windows.handle.visible === true &&
-      snapshot.windows.main.visible === false &&
+      snapshot.windows.handle.alwaysOnTop === true &&
       snapshot.windows.snip.exists === false &&
-      snapshot.windows.appPicker.exists === false &&
-      snapshot.windows.todos.visible === false,
-    'Timed out waiting for the baseline handle-only window state',
+      snapshot.windows.todos.visible === false &&
+      snapshot.windows.capture.visible === false &&
+      snapshot.windows.settings.visible === false,
+    'Timed out waiting for the baseline always-on-top handle window state',
   );
-  await switchToWindowBySelector('[data-testid="rail-files"]');
-}
-
-async function openDrawerFromHandle() {
-  await switchToWindowBySelector('[data-testid="rail-files"]');
-  await $('[data-testid="rail-files"]').click();
-
-  await waitForSnapshot(
-    snapshot =>
-      snapshot.shell.expanded === true &&
-      snapshot.shell.activeModule === 'files' &&
-      snapshot.windows.main.visible === true &&
-      String(snapshot.windows.main.url || '').includes('mode=drawer'),
-    'Timed out waiting for the drawer window to open',
-  );
-
-  await switchToWindowByUrlFragment('mode=drawer');
-  await expect($('[data-testid="drawer-collapse"]')).toBeDisplayed();
-}
-
-async function collapseDrawer() {
-  await switchToWindowByUrlFragment('mode=drawer');
-  await $('[data-testid="drawer-collapse"]').click();
-  await waitForSnapshot(
-    snapshot =>
-      snapshot.shell.expanded === false &&
-      snapshot.windows.handle.visible === true &&
-      snapshot.windows.main.visible === false,
-    'Timed out waiting for the drawer window to collapse',
-  );
-  await switchToWindowBySelector('[data-testid="rail-files"]');
+  await switchToWindowBySelector('[data-testid="rail-todos"]');
 }
 
 describe('TidyDesk multi-window smoke', () => {
@@ -154,69 +125,61 @@ describe('TidyDesk multi-window smoke', () => {
     await resetWindowState();
   });
 
-  it('opens and closes the drawer from the handle rail', async () => {
-    await openDrawerFromHandle();
-    await collapseDrawer();
-    await expect($('[data-testid="rail-files"]')).toBeDisplayed();
-  });
-
-  it('opens and closes the todo window cleanly', async () => {
+  it('opens and closes the todo window while keeping the handle always on top', async () => {
     await switchToWindowBySelector('[data-testid="rail-todos"]');
     await $('[data-testid="rail-todos"]').click();
 
     await waitForSnapshot(
       snapshot =>
-        snapshot.shell.expanded === false &&
         snapshot.shell.activeModule === 'todos' &&
         snapshot.windows.todos.visible === true &&
-        String(snapshot.windows.todos.url || '').includes('mode=tauri-todos'),
+        snapshot.windows.handle.alwaysOnTop === true &&
+        String(snapshot.windows.todos.url || '').includes('mode=todos'),
       'Timed out waiting for the todo window to open',
     );
 
-    await switchToWindowByUrlFragment('mode=tauri-todos');
+    await switchToWindowByUrlFragment('mode=todos');
     await expect($('[data-testid="todo-close"]')).toBeDisplayed();
     await $('[data-testid="todo-close"]').click();
 
     await waitForSnapshot(
       snapshot =>
-        snapshot.shell.expanded === false &&
         snapshot.shell.activeModule == null &&
         snapshot.windows.handle.visible === true &&
+        snapshot.windows.handle.alwaysOnTop === true &&
         snapshot.windows.todos.visible === false,
       'Timed out waiting for the todo window to close',
     );
-
-    await switchToWindowBySelector('[data-testid="rail-files"]');
-    await expect($('[data-testid="rail-files"]')).toBeDisplayed();
   });
 
-  it('recovers back to the drawer after app picker closes', async () => {
-    await openDrawerFromHandle();
-    await runTestBridge('openAppPicker', { targetFolder: 'Smoke Drawer' });
+  it('opens and closes the standalone settings window cleanly', async () => {
+    await switchToWindowBySelector('[data-testid="rail-settings"]');
+    await $('[data-testid="rail-settings"]').click();
 
     await waitForSnapshot(
       snapshot =>
-        snapshot.windows.appPicker.visible === true &&
-        String(snapshot.windows.appPicker.url || '').includes('mode=app-picker'),
-      'Timed out waiting for the app picker window to open',
+        snapshot.shell.activeModule === 'settings' &&
+        snapshot.windows.settings.visible === true &&
+        snapshot.windows.handle.alwaysOnTop === true &&
+        String(snapshot.windows.settings.url || '').includes('mode=settings'),
+      'Timed out waiting for the settings window to open',
     );
 
-    await switchToWindowBySelector('[data-testid="app-picker-close"]');
-    await expect($('[data-testid="app-picker-close"]')).toBeDisplayed();
-    await $('[data-testid="app-picker-close"]').click();
+    await switchToWindowByUrlFragment('mode=settings');
+    await expect($('[data-testid="settings-close"]')).toBeDisplayed();
+    await $('[data-testid="settings-close"]').click();
 
     await waitForSnapshot(
       snapshot =>
-        snapshot.windows.appPicker.exists === false &&
-        snapshot.shell.expanded === true &&
-        snapshot.windows.main.visible === true,
-      'Timed out waiting for the app picker to close and the drawer to recover',
+        snapshot.shell.activeModule == null &&
+        snapshot.windows.handle.visible === true &&
+        snapshot.windows.handle.alwaysOnTop === true &&
+        snapshot.windows.settings.visible === false,
+      'Timed out waiting for the settings window to close',
     );
-
-    await collapseDrawer();
   });
 
-  it('cancels the snip overlay and keeps the handle responsive', async () => {
+  it('cancels the snip overlay and keeps the handle responsive and on top', async () => {
     await switchToWindowBySelector('[data-testid="rail-screenshot"]');
     await $('[data-testid="rail-screenshot"]').click();
 
@@ -234,12 +197,9 @@ describe('TidyDesk multi-window smoke', () => {
     await waitForSnapshot(
       snapshot =>
         snapshot.windows.snip.exists === false &&
-        snapshot.shell.expanded === false &&
-        snapshot.windows.handle.visible === true,
+        snapshot.windows.handle.visible === true &&
+        snapshot.windows.handle.alwaysOnTop === true,
       'Timed out waiting for the snip overlay to close cleanly',
     );
-
-    await openDrawerFromHandle();
-    await collapseDrawer();
   });
 });

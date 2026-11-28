@@ -1,157 +1,21 @@
-import type { TidyFile, TidyFolder } from './file';
-
-export type RailModule = 'files' | 'todos' | 'capture' | null;
+export type RailModule = 'todos' | 'capture' | 'settings' | null;
 
 export type WindowAction =
   | 'close'
   | 'minimize'
-  | 'expand-drawer'
-  | 'collapse-drawer'
-  | 'toggle-drawer'
-  | 'open-files'
   | 'open-todos'
   | 'open-capture'
   | 'close-capture'
+  | 'open-settings'
+  | 'close-settings'
   | 'start-screenshot'
   | 'close-panel';
 
-export type TidyDeskSendChannel = 'user-first-interaction' | 'drawer-opened' | 'file-dropped';
-
-export interface DesktopFilesResult {
-  files: TidyFile[];
-  folders: TidyFolder[];
-  desktopPath?: string;
-  tidyBoxPath?: string;
-}
-
-export interface FileIconRequest {
-  id: string;
-  path: string;
-  targetPath?: string | null;
-}
-
-export interface FileIconResult {
-  id: string;
-  icon?: string | null;
-}
-
-export interface RenameItemPayload {
-  oldName: string;
-  newName: string;
-  parentFolder: string | null;
-}
-
-export interface DeleteItemPayload {
-  name: string;
-  parentFolder: string | null;
-}
-
-export interface ImportExternalFilesPayload {
-  filePaths: string[];
-  targetFolder: string | null;
-}
-
-export interface ImportedFileResult {
-  source: string;
-  shortcut: string;
-  mode: string;
-}
-
-export type ImportSkippedReason = 'missing' | 'alreadyInDrawer' | 'protected';
-
-export interface ImportSkippedFileResult {
-  source: string;
-  reason: ImportSkippedReason;
-}
-
-export interface ImportFailedFileResult {
-  source: string;
-  error: string;
-}
-
-export interface ImportExternalFilesResult {
-  success: boolean;
-  added: ImportedFileResult[];
-  skipped: ImportSkippedFileResult[];
-  failed: ImportFailedFileResult[];
-}
-
-export interface RestoreToDesktopPayload {
-  shortcutPath: string;
-}
-
-export interface RestoreToDesktopResult {
-  success: boolean;
-  restoredPath: string;
-}
-
-export interface ShortcutValidationStats {
-  total: number;
-  valid: number;
-  invalid: number;
-  repaired: number;
-}
-
-export interface RepairShortcutPayload {
-  shortcutPath: string;
-  targetPath: string;
-}
-
-export interface RepairShortcutResult {
-  repaired: boolean;
-  newPath: string | null;
-}
-
-export interface TargetFileEventPayload {
-  targetPath: string;
-  shortcutCount: number;
-}
-
-export interface InstalledApp {
-  name: string;
-  shortcutPath: string;
-  targetPath: string;
-  icon: string | null;
-  category: string;
-}
-
-export interface InstalledAppsResult {
-  success: boolean;
-  apps: InstalledApp[];
-  error?: string;
-}
-
-export interface AppIconUpdate {
-  shortcutPath: string;
-  icon: string | null;
-}
-
-export interface AppIconsUpdatedPayload {
-  icons: AppIconUpdate[];
-  complete?: boolean;
-}
-
-export interface AppCacheInfo {
-  exists?: boolean;
-  valid?: boolean;
-  ageMinutes?: number;
-  lastScanTime?: string | number | null;
-  appCount?: number;
-  cacheAge?: number;
-  isExpired?: boolean;
-  [key: string]: unknown;
-}
-
-export interface CacheInfoResult {
-  success: boolean;
-  info?: AppCacheInfo;
-  error?: string;
-}
+export type TidyDeskSendChannel = 'user-first-interaction';
 
 export interface ResidentSettings {
   autostartEnabled: boolean;
   launchMinimized: boolean;
-  backgroundMonitorEnabled: boolean;
   autoUpdateCheckEnabled: boolean;
   autoStickAfterSnip: boolean;
 }
@@ -159,7 +23,6 @@ export interface ResidentSettings {
 export interface ResidentSettingsUpdate {
   autostartEnabled?: boolean;
   launchMinimized?: boolean;
-  backgroundMonitorEnabled?: boolean;
   autoUpdateCheckEnabled?: boolean;
   autoStickAfterSnip?: boolean;
 }
@@ -167,7 +30,6 @@ export interface ResidentSettingsUpdate {
 export type HotkeyAction =
   | 'paste_pending_sticker'
   | 'toggle_quick_capture'
-  | 'toggle_files_drawer'
   | 'new_sticky_note';
 
 export type HotkeyRegistrationStatus = 'registered' | 'conflict' | 'disabled' | 'unset';
@@ -212,19 +74,6 @@ export interface HotkeyUpdateResult {
   reason: string | null;
   message: string;
   settings: HotkeySettings;
-}
-
-export interface AppPickerTargetResult {
-  targetFolder: string | null;
-}
-
-export interface OpenAppPickerPayload {
-  targetFolder: string;
-}
-
-export interface AddAppToDrawerPayload {
-  shortcutPath: string;
-  targetFolder: string;
 }
 
 export interface CaptureOpenedPayload {
@@ -308,11 +157,6 @@ export interface StickerPinResult {
 export interface StickerUpdatedPayload {
   id: string;
   alwaysOnTop: boolean;
-}
-
-export interface DrawerStatePayload {
-  expanded: boolean;
-  activeModule?: RailModule;
 }
 
 export interface ModuleStatePayload {

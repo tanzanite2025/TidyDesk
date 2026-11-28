@@ -32,7 +32,7 @@ pub struct SnipRectPayload {
 }
 
 pub fn active_monitor(app: &AppHandle) -> Result<MonitorSnapshot, String> {
-    for label in [SNIP_WINDOW_LABEL, "handle", "main"] {
+    for label in [SNIP_WINDOW_LABEL, "handle"] {
         if let Some(window) = app.get_webview_window(label) {
             if let Some(monitor) = window.current_monitor().map_err(|err| err.to_string())? {
                 let position = monitor.position();

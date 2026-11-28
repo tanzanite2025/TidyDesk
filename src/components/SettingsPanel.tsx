@@ -13,9 +13,10 @@ import { UpdateSectionCard } from './settings/UpdateSectionCard';
 
 interface SettingsPanelProps {
   onClose: () => void;
+  variant?: 'modal' | 'window';
 }
 
-export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
+export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, variant = 'modal' }) => {
   const [residentSettings, setResidentSettings] = React.useState<ResidentSettings | null>(null);
   const [residentError, setResidentError] = React.useState('');
   const [isSavingResident, setIsSavingResident] = React.useState(false);
@@ -81,30 +82,69 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
     }
   };
 
+  const isWindow = variant === 'window';
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Escape') return;
+    if (showHotkeySettings) {
+      event.stopPropagation();
+      setShowHotkeySettings(false);
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')
+    ) {
+      return;
+    }
+    if (isWindow) {
+      onClose();
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      onKeyDown={handleKeyDown}
+      className={
+        isWindow
+          ? 'relative flex h-screen w-screen flex-col overflow-hidden bg-transparent'
+          : 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm'
+      }
+    >
       {showHotkeySettings && (
         <HotkeySettingsDialog
           onClose={() => setShowHotkeySettings(false)}
           onSaved={applyHotkeySettings}
         />
       )}
-      <div className="max-h-[90vh] w-[480px] overflow-y-auto rounded-xl border border-white/[0.12] bg-[#11131c] shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/[0.08] px-6 py-4">
-          <div>
+      <div
+        className={
+          isWindow
+            ? 'flex h-full w-full flex-col overflow-hidden rounded-xl border border-white/[0.12] bg-[#11131c] shadow-2xl'
+            : 'flex max-h-[90vh] w-[480px] flex-col overflow-hidden rounded-xl border border-white/[0.12] bg-[#11131c] shadow-2xl'
+        }
+      >
+        <div
+          className="flex shrink-0 items-center justify-between border-b border-white/[0.08] px-6 py-4"
+          style={isWindow ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
+        >
+          <div style={isWindow ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}>
             <h2 className="text-[16px] font-bold text-slate-100">设置</h2>
             <p className="mt-0.5 text-[11px] text-slate-500">应用设置和更新</p>
           </div>
           <button
             type="button"
             onClick={onClose}
+            data-testid="settings-close"
+            style={isWindow ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
             className="rounded-md p-2 text-slate-500 hover:bg-white/[0.08] hover:text-slate-100"
           >
             <X size={16} />
           </button>
         </div>
 
-        <div className="p-6">
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
           <AppInfoCard metadata={metadata} />
           <StickerSettingsCard
             residentSettings={residentSettings}

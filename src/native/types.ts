@@ -1,35 +1,16 @@
 import type {
-  AddAppToDrawerPayload,
-  AppIconsUpdatedPayload,
-  AppPickerTargetResult,
-  CacheInfoResult,
   CaptureOpenedPayload,
   DataRestoreSummary,
   DataSnapshotSummary,
-  DesktopFilesResult,
-  DeleteItemPayload,
-  DrawerStatePayload,
-  FileIconRequest,
-  FileIconResult,
   HotkeyBindingUpdatePayload,
   HotkeyBindingValidationPayload,
   HotkeySettings,
   HotkeyUpdateResult,
   HotkeyValidationResult,
-  ImportExternalFilesResult,
-  ImportExternalFilesPayload,
-  InstalledAppsResult,
   ModuleStatePayload,
-  OpenAppPickerPayload,
   RailModule,
-  RenameItemPayload,
-  RepairShortcutPayload,
-  RepairShortcutResult,
   ResidentSettings,
   ResidentSettingsUpdate,
-  RestoreToDesktopPayload,
-  RestoreToDesktopResult,
-  ShortcutValidationStats,
   SnapshotVerificationReport,
   SnipBackgroundImageResult,
   SnipCompletePayload,
@@ -37,7 +18,6 @@ import type {
   StickerData,
   StickerPinResult,
   StickerUpdatedPayload,
-  TargetFileEventPayload,
   TidyDeskSendChannel,
   WindowAction
 } from '../types/tidydesk-api';
@@ -79,29 +59,6 @@ import type {
   WorkspaceInviteInfo,
   WorkspaceMemberInfo
 } from '../types/todo';
-
-export interface NativeFilesClient {
-  readDesktopFiles: () => Promise<DesktopFilesResult>;
-  readIcons: (files: FileIconRequest[]) => Promise<FileIconResult[]>;
-  importExternalFiles: (payload: ImportExternalFilesPayload) => Promise<ImportExternalFilesResult>;
-  open: (filePath: string) => Promise<unknown>;
-  restoreToDesktop: (payload: RestoreToDesktopPayload) => Promise<RestoreToDesktopResult>;
-  onDrawerFilesChanged?: (callback: () => void) => (() => void) | undefined;
-}
-
-export interface NativeDrawersClient {
-  create: (name: string) => Promise<unknown>;
-  renameItem: (payload: RenameItemPayload) => Promise<unknown>;
-  deleteItem: (payload: DeleteItemPayload) => Promise<unknown>;
-}
-
-export interface NativeShortcutsClient {
-  validateAll: () => Promise<ShortcutValidationStats>;
-  repair: (payload: RepairShortcutPayload) => Promise<RepairShortcutResult>;
-  onTargetFileDeleted: (callback: (payload: TargetFileEventPayload) => void) => (() => void) | undefined;
-  onTargetFileRestored: (callback: (payload: TargetFileEventPayload) => void) => (() => void) | undefined;
-  onValidated: (callback: (payload: ShortcutValidationStats) => void) => (() => void) | undefined;
-}
 
 export interface NativeTodosClient {
   readState: () => Promise<TodoState>;
@@ -155,24 +112,10 @@ export interface NativeStickyNotesClient {
   onUpdated: (callback: (payload: StickyNotesState) => void) => (() => void) | undefined;
 }
 
-export interface NativeAppsClient {
-  scanInstalled: () => Promise<InstalledAppsResult>;
-  refresh: () => Promise<InstalledAppsResult>;
-  getCacheInfo: () => Promise<CacheInfoResult>;
-  openPicker: (payload: OpenAppPickerPayload) => Promise<unknown>;
-  closePicker: () => Promise<unknown>;
-  getPickerTarget: () => Promise<AppPickerTargetResult>;
-  onSetTargetFolder: (callback: (targetFolder: string) => void) => (() => void) | undefined;
-  onIconsUpdated: (callback: (payload: AppIconsUpdatedPayload) => void) => (() => void) | undefined;
-  addToDrawer: (payload: AddAppToDrawerPayload) => Promise<unknown>;
-}
-
 export interface NativeWindowsClient {
   control: (action: WindowAction) => void;
-  getShellState?: () => Promise<DrawerStatePayload>;
-  notifyDrawerReady?: () => void;
+  getShellState?: () => Promise<ModuleStatePayload>;
   getPathForFile: (file: File) => string;
-  onDrawerState: (callback: (payload: DrawerStatePayload) => void) => (() => void) | undefined;
   onModuleState: (callback: (payload: ModuleStatePayload) => void) => (() => void) | undefined;
 }
 
@@ -187,7 +130,6 @@ export interface NativeResidentClient {
   showHandle: () => Promise<unknown>;
   hideHandle: () => Promise<unknown>;
   openSettings: () => Promise<unknown>;
-  onOpenSettings: (callback: () => void) => (() => void) | undefined;
 }
 
 export interface NativeHotkeysClient {
@@ -290,15 +232,11 @@ export interface NativeCapabilities {
 export interface NativeClient {
   isAvailable: () => boolean;
   capabilities?: NativeCapabilities;
-  files: NativeFilesClient;
-  drawers: NativeDrawersClient;
-  shortcuts: NativeShortcutsClient;
   todos: NativeTodosClient;
   accounts: NativeAccountsClient;
   sync: NativeSyncClient;
   quickNotes: NativeQuickNotesClient;
   stickyNotes: NativeStickyNotesClient;
-  apps: NativeAppsClient;
   windows: NativeWindowsClient;
   toolWindows: NativeToolWindowsClient;
   resident: NativeResidentClient;

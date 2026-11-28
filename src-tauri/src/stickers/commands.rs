@@ -29,8 +29,8 @@ pub fn notify_sticker_message(app: &AppHandle, title: &str, body: &str) {
 }
 
 pub fn schedule_restore_stickers(app: AppHandle) {
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(300));
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::sleep(Duration::from_millis(600));
         let stickers = match mutate_sticker_state(&app, |state| {
             state
                 .stickers

@@ -345,7 +345,7 @@ pub fn account_quick_notes_root(app: &AppHandle) -> Result<PathBuf, String> {
     let session = load_session(app)?;
     match effective_storage_scope(&session) {
         Some((uid, ws)) => workspace_data_dir(app, &uid, &ws),
-        None => crate::files::file_storage_root(app),
+        None => crate::paths::legacy_local_storage_root(app),
     }
 }
 

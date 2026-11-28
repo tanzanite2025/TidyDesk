@@ -2,20 +2,14 @@ import React, { type ComponentType } from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 
-// 获取窗口模式
 const params = new URLSearchParams(window.location.search);
 const mode = params.get('mode');
 
-// 根据模式渲染不同的应用
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 
 async function resolveAppComponent(): Promise<ComponentType> {
   if (mode === 'bootstrap') {
     return () => null;
-  }
-
-  if (mode === 'app-picker') {
-    return (await import('./AppPickerApp.tsx')).AppPickerApp;
   }
 
   return (await import('./App.tsx')).default;

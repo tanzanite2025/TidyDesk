@@ -12,7 +12,6 @@ pub(super) const DEFAULT_PASTE_PENDING_STICKER: &str = "ctrl+alt+v";
 pub enum HotkeyAction {
     PastePendingSticker,
     ToggleQuickCapture,
-    ToggleFilesDrawer,
     NewStickyNote,
 }
 
@@ -36,9 +35,18 @@ pub(super) fn action_label(action: &HotkeyAction) -> &'static str {
     match action {
         HotkeyAction::PastePendingSticker => "贴出最近截图",
         HotkeyAction::ToggleQuickCapture => "打开/收起快捷记录",
-        HotkeyAction::ToggleFilesDrawer => "打开/收起收纳抽屉",
         HotkeyAction::NewStickyNote => "一键新建桌面便签",
     }
+}
+
+fn parse_hotkey_settings_tolerant(raw: &str) -> Result<HotkeySettingsFile, serde_json::Error> {
+    let mut doc: serde_json::Value = serde_json::from_str(raw)?;
+    if let Some(bindings) = doc.get_mut("bindings").and_then(|v| v.as_array_mut()) {
+        bindings.retain(|item| {
+            item.get("action").and_then(|v| v.as_str()) != Some("toggle_files_drawer")
+        });
+    }
+    serde_json::from_value(doc)
 }
 
 pub(super) fn read_hotkey_settings(app: &AppHandle) -> Result<HotkeySettingsFile, String> {
@@ -53,7 +61,7 @@ pub(super) fn read_hotkey_settings(app: &AppHandle) -> Result<HotkeySettingsFile
         }
         Err(err) => return Err(format!("failed to read hotkey settings: {err}")),
     };
-    match serde_json::from_str::<HotkeySettingsFile>(&raw) {
+    match parse_hotkey_settings_tolerant(&raw) {
         Ok(settings) => Ok(normalize_settings(settings)),
         Err(err) => {
             let backup_path = crate::persistence::backup_corrupt_file(&path, "hotkey settings")?;
@@ -106,9 +114,7 @@ pub(super) fn default_binding(action: HotkeyAction) -> StoredHotkeyBinding {
         HotkeyAction::PastePendingSticker => {
             (Some(DEFAULT_PASTE_PENDING_STICKER.to_string()), true)
         }
-        HotkeyAction::ToggleQuickCapture
-        | HotkeyAction::ToggleFilesDrawer
-        | HotkeyAction::NewStickyNote => (None, false),
+        HotkeyAction::ToggleQuickCapture | HotkeyAction::NewStickyNote => (None, false),
     };
     StoredHotkeyBinding {
         action,
@@ -122,7 +128,6 @@ pub(super) fn all_actions() -> Vec<HotkeyAction> {
     vec![
         HotkeyAction::PastePendingSticker,
         HotkeyAction::ToggleQuickCapture,
-        HotkeyAction::ToggleFilesDrawer,
         HotkeyAction::NewStickyNote,
     ]
 }
@@ -166,4 +171,30 @@ fn hotkey_root(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub(crate) fn hotkey_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(hotkey_root(app)?.join(HOTKEY_SETTINGS_FILE))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_toggle_files_drawer_is_ignored_without_wiping_other_hotkeys() {
+        let raw = r#"{
+            "version": 1,
+            "bindings": [
+                { "action": "paste_pending_sticker", "accelerator": "ctrl+shift+v", "enabled": true, "updatedAt": "100" },
+                { "action": "toggle_files_drawer", "accelerator": "alt+d", "enabled": true, "updatedAt": "100" }
+            ]
+        }"#;
+        let parsed = parse_hotkey_settings_tolerant(raw).expect("legacy hotkeys json should parse");
+        let normalized = normalize_settings(parsed);
+        assert_eq!(normalized.bindings.len(), 3);
+        let paste = normalized
+            .bindings
+            .iter()
+            .find(|item| item.action == HotkeyAction::PastePendingSticker)
+            .expect("paste binding preserved");
+        assert_eq!(paste.accelerator.as_deref(), Some("ctrl+shift+v"));
+        assert!(paste.enabled);
+    }
 }

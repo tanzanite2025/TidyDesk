@@ -18,7 +18,6 @@ interface HotkeySettingsDialogProps {
 const ACTION_DESCRIPTIONS: Record<HotkeyAction, string> = {
   paste_pending_sticker: '将最近一次截图直接贴到桌面',
   toggle_quick_capture: '快速打开或收起「快捷记录」独立窗口',
-  toggle_files_drawer: '快速展开或收起「桌面收纳抽屉」',
   new_sticky_note: '直接在桌面新建并弹出一张可编辑便签'
 };
 

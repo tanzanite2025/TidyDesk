@@ -1,14 +1,18 @@
-use super::{bring_floating_window_to_front, sync_floating_module_closed};
+use super::{
+    bring_floating_window_to_front, hide_other_floating_windows,
+    register_floating_module_lifecycle, should_toggle_hide_floating_window,
+    sync_floating_module_closed,
+};
 use crate::shell::{
-    ensure_window_in_available_monitors, flush_dwm_compositor, hide_drawer_window_now,
-    set_window_dwm_transitions_disabled, shell_snapshot, todo_window_bounds, update_active_module,
-    webview_url_for_mode, ShellState,
+    ensure_window_in_available_monitors, flush_dwm_compositor, set_window_dwm_transitions_disabled,
+    shell_snapshot, todo_window_bounds, update_active_module, webview_url_for_mode,
+    with_window_build_lock, ShellState,
 };
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    WebviewWindowBuilder,
 };
 
 const TODO_WINDOW_LABEL: &str = "todos";
@@ -21,44 +25,34 @@ fn sync_todo_window_closed(app: &AppHandle) -> Result<(), String> {
     sync_floating_module_closed(app, TODO_MODULE_ID)
 }
 
-fn register_todo_window_lifecycle(window: &WebviewWindow, app: AppHandle) {
-    window.on_window_event(move |event| match event {
-        WindowEvent::Destroyed => {
-            let _ = sync_todo_window_closed(&app);
-        }
-        WindowEvent::Focused(focused) if *focused => {
-            let shell = app.state::<ShellState>();
-            let _ = update_active_module(&app, &shell, Some(TODO_MODULE_ID.to_string()));
-        }
-        _ => {}
-    });
-}
-
 fn bring_todo_window_to_front(window: &WebviewWindow) -> Result<(), String> {
     bring_floating_window_to_front(window)
 }
 
 fn ensure_todo_window(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window(TODO_WINDOW_LABEL).is_some() {
-        return Ok(());
-    }
+    with_window_build_lock(app, || {
+        if app.get_webview_window(TODO_WINDOW_LABEL).is_some() {
+            return Ok(());
+        }
 
-    let bounds = todo_window_bounds(app)?;
-    let window = WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("todos")?)
-        .title("TidyDesk Todos")
-        .min_inner_size(760.0, 560.0)
-        .resizable(true)
-        .visible(false)
-        .build()
-        .map_err(|err| err.to_string())?;
-    window
-        .set_size(PhysicalSize::new(bounds.width, bounds.height))
-        .map_err(|err| err.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(bounds.x, bounds.y))
-        .map_err(|err| err.to_string())?;
-    register_todo_window_lifecycle(&window, app.clone());
-    Ok(())
+        let bounds = todo_window_bounds(app)?;
+        let window =
+            WebviewWindowBuilder::new(app, TODO_WINDOW_LABEL, webview_url_for_mode("todos")?)
+                .title("TidyDesk Todos")
+                .min_inner_size(760.0, 560.0)
+                .resizable(true)
+                .visible(false)
+                .build()
+                .map_err(|err| err.to_string())?;
+        window
+            .set_size(PhysicalSize::new(bounds.width, bounds.height))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_position(PhysicalPosition::new(bounds.x, bounds.y))
+            .map_err(|err| err.to_string())?;
+        register_floating_module_lifecycle(&window, app.clone(), TODO_MODULE_ID);
+        Ok(())
+    })
 }
 
 fn show_todo_window(app: &AppHandle, target_card_id: Option<&str>) -> Result<(), String> {
@@ -69,17 +63,12 @@ fn show_todo_window(app: &AppHandle, target_card_id: Option<&str>) -> Result<(),
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
 
-    if normalized_card_id.is_none() && current.active_module.as_deref() == Some(TODO_MODULE_ID) {
-        let should_restore = app
-            .get_webview_window(TODO_WINDOW_LABEL)
-            .map(|window| {
-                !window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false)
-            })
-            .unwrap_or(true);
-        if !should_restore {
-            close_todo_window_internal(app)?;
-            return Ok(());
-        }
+    if normalized_card_id.is_none()
+        && current.active_module.as_deref() == Some(TODO_MODULE_ID)
+        && should_toggle_hide_floating_window(app, TODO_WINDOW_LABEL)
+    {
+        close_todo_window_internal(app)?;
+        return Ok(());
     }
 
     if let Some(ref card_id) = normalized_card_id {
@@ -88,10 +77,7 @@ fn show_todo_window(app: &AppHandle, target_card_id: Option<&str>) -> Result<(),
         }
     }
 
-    hide_drawer_window_now(app, &shell)?;
-    if let Some(window) = app.get_webview_window("capture") {
-        window.hide().map_err(|err| err.to_string())?;
-    }
+    hide_other_floating_windows(app, TODO_MODULE_ID)?;
     ensure_todo_window(app)?;
     ensure_window_in_available_monitors(
         app,

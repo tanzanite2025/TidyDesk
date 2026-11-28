@@ -14,8 +14,8 @@
       {
         "label": "handle",
         "title": "TidyDesk Handle",
-        "width": 56,
-        "height": 228,
+        "width": 102,
+        "height": 126,
         "url": "index.html?mode=handle",
         "resizable": false,
         "fullscreen": false,

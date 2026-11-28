@@ -1,6 +1,7 @@
+use super::ShellBounds;
 use serde_json::json;
 use std::sync::{
-    atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Mutex,
 };
 use tauri::{AppHandle, Emitter, Manager};
@@ -14,10 +15,55 @@ pub struct ShellWindowSnapshot {
 #[derive(Debug, Default)]
 pub struct ShellState {
     snapshot: Mutex<ShellWindowSnapshot>,
-    pub(super) animation_generation: AtomicU64,
-    pub(super) drawer_ready: AtomicBool,
-    pub(super) registered_handle_hwnd: AtomicIsize,
-    pub(super) registered_drawer_hwnd: AtomicIsize,
+    /// Serializes `WebviewWindowBuilder::build()` calls across threads to avoid Win32/WebView2 STA startup races.
+    window_build_lock: Mutex<()>,
+    pub(super) handle_events_registered: AtomicBool,
+    pub(super) handle_bounds_generation: AtomicU64,
+    pub(super) cached_handle_bounds: Mutex<Option<ShellBounds>>,
+}
+
+pub fn with_window_build_lock<T, F>(app: &AppHandle, op: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    let state = app.state::<ShellState>();
+    let _guard = state
+        .window_build_lock
+        .lock()
+        .map_err(|_| "failed to lock window build mutex".to_string())?;
+    op()
+}
+
+pub fn bump_handle_bounds_generation(app: &AppHandle, bounds: ShellBounds) -> u64 {
+    let state = app.state::<ShellState>();
+    if let Ok(mut cached) = state.cached_handle_bounds.lock() {
+        *cached = Some(bounds);
+    }
+    state
+        .handle_bounds_generation
+        .fetch_add(1, Ordering::AcqRel)
+        + 1
+}
+
+pub fn is_current_handle_bounds_generation(app: &AppHandle, generation: u64) -> bool {
+    app.state::<ShellState>()
+        .handle_bounds_generation
+        .load(Ordering::Acquire)
+        == generation
+}
+
+pub fn read_cached_handle_bounds(app: &AppHandle) -> Option<ShellBounds> {
+    app.state::<ShellState>()
+        .cached_handle_bounds
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
+pub fn set_cached_handle_bounds(app: &AppHandle, bounds: ShellBounds) {
+    if let Ok(mut cached) = app.state::<ShellState>().cached_handle_bounds.lock() {
+        *cached = Some(bounds);
+    }
 }
 
 pub fn update_shell_state(
@@ -59,10 +105,6 @@ pub fn shell_snapshot(shell: &tauri::State<'_, ShellState>) -> Result<ShellWindo
         .clone())
 }
 
-pub(super) fn next_animation_generation(shell: &tauri::State<'_, ShellState>) -> u64 {
-    shell.animation_generation.fetch_add(1, Ordering::Relaxed) + 1
-}
-
 pub fn broadcast_shell_state(
     app: &AppHandle,
     snapshot: &ShellWindowSnapshot,
@@ -72,20 +114,10 @@ pub fn broadcast_shell_state(
         "activeModule": snapshot.active_module.clone(),
     });
 
-    for label in ["handle", "main"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .emit("drawer-state", payload.clone())
-                .map_err(|err| err.to_string())?;
-        }
-    }
-
-    for label in ["handle", "main"] {
-        if let Some(window) = app.get_webview_window(label) {
-            window
-                .emit("module-state", payload.clone())
-                .map_err(|err| err.to_string())?;
-        }
+    if let Some(window) = app.get_webview_window("handle") {
+        window
+            .emit("module-state", payload)
+            .map_err(|err| err.to_string())?;
     }
 
     Ok(())
